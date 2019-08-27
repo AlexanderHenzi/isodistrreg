@@ -5,8 +5,8 @@
 
 <!-- badges: start -->
 
-[![Travis build
-status](https://travis-ci.org/AlexanderHenzi/isodistrreg.svg?branch=master)](https://travis-ci.org/AlexanderHenzi/isodistrreg)
+[![Build
+Status](https://travis-ci.com/AlexanderHenzi/isodistrreg.svg?token=1kfJSpfJj96s5n1DwsiP&branch=master)](https://travis-ci.com/AlexanderHenzi/isodistrreg)
 <!-- badges: end -->
 
 ## Authors
@@ -33,19 +33,17 @@ forecast calibration.
 library(isodistrreg)
 
 # Prepare dataset: Half of the data as training dataset, other half for validation.
-# Consult the R documentation (?precip) for details about the dataset.
-data(precip)
-trainingData <- subset(precip, dates <= "2012-01-09")
-validationData <- subset(precip, dates > "2012-01-09")
+# Consult the R documentation (?rain) for details about the dataset.
+data(rain)
+trainingData <- subset(rain, dates <= "2012-01-09")
+validationData <- subset(rain, dates > "2012-01-09")
 
-# Variable selection: Use all forecasts (high resolution HRES, perturbed
-# forecasts P1, ..., P50 and control run CNT for the perturbed forecasts)
-varNames <- c("HRES", "CNT", paste0("P", 1:50))
+# Variable selection: use HRES and the perturbed forecasts P1, ..., P50
+varNames <- c("HRES", paste0("P", 1:50))
 
 # Partial orders on variable groups: Usual order of numbers on HRES (group '1') and
 # increasing convex order on the remaining variables (group '2').
-# See the reference for more details on how to select an appropriate partial order.
-groups <- setNames(c(1, rep(2, 51)), varNames)
+groups <- setNames(c(1, rep(2, 50)), varNames)
 orders <- c("comp" = 1, "icx" = 2)
 
 # Fit IDR to training dataset.
