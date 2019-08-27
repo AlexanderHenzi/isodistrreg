@@ -17,7 +17,7 @@ knitr::opts_chunk$set(
 # isodistrreg: Isotonic Distributional Regression
 
 <!-- badges: start -->
-[![Travis build status](https://travis-ci.org/AlexanderHenzi/isodistrreg.svg?branch=master)](https://travis-ci.org/AlexanderHenzi/isodistrreg)
+[![Build Status](https://travis-ci.com/AlexanderHenzi/isodistrreg.svg?token=1kfJSpfJj96s5n1DwsiP&branch=master)](https://travis-ci.com/AlexanderHenzi/isodistrreg)
 <!-- badges: end -->
 
 ## Authors
