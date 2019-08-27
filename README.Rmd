@@ -18,6 +18,7 @@ knitr::opts_chunk$set(
 
 <!-- badges: start -->
 [![Travis build status](https://travis-ci.org/AlexanderHenzi/isodistrreg.svg?branch=master)](https://travis-ci.org/AlexanderHenzi/isodistrreg)
+[![Travis build status](https://travis-ci.com/AlexanderHenzi/isodistrreg.svg?branch=master)](https://travis-ci.com/AlexanderHenzi/isodistrreg)
 <!-- badges: end -->
 
 ## Authors
