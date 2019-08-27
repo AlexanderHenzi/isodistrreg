@@ -1,0 +1,23 @@
+Package: isodistrreg
+Type: Package
+Title: Isotonic Distributional Regression (IDR)
+Version: 0.1.0.9000
+Date: 2019-08-27
+Author: Alexander Henzi
+Maintainer: Alexander Henzi <henzi.alexander@gmail.com>
+Description: Nonparametric probabilistic forecasting and forecast calibration based on monotone regression.
+License: GPL (>= 2)
+Depends: R (>= 3.2)
+Imports: Rcpp (>= 1.0.1),
+	osqp,
+	Matrix,
+	utils
+LinkingTo: Rcpp
+Encoding: UTF-8
+RoxygenNote: 6.1.1
+Suggests: 
+    knitr,
+    rmarkdown
+URL: https://github.com/AlexanderHenzi/isodistrreg
+BugReports: https://github.com/AlexanderHenzi/isodistrreg/issues
+VignetteBuilder: knitr
