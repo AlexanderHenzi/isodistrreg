@@ -9,14 +9,14 @@
 #' 
 #' @section The \pkg{isodistrreg} package:
 #' 
-#' To make probabilitic forecasts with IDR,
+#' To make probabilistic forecasts with IDR,
 #' \itemize{
 #' \item call \code{\link{idr}(y = y, X = X, ...)}, where \code{y} is the
 #'   response variable (e.g. weather variable observations) and \code{X} is a
 #'   \code{data.frame} of covariates (e.g. ensemble forecasts).
-#' \item use \code{\link[=predict.idrfit]{predict}(fit, data)}, where \code{fit} is
-#'   the model fit computed with \code{idr} and \code{data} is the data based on
-#'   which you want to make predictions.
+#' \item use \code{\link[=predict.idrfit]{predict}(fit, data)}, where \code{fit}
+#'   is the model fit computed with \code{idr} and \code{data} is the data based
+#'   on which you want to make predictions.
 #' }
 #' The following pre-defined functions are available to evaluate IDR
 #' predictions:
@@ -30,8 +30,7 @@
 #' \item \code{\link{crps}} to compute the continuous ranked probability score
 #' (CRPS).
 #' \item \code{\link{pit}} to compute the probability integral transform (PIT).
-#' \item \code{\link[isodistrreg:plot.idr]{plot}} to plot IDR predictive
-#'   CDFs.
+#' \item \code{\link[=plot.idr]{plot}} to plot IDR predictive CDFs.
 #' }
 #' Use the dataset \code{\link{rain}} to test IDR.
 #' 

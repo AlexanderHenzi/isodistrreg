@@ -148,6 +148,14 @@ prepareData <- function(X, groups, orders) {
 #' @export
 #' @importFrom osqp osqp
 #' @importFrom stats setNames
+#' 
+#' @references
+#' Stellato, B., Banjac, G., Goulart, P., Bemporad, A. y Boyd, S.. "OSQP: An
+#' Operator Splitting Solver for Quadratic Programs". ArXiv e-prints. 2017
+#' 
+#' Stellato, B., Banjac, G., Goulart, P., Bemporad, A. y Boyd, S.. osqp:
+#' Quadratic Programming Solver using the 'OSQP' Library. 2018, R package
+#' version 0.5.0. \url{https://CRAN.R-project.org/package=osqp}.
 #'
 #' @examples
 #' data("rain")
@@ -305,7 +313,7 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
 #' @return A list of predictions. Each prediction is a \code{data.frame}
 #'   containing the following variables:
 #'
-#' \item{\code{points}}{the points where the predictiove CDF has jumps.}
+#' \item{\code{points}}{the points where the predictive CDF has jumps.}
 #'
 #' \item{\code{cdf}}{the estimated CDF evaluated at the \code{points}.}
 #'
