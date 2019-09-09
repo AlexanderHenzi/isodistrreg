@@ -26,8 +26,8 @@ devtools::install_github("AlexanderHenzi/isodistrreg")
 
 ## Usage Examples
 
-The following basic example shows how to use IDR for precipitation
-forecast calibration.
+The following basic example illustrates how to use IDR to calibrate
+forecasts of accumulated precipitation.
 
 ``` r
 library(isodistrreg)
@@ -35,8 +35,8 @@ library(isodistrreg)
 # Prepare dataset: Half of the data as training dataset, other half for validation.
 # Consult the R documentation (?rain) for details about the dataset.
 data(rain)
-trainingData <- subset(rain, dates <= "2012-01-09")
-validationData <- subset(rain, dates > "2012-01-09")
+trainingData <- subset(rain, date <= "2012-01-09")
+validationData <- subset(rain, date > "2012-01-09")
 
 # Variable selection: use HRES and the perturbed forecasts P1, ..., P50
 varNames <- c("HRES", paste0("P", 1:50))
