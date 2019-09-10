@@ -9,10 +9,15 @@
 Status](https://travis-ci.com/AlexanderHenzi/isodistrreg.svg?token=1kfJSpfJj96s5n1DwsiP&branch=master)](https://travis-ci.com/AlexanderHenzi/isodistrreg)
 <!-- badges: end -->
 
-## Authors
-
-The package is based on the paper XXX and written and maintained by
-Alexander Henzi.
+Isotonic distributional regression (IDR) is a powerful nonparametric
+technique for the estimation of distributions of a binary or numeric
+response variable conditional on numeric or ordinal covariates. IDR
+assumes that there is a monotone relationship between the response
+variable and the covariates, where the partial order on the covariate
+space can be specified by the user, and has no tuning parameters. It can
+be used to generate calibrated probabilistic weather forecasts from
+ensemble forecasts and observations, and serve as a benchmark in many
+other prediction problems.
 
 ## Installation
 
@@ -102,3 +107,10 @@ hist(pitIdr, main = "PIT of IDR calibrated forecasts", freq = FALSE)
 ```
 
 ## References
+
+Alexander Henzi, Johanna F. Ziegel, and Tilmann Gneiting. Isotonic
+Distributional Regression. arXiv e-prints, art. arXiv:1909.03725, Sep
+2019. URL <https://arxiv.org/abs/1909.03725>.
+
+The dataframe `precipData_caseStudy.rda` contains all data for the case
+study in the paper.
