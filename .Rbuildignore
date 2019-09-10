@@ -1,6 +1,7 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^README\.Rmd$
-^REFERENCE\.Rmd$
+^README\.md$
+^NEWS\.md$
 ^\.travis\.yml$
 ^precipDATA_caseStudy\.rda$

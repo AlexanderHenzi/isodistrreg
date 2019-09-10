@@ -1,0 +1,9 @@
+\documentclass{article}
+\usepackage{pdfpages}
+%\VignetteIndexEntry{IDR: arXiv preprint}
+%\VignettePackage{isodistrreg}
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+\includepdf[pages=-, fitpaper=true]{arXiv_preprint.pdf}
+\end{document}
