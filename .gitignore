@@ -1,3 +1,7 @@
 .Rhistory
 .RData
 .Rproj.user
+/src/*o
+*.dll
+*.tex
+*.aux
