@@ -21,8 +21,7 @@ all predictions.}
 }
 \value{
 A matrix of the Brier scores for the desired thresholds, one column
-per threshold. If there is only one threshold, the result is simplified to a
-vector.
+per threshold.
 }
 \description{
 Computes the Brier score of forecast probabilities for exceeding
@@ -30,7 +29,7 @@ given thresholds.
 }
 \details{
 The Brier score for the event of exceeding a given threshold
-\emph{z} is defined as \deqn{ (1{y > z} - P(y > z))^2 } where \emph{y} is the
+\emph{z} is defined as \deqn{ (1\{y > z\} - P(y > z))^2 } where \emph{y} is the
 observation and \emph{P(y > z)} the forecast probability for exceeding the
 threshold \code{z}.
 }

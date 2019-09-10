@@ -20,7 +20,7 @@ predict. In-sample predictions are returned if this is omitted.}
 A list of predictions. Each prediction is a \code{data.frame}
   containing the following variables:
 
-\item{\code{points}}{the points where the predictiove CDF has jumps.}
+\item{\code{points}}{the points where the predictive CDF has jumps.}
 
 \item{\code{cdf}}{the estimated CDF evaluated at the \code{points}.}
 

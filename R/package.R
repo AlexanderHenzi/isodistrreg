@@ -1,11 +1,13 @@
 #' Isotonic distributional regression (IDR)
 #' 
-#' Isotonic distributional Regression (IDR) is a nonparametric forecast
-#' calibration method based on monotone regression.
+#' Isotonic distributional Regression (IDR) is a nonparametric method to 
+#' estimate conditional distributions under monotonicity constraints.
 #' 
 #' @section How does it work?:
 #' 
-#' Link to paper.
+#' Read the arXiv preprint `Isotonic Distributional Regression' on 
+#' \url{https://arxiv.org/abs/1909.03725} or by calling 
+#' \code{browseVignettes(package = "isodistrreg")}. 
 #' 
 #' @section The \pkg{isodistrreg} package:
 #' 
@@ -35,11 +37,15 @@
 #' Use the dataset \code{\link{rain}} to test IDR.
 #' 
 #' @name isodistrreg-package
-#' @author
 #' 
-#' Package: Alexander Henzi 
 #' @useDynLib isodistrreg, .registration = TRUE
 #' @name isodistrreg
+#' 
+#' @references 
+#' 
+#' Alexander Henzi, Johanna F. Ziegel, and Tilmann Gneiting. Isotonic
+#' Distributional Regression. arXiv e-prints, art. arXiv:1909.03725, Sep 2019.
+#' URL \url{https://arxiv.org/abs/1909.03725}.
 #' 
 #' @examples 
 #' 

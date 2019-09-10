@@ -143,6 +143,14 @@ orders <- c("comp" = 1, "icx" = 2)
 fit <- idr(y = y, X = X, orders = orders, groups = groups)
 fit
 }
+\references{
+Stellato, B., Banjac, G., Goulart, P., Bemporad, A. y Boyd, S.. "OSQP: An
+Operator Splitting Solver for Quadratic Programs". ArXiv e-prints. 2017
+
+Stellato, B., Banjac, G., Goulart, P., Bemporad, A. y Boyd, S.. osqp:
+Quadratic Programming Solver using the 'OSQP' Library. 2018, R package
+version 0.5.0. \url{https://CRAN.R-project.org/package=osqp}.
+}
 \seealso{
 The S3 method \code{\link{predict.idrfit}} for predictions based on
   an IDR fit.
