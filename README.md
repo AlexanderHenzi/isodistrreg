@@ -26,7 +26,7 @@ with:
 
 ``` r
 # install.packages("devtools")
-devtools::install_github("AlexanderHenzi/isodistrreg")
+devtools::install_github("AlexanderHenzi/isodistrreg", build_vignettes = TRUE)
 ```
 
 ## Usage Examples
