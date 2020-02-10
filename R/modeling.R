@@ -417,10 +417,16 @@ predict.idrfit <- function(object, data = NULL, digits = 3, ...) {
   if (any(incomparables)) {
     y <- unlist(object$y)
     edf <- round(stats::ecdf(y)(thresholds), digits)
-    sel <- edf > 0 & edf < 1
+    sel <- edf > 0
     edf <- edf[sel]
-    preds[incomparables] <- data.frame(points = thresholds, lower = edf,
-      cdf = edf, upper = edf)
+    points <- thresholds[sel]
+    upr <- which.max(edf == 1)
+    if (upr < length(edf)) {
+      edf <- edf[-((upr + 1):length(edf))]
+      points <- points[-((upr + 1):length(edf))]
+    }
+    dat <- data.frame(points = points, lower = edf, cdf = edf, upper = edf)
+    for (i in which(incomparables)) preds[[i]] <- dat
   }
   
   # Predictions for comparable variables
