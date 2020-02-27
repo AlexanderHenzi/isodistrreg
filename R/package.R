@@ -39,7 +39,6 @@
 #' @name isodistrreg-package
 #' 
 #' @useDynLib isodistrreg, .registration = TRUE
-#' @name isodistrreg
 #' 
 #' @references 
 #' 
