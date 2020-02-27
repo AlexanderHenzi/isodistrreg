@@ -192,7 +192,7 @@ idrF <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     # One-dimensional IDR using PAVA
     constr <- NULL
     diagnostic <- list(precision = 0, convergence = 0)
-    cdf <- isoquantiles:::isoCdf_sequential(
+    cdf <- isoCdf_sequential(
       w = weights,
       W = rep(1, length(y)),
       Y = sort(y),
@@ -372,17 +372,39 @@ predictIdrF <- function(object, data = NULL, digits = 3, ...) {
   
   # Find neighbor points to new variables
   if (nVar == 1) {
-    x <- as.numeric(data[[1]])
-    X <- as.numeric(X[[1]])
-    smaller <- greater <- vector("list", nx)
+    X <- X[[1]]
+    x <- data[[1]]
     nPoints <- findInterval(x, X)
     check <- findInterval(x, X, left.open = TRUE) == nPoints
     ind <- nPoints > 0
+    smaller <- greater <- as.list(integer(nx))
     smaller[ind] <- nPoints[ind]
     ind <- nPoints < length(X)
     greater[ind] <- nPoints[ind] + check[ind]
     ind <- !ind & !check
     greater[ind] <- nPoints[ind]
+    smaller <- unlist(smaller)
+    greater <- unlist(greater)
+    smaller[smaller == 0] <- greater[smaller == 0]
+    greater[greater == 0] <- smaller[greater == 0]
+    m <- length(thresholds)
+    preds <- Map(
+      function(l, u) {
+        ind <- (c(0, l[-m]) < l) | (c(0, u[-m]) < u)
+        l <- l[ind]
+        u <- u[ind]
+        cdf <- round((l + u) / 2, digits)
+        data.frame(
+          points = thresholds[ind],
+          lower = l,
+          cdf = cdf,
+          upper = u
+        )
+      },
+      l = asplit(round(cdf[greater, , drop = FALSE], digits), 1),
+      u = asplit(round(cdf[smaller, , drop = FALSE], digits), 1)
+    )
+    return(structure(preds, class = "idr", incomparables = integer(0)))
   } else {
     nPoints <- neighborPoints(x = data.matrix(data), X = data.matrix(X), 
       orderX = object$constraints)
@@ -405,29 +427,6 @@ predictIdrF <- function(object, data = NULL, digits = 3, ...) {
     }
     dat <- data.frame(points = points, lower = edf, cdf = edf, upper = edf)
     for (i in which(incomparables)) preds[[i]] <- dat
-  }
-  
-  # Fast method if nVar == 1
-  if (nVar == 1) {
-    X <- c(min(X[1], min(x)) - 1, X, max(X[1], max(x)) + 1)
-    indUpr <- findInterval(x = x, vec = X)
-    indLwr <- indUpr + 1 - (x == X[indUpr])
-    cdf <- round(rbind(1, cdf, 0), digits)
-    l <- cdf[indLwr, , drop = FALSE]
-    u <- cdf[indUpr, , drop = FALSE]
-    estim <- round((l + u) / 2, digits)
-    lInd <- cbind(l[, 1] > 0, l[, -1, drop = FALSE] - l[, -ncol(l), drop = FALSE] > 0)
-    uInd <- cbind(u[, 1] > 0, u[, -1, drop = FALSE] - u[, -ncol(u), drop = FALSE] > 0)
-    preds <- Map(
-      function(cdf, ind, lower, upper) {
-        data.frame(points = thresholds[ind], lower = lower[ind], cdf = cdf[ind], upper = upper[ind])
-      }, 
-      cdf = asplit(estim, 1),
-      ind = asplit(lInd | uInd, 1),
-      lower = asplit(l, 1),
-      upper = asplit(u, 1)
-    )
-    return(structure(preds, class = "idr", incomparables = integer(0)))
   }
   
   # Predictions for comparable variables
