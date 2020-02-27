@@ -4,9 +4,19 @@
 \alias{plot.idr}
 \title{Plot IDR predictions}
 \usage{
-\method{plot}{idr}(x, index = 1, bounds = TRUE, col.cdf = "black",
-  col.bounds = "blue", lty.cdf = 1, lty.bounds = 3,
-  xlab = "Threshold", ylab = "CDF", main = "IDR predictive CDF", ...)
+\method{plot}{idr}(
+  x,
+  index = 1,
+  bounds = TRUE,
+  col.cdf = "black",
+  col.bounds = "blue",
+  lty.cdf = 1,
+  lty.bounds = 3,
+  xlab = "Threshold",
+  ylab = "CDF",
+  main = "IDR predictive CDF",
+  ...
+)
 }
 \arguments{
 \item{x}{object of class \code{idr} (output of

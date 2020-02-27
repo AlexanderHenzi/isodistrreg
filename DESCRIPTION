@@ -28,7 +28,7 @@ Imports: Rcpp (>= 1.0.1),
 	utils
 LinkingTo: Rcpp
 Encoding: UTF-8
-RoxygenNote: 6.1.1
+RoxygenNote: 7.0.2
 Suggests: 
     knitr,
     rmarkdown
