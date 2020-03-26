@@ -1,7 +1,8 @@
-#' Fast version of idr
+#' Fast version of idr (experimental)
 #'
 #' @description Fits isotonic distributional regression (IDR) to a training
-#' dataset.
+#' dataset. Is faster than \code{\link{idr}} for univariate data. \emph{This 
+#' function is still under development.}
 #'
 #' @usage idrF(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
 #' orders = c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5,
