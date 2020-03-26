@@ -18,7 +18,7 @@ the factor levels are identical in \code{data} and the training data for
 \item{digits}{number of decimal places for the predictive CDF.}
 
 \item{interpolation}{interpolation method for univariate data. Default is 
-"linear". Any other argument will select midpoint interpolation (see 
+\code{"linear"}. Any other argument will select midpoint interpolation (see 
 'Details'). Has no effect for multivariate IDR.}
 
 \item{...}{included for generic function consistency.}
@@ -48,9 +48,9 @@ desired are already contained in the training dataset \code{X} for the fit,
 Otherwise monotonicity is used to derive upper and lower bounds for the
 predictive CDF, and the predictive CDF is a pointwise average of these
 bounds. For univariate IDR with a numeric covariate, the predictive CDF is
-computed by linear interpolation. Otherwise, or if \code{interpolation !=
-"linear}, midpoint interpolation is used, i.e. default weights of \code{0.5}
-for both the lower and the upper bound.
+computed by linear interpolation. Otherwise, or if 
+\code{interpolation != "linear"}, midpoint interpolation is used, i.e.
+default weights of \code{0.5} for both the lower and the upper bound.
 
 If the lower and the upper bound on the predictive cdf are far apart (or
 trivial, i.e. constant 0 or constant 1), this indicates that the prediction
