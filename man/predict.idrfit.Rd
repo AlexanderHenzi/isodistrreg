@@ -4,15 +4,22 @@
 \alias{predict.idrfit}
 \title{Predict method for IDR fits}
 \usage{
-\method{predict}{idrfit}(object, data = NULL, digits = 3, ...)
+\method{predict}{idrfit}(object, data = NULL, digits = 3, interpolation = "linear", ...)
 }
 \arguments{
 \item{object}{IDR fit (object of class \code{"idrfit"}).}
 
 \item{data}{optional \code{data.frame} containing variables with which to
-predict. In-sample predictions are returned if this is omitted.}
+predict. In-sample predictions are returned if this is omitted. Ordered 
+factor variables are converted to numeric for computation, so ensure that 
+the factor levels are identical in \code{data} and the training data for
+\code{fit}.}
 
 \item{digits}{number of decimal places for the predictive CDF.}
+
+\item{interpolation}{interpolation method for univariate data. Default is 
+"linear". Any other argument will select midpoint interpolation (see 
+'Details'). Has no effect for multivariate IDR.}
 
 \item{...}{included for generic function consistency.}
 }
@@ -37,10 +44,13 @@ Prediction based on IDR model fit.
 \details{
 If the variables \code{x = data[j,]} for which predictions are
 desired are already contained in the training dataset \code{X} for the fit,
-\code{predict.idrfit} returns the corresponding in-sample prediction. Otherwise
-monotonicity is used to derive upper and lower bounds for the predictive CDF,
-and the prediction is the pointwise average of these bounds. Usually, these
-bounds are sharp or even equal.
+\code{predict.idrfit} returns the corresponding in-sample prediction.
+Otherwise monotonicity is used to derive upper and lower bounds for the
+predictive CDF, and the predictive CDF is a pointwise average of these
+bounds. For univariate IDR with a numeric covariate, the predictive CDF is
+computed by linear interpolation. Otherwise, or if \code{interpolation !=
+"linear}, midpoint interpolation is used, i.e. default weights of \code{0.5}
+for both the lower and the upper bound.
 
 If the lower and the upper bound on the predictive cdf are far apart (or
 trivial, i.e. constant 0 or constant 1), this indicates that the prediction
