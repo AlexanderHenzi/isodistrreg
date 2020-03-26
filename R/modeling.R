@@ -239,7 +239,7 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     conv <- vector("logical", I)
     
     cat("Estimating cdf...\n")
-    pb <- utils::txtProgressBar(style = 3)
+    pb <- utils::txtProgressBar(style = 1)
     q <- - weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
     qp <- osqp::osqp(P = P, q = q, A = A, l = l, pars = pars)
     sol <- qp$Solve()
@@ -282,16 +282,25 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
 #'
 #' @param object IDR fit (object of class \code{"idrfit"}).
 #' @param data optional \code{data.frame} containing variables with which to
-#'   predict. In-sample predictions are returned if this is omitted.
+#'   predict. In-sample predictions are returned if this is omitted. Ordered 
+#'   factor variables are converted to numeric for computation, so ensure that 
+#'   the factor levels are identical in \code{data} and the training data for
+#'   \code{fit}.
 #' @param digits number of decimal places for the predictive CDF.
+#' @param interpolation interpolation method for univariate data. Default is 
+#'   "linear". Any other argument will select midpoint interpolation (see 
+#'   'Details'). Has no effect for multivariate IDR.
 #' @param ... included for generic function consistency.
 #'
 #' @details If the variables \code{x = data[j,]} for which predictions are
 #' desired are already contained in the training dataset \code{X} for the fit,
-#' \code{predict.idrfit} returns the corresponding in-sample prediction. Otherwise
-#' monotonicity is used to derive upper and lower bounds for the predictive CDF,
-#' and the prediction is the pointwise average of these bounds. Usually, these
-#' bounds are sharp or even equal.
+#' \code{predict.idrfit} returns the corresponding in-sample prediction.
+#' Otherwise monotonicity is used to derive upper and lower bounds for the
+#' predictive CDF, and the predictive CDF is a pointwise average of these
+#' bounds. For univariate IDR with a numeric covariate, the predictive CDF is
+#' computed by linear interpolation. Otherwise, or if \code{interpolation !=
+#' "linear}, midpoint interpolation is used, i.e. default weights of \code{0.5}
+#' for both the lower and the upper bound.
 #'
 #' If the lower and the upper bound on the predictive cdf are far apart (or
 #' trivial, i.e. constant 0 or constant 1), this indicates that the prediction
@@ -359,7 +368,8 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
 #' 
 #' ## Predict for day 186
 #' predict(fit, data = rain[186, varNames])
-predict.idrfit <- function(object, data = NULL, digits = 3, ...) {
+predict.idrfit <- function(object, data = NULL, digits = 3,
+    interpolation = "linear", ...) {
   cdf <- object$cdf
   thresholds <- object$thresholds
   
@@ -390,27 +400,54 @@ predict.idrfit <- function(object, data = NULL, digits = 3, ...) {
     orders = object$orders)
   nVar <- ncol(data)
   nx <- nrow(data)
-  preds <- structure(vector("list", nx), class = c("idr"))
   
-  # Find neighbor points to new variables
+  # Prediction method for univariate IDR
   if (nVar == 1) {
-    x <- as.numeric(data[[1]])
-    X <- as.numeric(X[[1]])
-    smaller <- greater <- vector("list", nx)
-    nPoints <- findInterval(x, X)
-    check <- findInterval(x, X, left.open = TRUE) == nPoints
-    ind <- nPoints > 0
-    smaller[ind] <- nPoints[ind]
-    ind <- nPoints < length(X)
-    greater[ind] <- nPoints[ind] + check[ind]
-    ind <- !ind & !check
-    greater[ind] <- nPoints[ind]
-  } else {
-    nPoints <- neighborPoints(x = data.matrix(data), X = data.matrix(X), 
-      orderX = object$constraints)
-    smaller <- nPoints$smaller
-    greater <- nPoints$greater
+    X <- X[[1]]
+    x <- data[[1]]
+    fct <- is.ordered(X)
+    if (fct) {
+      X <- as.integer(X)
+      x <- as.integer(x)
+    }
+    smaller <- findInterval(x, X)
+    smaller[smaller == 0] <- 1
+    wg <- approx(x = X, y = seq_along(X), xout = x, yleft = 1, 
+      yright = length(X), rule = 2)$y - seq_along(X)[smaller]
+    greater <- smaller + as.integer(wg > 0)
+    m <- length(thresholds)
+    if (identical(interpolation, "linear") & !fct) {
+      ws <- 1 - wg
+    } else {
+      wg <- ws <- rep(0.5, length(x))     
+    }
+    preds <- Map(
+      function(l, u, ws, wg) {
+        ind <- (c(0, l[-m]) < l) | (c(0, u[-m]) < u)
+        l <- l[ind]
+        u <- u[ind]
+        cdf <- round(l * wg + u * ws, digits)
+        data.frame(
+          points = thresholds[ind],
+          lower = l,
+          cdf = cdf,
+          upper = u
+        )
+      },
+      l = asplit(round(cdf[greater, , drop = FALSE], digits), 1),
+      u = asplit(round(cdf[smaller, , drop = FALSE], digits), 1),
+      ws = ws,
+      wg = wg
+    )
+    return(structure(preds, class = "idr", incomparables = integer(0)))
   }
+  
+  # Prediction Method for multivariate IDR
+  preds <- structure(vector("list", nx), class = c("idr"))
+  nPoints <- neighborPoints(x = data.matrix(data), X = data.matrix(X), 
+    orderX = object$constraints)
+  smaller <- nPoints$smaller
+  greater <- nPoints$greater
   
   # Climatological forecast for incomparable variables
   incomparables <- sapply(smaller, length) + sapply(greater, length) == 0
