@@ -1,4 +1,4 @@
-#' Fast version of idr (experimental)
+#' Fast version of IDR (experimental)
 #'
 #' @description Fits isotonic distributional regression (IDR) to a training
 #' dataset. Is faster than \code{\link{idr}} for univariate data. \emph{This 

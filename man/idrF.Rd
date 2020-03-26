@@ -2,7 +2,7 @@
 % Please edit documentation in R/fast.R
 \name{idrF}
 \alias{idrF}
-\title{Fast version of idr (experimental)}
+\title{Fast version of IDR (experimental)}
 \usage{
 idrF(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
 orders = c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5,
