@@ -29,6 +29,10 @@ with:
 devtools::install_github("AlexanderHenzi/isodistrreg", build_vignettes = TRUE)
 ```
 
+If the installation fails on Linux because of the error *Vignette
+re-building failed*, try installing with `build_vignettes = FALSE` or
+make sure that texinfo is installed (`sudo apt-get install texinfo`).
+
 ## Usage Examples
 
 The following basic example illustrates how to use IDR to calibrate
