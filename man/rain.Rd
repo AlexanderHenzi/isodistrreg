@@ -4,11 +4,13 @@
 \name{rain}
 \alias{rain}
 \title{Frankfurt airport precipitation data}
-\format{A data frame with 3617 rows. The first column gives the dates, the second 
+\format{
+A data frame with 3617 rows. The first column gives the dates, the second 
 column are the observations. The remaining columns are the ensemble forecasts
 (high resolution HRES, 50 perturbed forecasts P1 to P50 and the control 
 forecast CTR for the perturbed forecasts). The units of the forecasts and
-observations are mm/m^2.}
+observations are mm/m^2.
+}
 \source{
 Observations: \url{http://www.ogimet.com/synops.phtml.en}
 

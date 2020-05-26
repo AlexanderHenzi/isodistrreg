@@ -4,7 +4,7 @@
 \alias{neighborPoints}
 \title{Neighbor points with respect to componentwise order}
 \usage{
-neighborPoints(x, X, orderX)
+neighborPoints(x, X, orderX, asplitAvail = TRUE)
 }
 \arguments{
 \item{x}{numeric matrix with at least two columns.}
@@ -12,6 +12,10 @@ neighborPoints(x, X, orderX)
 \item{X}{numeric matrix with same number of columns as \code{x}.}
 
 \item{orderX}{output of \code{compOrd(X)}.}
+
+\item{asplitAvail}{use \code{\link[base]{asplit}} for splitting arrays
+(default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
+\code{asplit} is not available.}
 }
 \value{
 Lists of length \code{nrow(x)} giving for each \code{x[i, ]} the indices
@@ -25,10 +29,5 @@ X[k, ]} in all components and \code{x[i, ] >= X[j, ] >= X[k, ]} holds for no
 \code{j} different from \code{k}, or \code{x[i, ] <= X[k, ]} in all
 components and \code{x[i ,] <= X[j, ] <= X[k, ]} holds for no \code{j}
 different from \code{k}.
-}
-\note{
-The combination \code{lapply(split(...))} can be replaced by
-\code{\link{asplit}}, which requires R 3.6. Will be updated when more users
-use the more recent R version.
 }
 \keyword{internal}
