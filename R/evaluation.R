@@ -548,7 +548,7 @@ pit.data.frame <- function(predictions, y, randomize = TRUE, seed = NULL) {
   if (randomize) {
     # Randomization: Find small epsilon to compute left limit of CDF
     eps <- apply(predictions, 1, stats::dist, method = "manhattan")
-    eps <- min(eps[eps > 0])
+    eps <- min(c(eps[eps > 0], 1))
     lowerPitVals <- mapply(pit0, data = pred, y = y - eps / 2)
     if (!is.null(seed)) 
       set.seed(seed)
