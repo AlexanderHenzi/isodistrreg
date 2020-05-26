@@ -290,6 +290,9 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
 #' @param interpolation interpolation method for univariate data. Default is 
 #'   \code{"linear"}. Any other argument will select midpoint interpolation (see 
 #'   'Details'). Has no effect for multivariate IDR.
+#' @param asplitAvail use \code{\link[base]{asplit}} for splitting arrays
+#'   (default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
+#'   \code{asplit} is not available.
 #' @param ... included for generic function consistency.
 #'
 #' @details If the variables \code{x = data[j,]} for which predictions are
@@ -370,7 +373,7 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
 #' ## Predict for day 186
 #' predict(fit, data = rain[186, varNames])
 predict.idrfit <- function(object, data = NULL, digits = 3,
-    interpolation = "linear", ...) {
+    interpolation = "linear", asplitAvail = TRUE, ...) {
   cdf <- object$cdf
   thresholds <- object$thresholds
   
@@ -435,8 +438,8 @@ predict.idrfit <- function(object, data = NULL, digits = 3,
           upper = u
         )
       },
-      l = asplit(round(cdf[greater, , drop = FALSE], digits), 1),
-      u = asplit(round(cdf[smaller, , drop = FALSE], digits), 1),
+      l = splitArr(round(cdf[greater, , drop = FALSE], digits), 1, asplitAvail),
+      u = splitArr(round(cdf[smaller, , drop = FALSE], digits), 1, asplitAvail),
       ws = ws,
       wg = wg
     )
@@ -446,7 +449,7 @@ predict.idrfit <- function(object, data = NULL, digits = 3,
   # Prediction Method for multivariate IDR
   preds <- structure(vector("list", nx), class = c("idr"))
   nPoints <- neighborPoints(x = data.matrix(data), X = data.matrix(X), 
-    orderX = object$constraints)
+    orderX = object$constraints, asplitAvail = asplitAvail)
   smaller <- nPoints$smaller
   greater <- nPoints$greater
   
