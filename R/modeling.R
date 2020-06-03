@@ -463,8 +463,8 @@ predict.idrfit <- function(object, data = NULL, digits = 3,
     points <- thresholds[sel]
     upr <- which.max(edf == 1)
     if (upr < length(edf)) {
-      edf <- edf[-((upr + 1):length(edf))]
       points <- points[-((upr + 1):length(edf))]
+      edf <- edf[-((upr + 1):length(edf))]
     }
     dat <- data.frame(points = points, lower = edf, cdf = edf, upper = edf)
     for (i in which(incomparables)) preds[[i]] <- dat
