@@ -34,4 +34,3 @@ Suggests:
     rmarkdown
 URL: https://github.com/AlexanderHenzi/isodistrreg
 BugReports: https://github.com/AlexanderHenzi/isodistrreg/issues
-VignetteBuilder: knitr

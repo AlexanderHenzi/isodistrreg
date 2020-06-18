@@ -1,81 +1,81 @@
-This is pdfTeX, Version 3.14159265-2.6-1.40.19 (MiKTeX 2.9.6745 64-bit) (preloaded format=pdflatex 2018.8.6)  10 SEP 2019 10:40
+This is pdfTeX, Version 3.14159265-2.6-1.40.21 (MiKTeX 2.9.7440 64-bit) (preloaded format=pdflatex 2020.5.29)  18 JUN 2020 14:32
 entering extended mode
 **C:/Users/alexh/OneDrive/Dokumente/Studium/isodistrreg/vignettes/IDR_arXiv_pre
 print.tex
 
 (C:/Users/alexh/OneDrive/Dokumente/Studium/isodistrreg/vignettes/IDR_arXiv_prep
 rint.tex
-LaTeX2e <2018-04-01> patch level 5
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\article.cls"
-Document Class: article 2014/09/29 v1.4h Standard LaTeX document class
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\size10.clo"
-File: size10.clo 2014/09/29 v1.4h Standard LaTeX file (size option)
+LaTeX2e <2020-02-02> patch level 5
+L3 programming layer <2020-05-15> ("C:\Users\alexh\AppData\Local\Programs\MiKTe
+X 2.9\tex/latex/base\article.cls"
+Document Class: article 2019/12/20 v1.4l Standard LaTeX document class
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/base\size10.clo"
+File: size10.clo 2019/12/20 v1.4l Standard LaTeX file (size option)
 )
-\c@part=\count80
-\c@section=\count81
-\c@subsection=\count82
-\c@subsubsection=\count83
-\c@paragraph=\count84
-\c@subparagraph=\count85
-\c@figure=\count86
-\c@table=\count87
-\abovecaptionskip=\skip41
-\belowcaptionskip=\skip42
-\bibindent=\dimen102
+\c@part=\count167
+\c@section=\count168
+\c@subsection=\count169
+\c@subsubsection=\count170
+\c@paragraph=\count171
+\c@subparagraph=\count172
+\c@figure=\count173
+\c@table=\count174
+\abovecaptionskip=\skip47
+\belowcaptionskip=\skip48
+\bibindent=\dimen134
 )
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\pdfpages\pdfpages.
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/pdfpages\pdfpages.
 sty"
-Package: pdfpages 2017/10/31 v0.5l Insert pages of external PDF documents (AM)
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\ifthen.sty"
+Package: pdfpages 2020/01/28 v0.5q Insert pages of external PDF documents (AM)
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/base\ifthen.sty"
 Package: ifthen 2014/09/29 v1.1c Standard LaTeX ifthen package (DPC)
-) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\tools\calc.sty"
+) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/tools\calc.sty"
 Package: calc 2017/05/25 v4.3 Infix arithmetic (KKT,FJ)
-\calc@Acount=\count88
-\calc@Bcount=\count89
-\calc@Adimen=\dimen103
-\calc@Bdimen=\dimen104
-\calc@Askip=\skip43
-\calc@Bskip=\skip44
+\calc@Acount=\count175
+\calc@Bcount=\count176
+\calc@Adimen=\dimen135
+\calc@Bdimen=\dimen136
+\calc@Askip=\skip49
+\calc@Bskip=\skip50
 LaTeX Info: Redefining \setlength on input line 80.
 LaTeX Info: Redefining \addtolength on input line 81.
-\calc@Ccount=\count90
-\calc@Cskip=\skip45
+\calc@Ccount=\count177
+\calc@Cskip=\skip51
 )
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\eso-pic\eso-pic.st
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/eso-pic\eso-pic.st
 y"
 Package: eso-pic 2018/04/12 v2.0h eso-pic (RN)
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\atbegsh
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/generic/atbegshi\atbegsh
 i.sty"
-Package: atbegshi 2016/06/09 v1.18 At begin shipout hook (HO)
+Package: atbegshi 2019/12/05 v1.19 At begin shipout hook (HO)
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\infware
-rr.sty"
-Package: infwarerr 2016/05/16 v1.4 Providing info/warning/error messages (HO)
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/generic/infwarerr\infwar
+err.sty"
+Package: infwarerr 2019/12/03 v1.5 Providing info/warning/error messages (HO)
 )
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\ltxcmds
-.sty"
-Package: ltxcmds 2016/05/16 v1.23 LaTeX kernel commands for general use (HO)
-)
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\ifpdf.s
-ty"
-Package: ifpdf 2017/03/15 v3.2 Provides the ifpdf switch
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/generic/ltxcmds\ltxcmds.
+sty"
+Package: ltxcmds 2019/12/15 v1.24 LaTeX kernel commands for general use (HO)
+) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/generic/iftex\iftex.st
+y"
+Package: iftex 2020/03/06 v1.0d TeX engine tests
 ))
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics\keyval.st
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics\keyval.st
 y"
 Package: keyval 2014/10/28 v1.15 key=value parser (DPC)
-\KV@toks@=\toks14
-) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\xcolor\xcolor.st
+\KV@toks@=\toks15
+) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/xcolor\xcolor.st
 y"
 Package: xcolor 2016/05/11 v2.12 LaTeX color extensions (UK)
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics-cfg\color
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics-cfg\color
 .cfg"
 File: color.cfg 2016/01/02 v1.6 sample color configuration
 )
 Package xcolor Info: Driver file: pdftex.def on input line 225.
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics-def\pdfte
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics-def\pdfte
 x.def"
 File: pdftex.def 2018/01/08 v1.0l Graphics/color driver for pdftex
 )
@@ -89,900 +89,722 @@ Package xcolor Info: Model `HSB' substituted by `hsb' on input line 1369.
 Package xcolor Info: Model `Gray' substituted by `gray' on input line 1370.
 Package xcolor Info: Model `wave' substituted by `hsb' on input line 1371.
 ))
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics\graphicx.
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics\graphicx.
 sty"
-Package: graphicx 2017/06/01 v1.1a Enhanced LaTeX Graphics (DPC,SPQR)
+Package: graphicx 2019/11/30 v1.2a Enhanced LaTeX Graphics (DPC,SPQR)
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics\graphics.
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics\graphics.
 sty"
-Package: graphics 2017/06/25 v1.2c Standard LaTeX Graphics (DPC,SPQR)
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics\trig.sty"
+Package: graphics 2019/11/30 v1.4a Standard LaTeX Graphics (DPC,SPQR)
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics\trig.sty"
 Package: trig 2016/01/03 v1.10 sin cos tan (DPC)
 )
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics-cfg\graph
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics-cfg\graph
 ics.cfg"
 File: graphics.cfg 2016/06/04 v1.11 sample graphics configuration
 )
-Package graphics Info: Driver file: pdftex.def on input line 99.
+Package graphics Info: Driver file: pdftex.def on input line 105.
 )
-\Gin@req@height=\dimen105
-\Gin@req@width=\dimen106
+\Gin@req@height=\dimen137
+\Gin@req@width=\dimen138
 )
-\AM@pagewidth=\dimen107
-\AM@pageheight=\dimen108
+\AM@pagewidth=\dimen139
+\AM@pageheight=\dimen140
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\pdfpages\pppdftex.
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/pdfpages\pppdftex.
 def"
-File: pppdftex.def 2017/10/31 v0.5l Pdfpages driver for pdfTeX (AM)
+File: pppdftex.def 2020/01/28 v0.5q Pdfpages driver for pdfTeX (AM)
 )
-\AM@pagebox=\box26
-\AM@global@opts=\toks15
-\AM@toc@title=\toks16
-\c@AM@survey=\count91
-\AM@templatesizebox=\box27
-) (C:/PROGRA~1/R/R-36~1.1/share/texmf/tex/latex\Sweave.sty
+\AM@pagebox=\box45
+\AM@global@opts=\toks16
+\AM@pagecnt=\count178
+\AM@toc@title=\toks17
+\c@AM@survey=\count179
+\AM@templatesizebox=\box46
+) (C:/PROGRA~1/R/R-40~1.0/share/texmf/tex/latex\Sweave.sty
 Package: Sweave 
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\fancyvrb\fancyvrb.
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/fancyvrb\fancyvrb.
 sty"
-Package: fancyvrb 2008/02/07
-
-Style option: `fancyvrb' v2.7a, with DG/SPQR fixes, and firstline=lastline fix 
-<2008/02/07> (tvz)
-\FV@CodeLineNo=\count92
-\FV@InFile=\read1
-\FV@TabBox=\box28
-\c@FancyVerbLine=\count93
-\FV@StepNumber=\count94
+Package: fancyvrb 2020/05/03 v3.6 verbatim text (tvz,hv)
+\FV@CodeLineNo=\count180
+\FV@InFile=\read2
+\FV@TabBox=\box47
+\c@FancyVerbLine=\count181
+\FV@StepNumber=\count182
 \FV@OutFile=\write3
-) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\textcomp.st
+) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/base\textcomp.st
 y"
-Package: textcomp 2017/04/05 v2.0i Standard LaTeX package
-Package textcomp Info: Sub-encoding information:
-(textcomp)               5 = only ISO-Adobe without \textcurrency
-(textcomp)               4 = 5 + \texteuro
-(textcomp)               3 = 4 + \textohm
-(textcomp)               2 = 3 + \textestimated + \textcurrency
-(textcomp)               1 = TS1 - \textcircled - \t
-(textcomp)               0 = TS1 (full)
-(textcomp)             Font families with sub-encoding setting implement
-(textcomp)             only a restricted character set as indicated.
-(textcomp)             Family '?' is the default used for unknown fonts.
-(textcomp)             See the documentation for details.
-Package textcomp Info: Setting ? sub-encoding to TS1/1 on input line 79.
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\ts1enc.def"
-File: ts1enc.def 2001/06/05 v3.0e (jk/car/fm) Standard LaTeX file
-Now handling font encoding TS1 ...
-... processing UTF-8 mapping file for font encoding TS1
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\ts1enc.dfu"
-File: ts1enc.dfu 2018/04/05 v1.2c UTF-8 support for inputenc
-   defining Unicode char U+00A2 (decimal 162)
-   defining Unicode char U+00A3 (decimal 163)
-   defining Unicode char U+00A4 (decimal 164)
-   defining Unicode char U+00A5 (decimal 165)
-   defining Unicode char U+00A6 (decimal 166)
-   defining Unicode char U+00A7 (decimal 167)
-   defining Unicode char U+00A8 (decimal 168)
-   defining Unicode char U+00A9 (decimal 169)
-   defining Unicode char U+00AA (decimal 170)
-   defining Unicode char U+00AC (decimal 172)
-   defining Unicode char U+00AE (decimal 174)
-   defining Unicode char U+00AF (decimal 175)
-   defining Unicode char U+00B0 (decimal 176)
-   defining Unicode char U+00B1 (decimal 177)
-   defining Unicode char U+00B2 (decimal 178)
-   defining Unicode char U+00B3 (decimal 179)
-   defining Unicode char U+00B4 (decimal 180)
-   defining Unicode char U+00B5 (decimal 181)
-   defining Unicode char U+00B6 (decimal 182)
-   defining Unicode char U+00B7 (decimal 183)
-   defining Unicode char U+00B9 (decimal 185)
-   defining Unicode char U+00BA (decimal 186)
-   defining Unicode char U+00BC (decimal 188)
-   defining Unicode char U+00BD (decimal 189)
-   defining Unicode char U+00BE (decimal 190)
-   defining Unicode char U+00D7 (decimal 215)
-   defining Unicode char U+00F7 (decimal 247)
-   defining Unicode char U+0192 (decimal 402)
-   defining Unicode char U+02C7 (decimal 711)
-   defining Unicode char U+02D8 (decimal 728)
-   defining Unicode char U+02DD (decimal 733)
-   defining Unicode char U+0E3F (decimal 3647)
-   defining Unicode char U+2016 (decimal 8214)
-   defining Unicode char U+2020 (decimal 8224)
-   defining Unicode char U+2021 (decimal 8225)
-   defining Unicode char U+2022 (decimal 8226)
-   defining Unicode char U+2030 (decimal 8240)
-   defining Unicode char U+2031 (decimal 8241)
-   defining Unicode char U+203B (decimal 8251)
-   defining Unicode char U+203D (decimal 8253)
-   defining Unicode char U+2044 (decimal 8260)
-   defining Unicode char U+204E (decimal 8270)
-   defining Unicode char U+2052 (decimal 8274)
-   defining Unicode char U+20A1 (decimal 8353)
-   defining Unicode char U+20A4 (decimal 8356)
-   defining Unicode char U+20A6 (decimal 8358)
-   defining Unicode char U+20A9 (decimal 8361)
-   defining Unicode char U+20AB (decimal 8363)
-   defining Unicode char U+20AC (decimal 8364)
-   defining Unicode char U+20B1 (decimal 8369)
-   defining Unicode char U+2103 (decimal 8451)
-   defining Unicode char U+2116 (decimal 8470)
-   defining Unicode char U+2117 (decimal 8471)
-   defining Unicode char U+211E (decimal 8478)
-   defining Unicode char U+2120 (decimal 8480)
-   defining Unicode char U+2122 (decimal 8482)
-   defining Unicode char U+2126 (decimal 8486)
-   defining Unicode char U+2127 (decimal 8487)
-   defining Unicode char U+212E (decimal 8494)
-   defining Unicode char U+2190 (decimal 8592)
-   defining Unicode char U+2191 (decimal 8593)
-   defining Unicode char U+2192 (decimal 8594)
-   defining Unicode char U+2193 (decimal 8595)
-   defining Unicode char U+2329 (decimal 9001)
-   defining Unicode char U+232A (decimal 9002)
-   defining Unicode char U+2422 (decimal 9250)
-   defining Unicode char U+25E6 (decimal 9702)
-   defining Unicode char U+25EF (decimal 9711)
-   defining Unicode char U+266A (decimal 9834)
-   defining Unicode char U+FEFF (decimal 65279)
-))
-LaTeX Info: Redefining \oldstylenums on input line 334.
-Package textcomp Info: Setting cmr sub-encoding to TS1/0 on input line 349.
-Package textcomp Info: Setting cmss sub-encoding to TS1/0 on input line 350.
-Package textcomp Info: Setting cmtt sub-encoding to TS1/0 on input line 351.
-Package textcomp Info: Setting cmvtt sub-encoding to TS1/0 on input line 352.
-Package textcomp Info: Setting cmbr sub-encoding to TS1/0 on input line 353.
-Package textcomp Info: Setting cmtl sub-encoding to TS1/0 on input line 354.
-Package textcomp Info: Setting ccr sub-encoding to TS1/0 on input line 355.
-Package textcomp Info: Setting ptm sub-encoding to TS1/4 on input line 356.
-Package textcomp Info: Setting pcr sub-encoding to TS1/4 on input line 357.
-Package textcomp Info: Setting phv sub-encoding to TS1/4 on input line 358.
-Package textcomp Info: Setting ppl sub-encoding to TS1/3 on input line 359.
-Package textcomp Info: Setting pag sub-encoding to TS1/4 on input line 360.
-Package textcomp Info: Setting pbk sub-encoding to TS1/4 on input line 361.
-Package textcomp Info: Setting pnc sub-encoding to TS1/4 on input line 362.
-Package textcomp Info: Setting pzc sub-encoding to TS1/4 on input line 363.
-Package textcomp Info: Setting bch sub-encoding to TS1/4 on input line 364.
-Package textcomp Info: Setting put sub-encoding to TS1/5 on input line 365.
-Package textcomp Info: Setting uag sub-encoding to TS1/5 on input line 366.
-Package textcomp Info: Setting ugq sub-encoding to TS1/5 on input line 367.
-Package textcomp Info: Setting ul8 sub-encoding to TS1/4 on input line 368.
-Package textcomp Info: Setting ul9 sub-encoding to TS1/4 on input line 369.
-Package textcomp Info: Setting augie sub-encoding to TS1/5 on input line 370.
-Package textcomp Info: Setting dayrom sub-encoding to TS1/3 on input line 371.
-Package textcomp Info: Setting dayroms sub-encoding to TS1/3 on input line 372.
-
-Package textcomp Info: Setting pxr sub-encoding to TS1/0 on input line 373.
-Package textcomp Info: Setting pxss sub-encoding to TS1/0 on input line 374.
-Package textcomp Info: Setting pxtt sub-encoding to TS1/0 on input line 375.
-Package textcomp Info: Setting txr sub-encoding to TS1/0 on input line 376.
-Package textcomp Info: Setting txss sub-encoding to TS1/0 on input line 377.
-Package textcomp Info: Setting txtt sub-encoding to TS1/0 on input line 378.
-Package textcomp Info: Setting lmr sub-encoding to TS1/0 on input line 379.
-Package textcomp Info: Setting lmdh sub-encoding to TS1/0 on input line 380.
-Package textcomp Info: Setting lmss sub-encoding to TS1/0 on input line 381.
-Package textcomp Info: Setting lmssq sub-encoding to TS1/0 on input line 382.
-Package textcomp Info: Setting lmvtt sub-encoding to TS1/0 on input line 383.
-Package textcomp Info: Setting lmtt sub-encoding to TS1/0 on input line 384.
-Package textcomp Info: Setting qhv sub-encoding to TS1/0 on input line 385.
-Package textcomp Info: Setting qag sub-encoding to TS1/0 on input line 386.
-Package textcomp Info: Setting qbk sub-encoding to TS1/0 on input line 387.
-Package textcomp Info: Setting qcr sub-encoding to TS1/0 on input line 388.
-Package textcomp Info: Setting qcs sub-encoding to TS1/0 on input line 389.
-Package textcomp Info: Setting qpl sub-encoding to TS1/0 on input line 390.
-Package textcomp Info: Setting qtm sub-encoding to TS1/0 on input line 391.
-Package textcomp Info: Setting qzc sub-encoding to TS1/0 on input line 392.
-Package textcomp Info: Setting qhvc sub-encoding to TS1/0 on input line 393.
-Package textcomp Info: Setting futs sub-encoding to TS1/4 on input line 394.
-Package textcomp Info: Setting futx sub-encoding to TS1/4 on input line 395.
-Package textcomp Info: Setting futj sub-encoding to TS1/4 on input line 396.
-Package textcomp Info: Setting hlh sub-encoding to TS1/3 on input line 397.
-Package textcomp Info: Setting hls sub-encoding to TS1/3 on input line 398.
-Package textcomp Info: Setting hlst sub-encoding to TS1/3 on input line 399.
-Package textcomp Info: Setting hlct sub-encoding to TS1/5 on input line 400.
-Package textcomp Info: Setting hlx sub-encoding to TS1/5 on input line 401.
-Package textcomp Info: Setting hlce sub-encoding to TS1/5 on input line 402.
-Package textcomp Info: Setting hlcn sub-encoding to TS1/5 on input line 403.
-Package textcomp Info: Setting hlcw sub-encoding to TS1/5 on input line 404.
-Package textcomp Info: Setting hlcf sub-encoding to TS1/5 on input line 405.
-Package textcomp Info: Setting pplx sub-encoding to TS1/3 on input line 406.
-Package textcomp Info: Setting pplj sub-encoding to TS1/3 on input line 407.
-Package textcomp Info: Setting ptmx sub-encoding to TS1/4 on input line 408.
-Package textcomp Info: Setting ptmj sub-encoding to TS1/4 on input line 409.
-) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\fontenc.sty
+Package: textcomp 2020/02/02 v2.0n Standard LaTeX package
+) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/base\fontenc.sty
 "
-Package: fontenc 2017/04/05 v2.0i Standard LaTeX package
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\t1enc.def"
-File: t1enc.def 2017/04/05 v2.0i Standard LaTeX file
-LaTeX Font Info:    Redeclaring font encoding T1 on input line 48.
-)) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\ae\ae.sty"
+Package: fontenc 2020/02/11 v2.0o Standard LaTeX package
+) ("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/ae\ae.sty"
 Package: ae 2001/02/12 1.3 Almost European Computer Modern
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\fontenc.sty"
-Package: fontenc 2017/04/05 v2.0i Standard LaTeX package
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\t1enc.def"
-File: t1enc.def 2017/04/05 v2.0i Standard LaTeX file
-LaTeX Font Info:    Redeclaring font encoding T1 on input line 48.
-)
-LaTeX Font Info:    Try loading font information for T1+aer on input line 105.
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\ae\t1aer.fd"
-File: t1aer.fd 1997/11/16 Font definitions for T1/aer.
-)))) (IDR_arXiv_preprint.aux)
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/base\fontenc.sty"
+Package: fontenc 2020/02/11 v2.0o Standard LaTeX package
+)))
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/l3backend\l3backen
+d-pdfmode.def"
+File: l3backend-pdfmode.def 2020-05-05 L3 backend support: PDF mode
+\l__kernel_color_stack_int=\count183
+\l__pdf_internal_box=\box48
+) (IDR_arXiv_preprint.aux)
 \openout1 = `IDR_arXiv_preprint.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 7.
-LaTeX Font Info:    ... okay on input line 7.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 7.
-LaTeX Font Info:    ... okay on input line 7.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 7.
-LaTeX Font Info:    ... okay on input line 7.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 7.
-LaTeX Font Info:    ... okay on input line 7.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 7.
-LaTeX Font Info:    ... okay on input line 7.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 7.
-LaTeX Font Info:    ... okay on input line 7.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 7.
-LaTeX Font Info:    Try loading font information for TS1+cmr on input line 7.
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\base\ts1cmr.fd"
-File: ts1cmr.fd 2014/09/29 v2.5h Standard LaTeX font definitions
-)
-LaTeX Font Info:    ... okay on input line 7.
-\AtBeginShipoutBox=\box29
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 6.
+LaTeX Font Info:    ... okay on input line 6.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 6.
+LaTeX Font Info:    ... okay on input line 6.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 6.
+LaTeX Font Info:    ... okay on input line 6.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 6.
+LaTeX Font Info:    ... okay on input line 6.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 6.
+LaTeX Font Info:    ... okay on input line 6.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 6.
+LaTeX Font Info:    ... okay on input line 6.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 6.
+LaTeX Font Info:    ... okay on input line 6.
+LaTeX Font Info:    Trying to load font information for T1+aer on input line 6.
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\context\base\supp-pdf.mk
-ii"
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/ae\t1aer.fd"
+File: t1aer.fd 1997/11/16 Font definitions for T1/aer.
+)
+\AtBeginShipoutBox=\box49
+
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/context/base/mkii\supp-p
+df.mkii"
 [Loading MPS to PDF converter (version 2006.09.02).]
-\scratchcounter=\count95
-\scratchdimen=\dimen109
-\scratchbox=\box30
-\nofMPsegments=\count96
-\nofMParguments=\count97
-\everyMPshowfont=\toks17
-\MPscratchCnt=\count98
-\MPscratchDim=\dimen110
-\MPnumerator=\count99
-\makeMPintoPDFobject=\count100
-\everyMPtoPDFconversion=\toks18
+\scratchcounter=\count184
+\scratchdimen=\dimen141
+\scratchbox=\box50
+\nofMPsegments=\count185
+\nofMParguments=\count186
+\everyMPshowfont=\toks18
+\MPscratchCnt=\count187
+\MPscratchDim=\dimen142
+\MPnumerator=\count188
+\makeMPintoPDFobject=\count189
+\everyMPtoPDFconversion=\toks19
 )
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\oberdiek\epstopdf-
-base.sty"
-Package: epstopdf-base 2016/05/15 v2.6 Base part for package epstopdf
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/epstopdf-pkg\epsto
+pdf-base.sty"
+Package: epstopdf-base 2020-01-24 v2.11 Base part for package epstopdf
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/grfext\grfext.sty"
+Package: grfext 2019/12/03 v1.3 Manage graphics extensions (HO)
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\oberdiek\grfext.st
-y"
-Package: grfext 2016/05/16 v1.2 Manage graphics extensions (HO)
-
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\kvdefin
-ekeys.sty"
-Package: kvdefinekeys 2016/05/16 v1.4 Define keys (HO)
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/generic/kvdefinekeys\kvd
+efinekeys.sty"
+Package: kvdefinekeys 2019-12-19 v1.6 Define keys (HO)
 ))
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\oberdiek\kvoptions
-.sty"
-Package: kvoptions 2016/05/16 v3.12 Key value format for package options (HO)
-
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\kvsetke
-ys.sty"
-Package: kvsetkeys 2016/05/16 v1.17 Key value parser (HO)
-
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\etexcmd
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/kvoptions\kvoption
 s.sty"
-Package: etexcmds 2016/05/16 v1.6 Avoid name clashes with e-TeX commands (HO)
+Package: kvoptions 2019/11/29 v3.13 Key value format for package options (HO)
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\ifluate
-x.sty"
-Package: ifluatex 2016/05/16 v1.4 Provides the ifluatex switch (HO)
-Package ifluatex Info: LuaTeX not detected.
-)
-Package etexcmds Info: Could not find \expanded.
-(etexcmds)             That can mean that you are not using pdfTeX 1.50 or
-(etexcmds)             that some package has redefined \expanded.
-(etexcmds)             In the latter case, load this package earlier.
-)))
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\oberdiek\pdftexc
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/generic/kvsetkeys\kvsetk
+eys.sty"
+Package: kvsetkeys 2019/12/15 v1.18 Key value parser (HO)
+))
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/pdftexcmds\pdftexc
 mds.sty"
-Package: pdftexcmds 2018/01/30 v0.27 Utility functions of pdfTeX for LuaTeX (HO
+Package: pdftexcmds 2019/11/24 v0.31 Utility functions of pdfTeX for LuaTeX (HO
 )
-Package pdftexcmds Info: LuaTeX not detected.
 Package pdftexcmds Info: \pdf@primitive is available.
 Package pdftexcmds Info: \pdf@ifprimitive is available.
 Package pdftexcmds Info: \pdfdraftmode found.
 )
 Package epstopdf-base Info: Redefining graphics rule for `.eps' on input line 4
-38.
+85.
 Package grfext Info: Graphics extension search list:
 (grfext)             [.pdf,.png,.jpg,.mps,.jpeg,.jbig2,.jb2,.PDF,.PNG,.JPG,.JPE
 G,.JBIG2,.JB2,.eps]
-(grfext)             \AppendGraphicsExtensions on input line 456.
+(grfext)             \AppendGraphicsExtensions on input line 504.
 )
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\oberdiek\pdflscape
-.sty"
-Package: pdflscape 2016/05/14 v0.11 Display of landscape pages in PDF (HO)
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/pdflscape\pdflscap
+e.sty"
+Package: pdflscape 2019/12/05 v0.12 Display of landscape pages in PDF (HO)
 
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\latex\graphics\lscape.st
+("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex/latex/graphics\lscape.st
 y"
 Package: lscape 2000/10/22 v3.01 Landscape Pages (DPC)
 )
 Package pdflscape Info: Auto-detected driver: pdftex on input line 81.
-
-("C:\Users\alexh\AppData\Local\Programs\MiKTeX 2.9\tex\generic\ifxetex\ifxetex.
-sty"
-Package: ifxetex 2010/09/12 v0.6 Provides ifxetex conditional
-)) (IDR_arXiv_preprint-concordance.tex)
-<arXiv_preprint.pdf, id=2, 597.50829pt x 845.0471pt>
+)
+<arXiv_preprint.pdf, id=1, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf>
-Package pdftex.def Info: arXiv_preprint.pdf  used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf  used on input line 7.
 (pdftex.def)             Requested size: 276.00105pt x 390.33818pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf>
-Package pdftex.def Info: arXiv_preprint.pdf  used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf  used on input line 7.
 (pdftex.def)             Requested size: 276.00105pt x 390.33818pt.
-<arXiv_preprint.pdf, id=5, page=1, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=4, page=1, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 1>
-Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 7.
 (pdftex.def)             Requested size: 597.50682pt x 845.04504pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 1>
-Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 1>
-Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 1>
-Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 1>
-Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page1 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [1
 
  <./arXiv_preprint.pdf{C:/Users/alexh/AppData/Local/MiKTeX/2.9/pdftex/config/pd
 ftex.map}>]
-<arXiv_preprint.pdf, id=47, page=2, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=46, page=2, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 2>
-Package pdftex.def Info: arXiv_preprint.pdf , page2 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page2 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 2>
-Package pdftex.def Info: arXiv_preprint.pdf , page2 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page2 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 2>
-Package pdftex.def Info: arXiv_preprint.pdf , page2 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page2 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [2 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=51, page=3, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=50, page=3, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 3>
-Package pdftex.def Info: arXiv_preprint.pdf , page3 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page3 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 3>
-Package pdftex.def Info: arXiv_preprint.pdf , page3 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page3 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 3>
-Package pdftex.def Info: arXiv_preprint.pdf , page3 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page3 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [3 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=85, page=4, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=84, page=4, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 4>
-Package pdftex.def Info: arXiv_preprint.pdf , page4 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page4 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 4>
-Package pdftex.def Info: arXiv_preprint.pdf , page4 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page4 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 4>
-Package pdftex.def Info: arXiv_preprint.pdf , page4 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page4 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [4 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=107, page=5, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=106, page=5, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 5>
-Package pdftex.def Info: arXiv_preprint.pdf , page5 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page5 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 5>
-Package pdftex.def Info: arXiv_preprint.pdf , page5 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page5 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 5>
-Package pdftex.def Info: arXiv_preprint.pdf , page5 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page5 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [5 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=111, page=6, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=110, page=6, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 6>
-Package pdftex.def Info: arXiv_preprint.pdf , page6 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page6 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 6>
-Package pdftex.def Info: arXiv_preprint.pdf , page6 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page6 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 6>
-Package pdftex.def Info: arXiv_preprint.pdf , page6 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page6 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [6 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=125, page=7, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=124, page=7, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 7>
-Package pdftex.def Info: arXiv_preprint.pdf , page7 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page7 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 7>
-Package pdftex.def Info: arXiv_preprint.pdf , page7 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page7 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 7>
-Package pdftex.def Info: arXiv_preprint.pdf , page7 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page7 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [7 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=130, page=8, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=129, page=8, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 8>
-Package pdftex.def Info: arXiv_preprint.pdf , page8 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page8 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 8>
-Package pdftex.def Info: arXiv_preprint.pdf , page8 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page8 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 8>
-Package pdftex.def Info: arXiv_preprint.pdf , page8 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page8 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [8 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=134, page=9, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=133, page=9, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 9>
-Package pdftex.def Info: arXiv_preprint.pdf , page9 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page9 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 9>
-Package pdftex.def Info: arXiv_preprint.pdf , page9 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page9 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 9>
-Package pdftex.def Info: arXiv_preprint.pdf , page9 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page9 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [9 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=138, page=10, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=137, page=10, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 10>
-Package pdftex.def Info: arXiv_preprint.pdf , page10 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page10 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 10>
-Package pdftex.def Info: arXiv_preprint.pdf , page10 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page10 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 10>
-Package pdftex.def Info: arXiv_preprint.pdf , page10 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page10 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [10 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=142, page=11, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=141, page=11, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 11>
-Package pdftex.def Info: arXiv_preprint.pdf , page11 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page11 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 11>
-Package pdftex.def Info: arXiv_preprint.pdf , page11 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page11 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 11>
-Package pdftex.def Info: arXiv_preprint.pdf , page11 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page11 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [11 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=146, page=12, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=145, page=12, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 12>
-Package pdftex.def Info: arXiv_preprint.pdf , page12 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page12 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 12>
-Package pdftex.def Info: arXiv_preprint.pdf , page12 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page12 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 12>
-Package pdftex.def Info: arXiv_preprint.pdf , page12 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page12 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [12 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=165, page=13, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=164, page=13, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 13>
-Package pdftex.def Info: arXiv_preprint.pdf , page13 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page13 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 13>
-Package pdftex.def Info: arXiv_preprint.pdf , page13 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page13 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 13>
-Package pdftex.def Info: arXiv_preprint.pdf , page13 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page13 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [13 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=176, page=14, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=175, page=14, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 14>
-Package pdftex.def Info: arXiv_preprint.pdf , page14 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page14 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 14>
-Package pdftex.def Info: arXiv_preprint.pdf , page14 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page14 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 14>
-Package pdftex.def Info: arXiv_preprint.pdf , page14 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page14 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [14 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=180, page=15, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=179, page=15, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 15>
-Package pdftex.def Info: arXiv_preprint.pdf , page15 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page15 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 15>
-Package pdftex.def Info: arXiv_preprint.pdf , page15 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page15 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 15>
-Package pdftex.def Info: arXiv_preprint.pdf , page15 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page15 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [15 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=184, page=16, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=183, page=16, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 16>
-Package pdftex.def Info: arXiv_preprint.pdf , page16 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page16 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 16>
-Package pdftex.def Info: arXiv_preprint.pdf , page16 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page16 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 16>
-Package pdftex.def Info: arXiv_preprint.pdf , page16 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page16 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [16 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=197, page=17, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=196, page=17, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 17>
-Package pdftex.def Info: arXiv_preprint.pdf , page17 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page17 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 17>
-Package pdftex.def Info: arXiv_preprint.pdf , page17 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page17 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 17>
-Package pdftex.def Info: arXiv_preprint.pdf , page17 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page17 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [17 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=201, page=18, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=200, page=18, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 18>
-Package pdftex.def Info: arXiv_preprint.pdf , page18 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page18 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 18>
-Package pdftex.def Info: arXiv_preprint.pdf , page18 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page18 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 18>
-Package pdftex.def Info: arXiv_preprint.pdf , page18 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page18 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [18 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=205, page=19, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=204, page=19, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 19>
-Package pdftex.def Info: arXiv_preprint.pdf , page19 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page19 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 19>
-Package pdftex.def Info: arXiv_preprint.pdf , page19 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page19 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 19>
-Package pdftex.def Info: arXiv_preprint.pdf , page19 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page19 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [19 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=215, page=20, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=214, page=20, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 20>
-Package pdftex.def Info: arXiv_preprint.pdf , page20 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page20 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 20>
-Package pdftex.def Info: arXiv_preprint.pdf , page20 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page20 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 20>
-Package pdftex.def Info: arXiv_preprint.pdf , page20 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page20 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [20 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=219, page=21, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=218, page=21, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 21>
-Package pdftex.def Info: arXiv_preprint.pdf , page21 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page21 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 21>
-Package pdftex.def Info: arXiv_preprint.pdf , page21 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page21 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 21>
-Package pdftex.def Info: arXiv_preprint.pdf , page21 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page21 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [21 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=223, page=22, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=222, page=22, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 22>
-Package pdftex.def Info: arXiv_preprint.pdf , page22 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page22 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 22>
-Package pdftex.def Info: arXiv_preprint.pdf , page22 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page22 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 22>
-Package pdftex.def Info: arXiv_preprint.pdf , page22 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page22 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [22 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=237, page=23, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=236, page=23, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 23>
-Package pdftex.def Info: arXiv_preprint.pdf , page23 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page23 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 23>
-Package pdftex.def Info: arXiv_preprint.pdf , page23 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page23 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 23>
-Package pdftex.def Info: arXiv_preprint.pdf , page23 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page23 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [23 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=247, page=24, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=246, page=24, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 24>
-Package pdftex.def Info: arXiv_preprint.pdf , page24 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page24 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 24>
-Package pdftex.def Info: arXiv_preprint.pdf , page24 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page24 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 24>
-Package pdftex.def Info: arXiv_preprint.pdf , page24 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page24 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [24 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=257, page=25, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=256, page=25, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 25>
-Package pdftex.def Info: arXiv_preprint.pdf , page25 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page25 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 25>
-Package pdftex.def Info: arXiv_preprint.pdf , page25 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page25 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 25>
-Package pdftex.def Info: arXiv_preprint.pdf , page25 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page25 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [25 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=262, page=26, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=261, page=26, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 26>
-Package pdftex.def Info: arXiv_preprint.pdf , page26 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page26 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 26>
-Package pdftex.def Info: arXiv_preprint.pdf , page26 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page26 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 26>
-Package pdftex.def Info: arXiv_preprint.pdf , page26 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page26 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [26 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=273, page=27, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=272, page=27, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 27>
-Package pdftex.def Info: arXiv_preprint.pdf , page27 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page27 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 27>
-Package pdftex.def Info: arXiv_preprint.pdf , page27 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page27 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 27>
-Package pdftex.def Info: arXiv_preprint.pdf , page27 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page27 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [27 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=283, page=28, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=282, page=28, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 28>
-Package pdftex.def Info: arXiv_preprint.pdf , page28 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page28 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 28>
-Package pdftex.def Info: arXiv_preprint.pdf , page28 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page28 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 28>
-Package pdftex.def Info: arXiv_preprint.pdf , page28 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page28 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [28 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=287, page=29, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=286, page=29, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 29>
-Package pdftex.def Info: arXiv_preprint.pdf , page29 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page29 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 29>
-Package pdftex.def Info: arXiv_preprint.pdf , page29 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page29 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 29>
-Package pdftex.def Info: arXiv_preprint.pdf , page29 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page29 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [29 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=291, page=30, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=290, page=30, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 30>
-Package pdftex.def Info: arXiv_preprint.pdf , page30 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page30 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 30>
-Package pdftex.def Info: arXiv_preprint.pdf , page30 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page30 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 30>
-Package pdftex.def Info: arXiv_preprint.pdf , page30 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page30 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [30 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=295, page=31, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=294, page=31, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 31>
-Package pdftex.def Info: arXiv_preprint.pdf , page31 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page31 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 31>
-Package pdftex.def Info: arXiv_preprint.pdf , page31 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page31 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 31>
-Package pdftex.def Info: arXiv_preprint.pdf , page31 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page31 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [31 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=300, page=32, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=299, page=32, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 32>
-Package pdftex.def Info: arXiv_preprint.pdf , page32 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page32 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 32>
-Package pdftex.def Info: arXiv_preprint.pdf , page32 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page32 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 32>
-Package pdftex.def Info: arXiv_preprint.pdf , page32 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page32 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [32 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=304, page=33, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=303, page=33, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 33>
-Package pdftex.def Info: arXiv_preprint.pdf , page33 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page33 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 33>
-Package pdftex.def Info: arXiv_preprint.pdf , page33 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page33 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 33>
-Package pdftex.def Info: arXiv_preprint.pdf , page33 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page33 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [33 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=308, page=34, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=307, page=34, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 34>
-Package pdftex.def Info: arXiv_preprint.pdf , page34 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page34 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 34>
-Package pdftex.def Info: arXiv_preprint.pdf , page34 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page34 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 34>
-Package pdftex.def Info: arXiv_preprint.pdf , page34 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page34 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [34 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=312, page=35, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=311, page=35, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 35>
-Package pdftex.def Info: arXiv_preprint.pdf , page35 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page35 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 35>
-Package pdftex.def Info: arXiv_preprint.pdf , page35 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page35 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 35>
-Package pdftex.def Info: arXiv_preprint.pdf , page35 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page35 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [35 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=316, page=36, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=315, page=36, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 36>
-Package pdftex.def Info: arXiv_preprint.pdf , page36 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page36 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 36>
-Package pdftex.def Info: arXiv_preprint.pdf , page36 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page36 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 36>
-Package pdftex.def Info: arXiv_preprint.pdf , page36 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page36 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [36 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=320, page=37, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=319, page=37, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 37>
-Package pdftex.def Info: arXiv_preprint.pdf , page37 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page37 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 37>
-Package pdftex.def Info: arXiv_preprint.pdf , page37 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page37 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 37>
-Package pdftex.def Info: arXiv_preprint.pdf , page37 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page37 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [37 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=325, page=38, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=324, page=38, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 38>
-Package pdftex.def Info: arXiv_preprint.pdf , page38 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page38 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 38>
-Package pdftex.def Info: arXiv_preprint.pdf , page38 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page38 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 38>
-Package pdftex.def Info: arXiv_preprint.pdf , page38 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page38 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [38 <./arXiv_preprint.pdf>]
-<arXiv_preprint.pdf, id=329, page=39, 597.50829pt x 845.0471pt>
+<arXiv_preprint.pdf, id=328, page=39, 597.50829pt x 845.0471pt>
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 39>
-Package pdftex.def Info: arXiv_preprint.pdf , page39 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page39 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 39>
-Package pdftex.def Info: arXiv_preprint.pdf , page39 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page39 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 File: arXiv_preprint.pdf Graphic file (type pdf)
 <use arXiv_preprint.pdf, page 39>
-Package pdftex.def Info: arXiv_preprint.pdf , page39 used on input line 9.
+Package pdftex.def Info: arXiv_preprint.pdf , page39 used on input line 7.
 (pdftex.def)             Requested size: 597.53416pt x 845.08372pt.
 [39 <./arXiv_preprint.pdf>] (IDR_arXiv_preprint.aux) ) 
 Here is how much of TeX's memory you used:
- 4025 strings out of 492973
- 62477 string characters out of 3126693
- 118362 words of memory out of 3000000
- 7836 multiletter control sequences out of 15000+200000
- 5898 words of font info for 16 fonts, out of 3000000 for 9000
+ 3746 strings out of 480761
+ 59615 string characters out of 2893975
+ 294959 words of memory out of 3000000
+ 19723 multiletter control sequences out of 15000+200000
+ 534596 words of font info for 26 fonts, out of 3000000 for 9000
  1141 hyphenation exceptions out of 8191
- 41i,18n,46p,349b,439s stack positions out of 5000i,500n,10000p,200000b,50000s
+ 40i,18n,46p,313b,437s stack positions out of 5000i,500n,10000p,200000b,50000s
 <C:/Users/alexh/AppData/L
 ocal/Programs/MiKTeX 2.9/fonts/type1/public/amsfonts/cm/cmbx10.pfb><C:/Users/al
 exh/AppData/Local/Programs/MiKTeX 2.9/fonts/type1/public/amsfonts/cm/cmbx12.pfb
@@ -1005,9 +827,9 @@ lexh/AppData/Local/Programs/MiKTeX 2.9/fonts/type1/public/amsfonts/cm/cmsy8.pfb
 cm/cmti10.pfb><C:/Users/alexh/AppData/Local/Programs/MiKTeX 2.9/fonts/type1/pub
 lic/amsfonts/cm/cmtt10.pfb><C:/Users/alexh/AppData/Local/Programs/MiKTeX 2.9/fo
 nts/type1/public/amsfonts/symbols/msbm10.pfb>
-Output written on IDR_arXiv_preprint.pdf (39 pages, 859453 bytes).
+Output written on IDR_arXiv_preprint.pdf (39 pages, 859173 bytes).
 PDF statistics:
- 355 PDF objects out of 1000 (max. 8388607)
+ 354 PDF objects out of 1000 (max. 8388607)
  0 named destinations out of 1000 (max. 500000)
- 215 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 211 words of extra memory for PDF output out of 10000 (max. 10000000)
 
