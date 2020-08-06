@@ -151,7 +151,7 @@ qpred.idr <- function(predictions, quantiles) {
   q0 <- function(data) {
     # Evaluate quantile function (stepfun) at given quantiles 
     stats::stepfun(x = data$cdf,
-      y = c(data$points, utils::tail(data$points, n = 1)))(quantiles)
+      y = c(data$points, data$points[nrow(data)]), right = TRUE)(quantiles)
   }
   qVals <- lapply(predictions, q0)
   do.call(rbind, qVals)
