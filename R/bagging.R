@@ -4,10 +4,10 @@
 #' or subsample aggregation (subagging).
 #' 
 #' @usage idrbag(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
-#'   c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs =
-#'   1e-5, eps_rel = 1e-5, max_iter = 10000L), newdata, digits = 3,
-#'   interpolation = "linear", asplitAvail = TRUE, b, p, replace = FALSE, 
-#'   grid = NULL)
+#'   c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE, eps_abs =
+#'   1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE, newdata, 
+#'   digits = 3, interpolation = "linear", asplitAvail = TRUE, b, p, 
+#'   replace = FALSE, grid = NULL)
 #' 
 #' @param newdata \code{data.frame} containing variables with which to
 #'   predict. Ordered factor variables are converted to numeric for computation,
@@ -41,8 +41,8 @@
 #' 
 #' @export
 idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
-  orders = c("comp" = 1), pars = osqpSettings(verbose = FALSE,
-  eps_abs = 1e-5, eps_rel = 1e-5, max_iter = 10000L), newdata,
+  orders = c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE,
+  eps_abs = 1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE, newdata,
   digits = 3, interpolation = "linear", asplitAvail = TRUE, b, p, 
   replace = FALSE, grid = NULL) {
     
@@ -54,6 +54,8 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   if (!is.numeric(p) | length(p) != 1 | p <= 0 | p >= 1)
     stop("'p' must be a number in (0,1)")
   if (!isTRUE(replace) & !isFALSE(replace))
+    stop("'replace' must be TRUE or FALSE")
+  if (!isTRUE(progress) & !isFALSE(progress))
     stop("'replace' must be TRUE or FALSE")
   if (is.null(grid)) {
     grid <- sort(unique(y))
@@ -68,14 +70,28 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   n <- ceiling(p * N)
   m <- length(grid)
   preds <- matrix(nrow = nrow(newdata), ncol = m, 0)
-  for (i in seq_len(b)) {
-    s <- sample(N, n, replace = replace)
-    fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
-      orders = orders, pars = pars)
-    preds <- preds + cdf(predict(object = fit, data = newdata, digits = digits,
-      interpolation = interpolation, asplitAvail = asplitAvail), grid)
+  if (progress) {
+    pb <- txtProgressBar(max = b)
+    for (i in seq_len(b)) {
+      setTxtProgressBar(pb, i)
+      s <- sample(N, n, replace = replace)
+      fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
+        orders = orders, stoch = stoch, pars = pars, progress = FALSE)
+      preds <- preds + cdf(predict(object = fit, data = newdata, digits = digits,
+        interpolation = interpolation, asplitAvail = asplitAvail), grid)
+    }
+    close (pb)
+  } else {
+    for (i in seq_len(b)) {
+      setTxtProgressBar(pb, i)
+      s <- sample(N, n, replace = replace)
+      fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
+        orders = orders, stoch = stoch, pars = pars, progress = FALSE)
+      preds <- preds + cdf(predict(object = fit, data = newdata, digits = digits,
+        interpolation = interpolation, asplitAvail = asplitAvail), grid)
+    }
   }
-  preds <- round(preds / b, digits)
+  preds <- asplit(round(preds / b, digits), 1)
   preds <- lapply(
     X = preds,
     FUN = function(dat) {

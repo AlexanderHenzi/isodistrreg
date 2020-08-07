@@ -5,8 +5,8 @@
 \title{Fit IDR to training data}
 \usage{
 idr(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
-  c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5, 
-  eps_rel = 1e-5, max_iter = 10000L))
+  c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE, eps_abs =
+  1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE)
 }
 \arguments{
 \item{y}{numeric vector (the response variable).}
@@ -28,9 +28,16 @@ convex order (see 'Details). Default is \code{"comp"} for all variables.
 The \code{"sd"} and \code{"icx"} orders can only be used with numeric
 variables, but not with ordered factors.}
 
+\item{stoch}{stochastic order constraint used for estimation. Default is
+\code{"sd"} for first order stochastic dominance. Use \code{"hazard"} for
+hazard rate order (under development, only available for one-dimensional
+\code{X}).}
+
 \item{pars}{parameters for quadratic programming optimization (only relevant
 if \code{X} has more than one column), set using
 \code{\link[osqp]{osqpSettings}}.}
+
+\item{progress}{display progressbar?}
 }
 \value{
 An object of class \code{"idrfit"} containing the following

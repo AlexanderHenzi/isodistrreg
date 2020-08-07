@@ -34,8 +34,8 @@ prepareData <- function(X, groups, orders) {
 #'   dataset.
 #'
 #' @usage idr(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
-#'   c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5, 
-#'   eps_rel = 1e-5, max_iter = 10000L))
+#'   c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE, eps_abs =
+#'   1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE)
 #'
 #' @param y numeric vector (the response variable).
 #' @param X data frame of numeric or ordered factor variables (the regression
@@ -52,9 +52,14 @@ prepareData <- function(X, groups, orders) {
 #'   convex order (see 'Details). Default is \code{"comp"} for all variables.
 #'   The \code{"sd"} and \code{"icx"} orders can only be used with numeric
 #'   variables, but not with ordered factors.
+#' @param stoch stochastic order constraint used for estimation. Default is
+#'   \code{"sd"} for first order stochastic dominance. Use \code{"hazard"} for
+#'   hazard rate order (under development, only available for one-dimensional
+#'   \code{X}).
 #' @param pars parameters for quadratic programming optimization (only relevant
 #'   if \code{X} has more than one column), set using
 #'   \code{\link[osqp]{osqpSettings}}.
+#' @param progress display progressbar?
 #'
 #' @details This function computes the isotonic distributional regression (IDR)
 #'   of a response \emph{y} on on one or more covariates \emph{X}. IDR estimates
@@ -178,8 +183,8 @@ prepareData <- function(X, groups, orders) {
 #' fit <- idr(y = y, X = X, orders = orders, groups = groups)
 #' fit
 idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
-  orders = c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5, 
-  eps_rel = 1e-5, max_iter = 10000L)) {
+  orders = c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE,
+  eps_abs = 1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE) {
     
   # Check input
   if (!is.vector(y, mode = "numeric")) 
@@ -206,6 +211,12 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   thresholds <- sort(unique(y))
   if ((nThr <- length(thresholds)) == 1) 
     stop("'y' must contain more than 1 distinct value")
+  if (ncol(X) > 1 & !identical(stoch, "sd"))
+    stop("only first order stochastic dominance for multivariate X available")
+  if (!identical(stoch, "sd") & ! identical(stoch, "hazard"))
+    stop("only 'sd' or 'hazard' allowed as stochastic order constraints")
+  if (!isTRUE(progress) & !isFALSE(progress))
+    stop("'progress' must be TRUE or FALSE")
   X <- prepareData(X, groups, orders)
   
   # Aggregate input data
@@ -224,13 +235,23 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     # One-dimensional IDR using PAVA
     constr <- NULL
     diagnostic <- list(precision = 0, convergence = 0)
-    cdf <- isoCdf_sequential(
-      w = weights,
-      W = rep(1, length(y)),
-      Y = sort(y),
-      posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
-      y = thresholds
-    )$CDF
+    if (stoch == "sd") {
+      cdf <- isoCdf_sequential(
+        w = weights,
+        W = rep(1, length(y)),
+        Y = sort(y),
+        posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
+        y = thresholds
+      )$CDF
+    } else {
+      cdf <- idrHazardCpp(
+        w = weights,
+        W = rep(1, length(y)),
+        Y = sort(y),
+        posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
+        y = thresholds
+      )
+    }
   } else {
     # Multivariate IDR using osqp
     constr <- compOrd(X)
@@ -246,8 +267,6 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     I <- nThr - 1
     conv <- vector("logical", I)
     
-    cat("Estimating cdf...\n")
-    pb <- utils::txtProgressBar(style = 1)
     q <- - weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
     qp <- osqp::osqp(P = P, q = q, A = A, l = l, pars = pars)
     sol <- qp$Solve()
@@ -255,28 +274,39 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     conv[1] <- identical(sol$info$status, "maximum iterations reached")
     
     if (I > 1) {
-      for (i in 2:I) {
-        utils::setTxtProgressBar(pb, i/I)
-        qp$WarmStart(x = cdf[, i - 1L])
-        q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
-        qp$Update(q = q)
-        sol <- qp$Solve()
-        cdf[, i] <- pmin(1, pmax(0, sol$x))
-        conv[i] <- identical(sol$info$status, "maximum iterations reached")
+      if (progress) {
+        cat("Estimating cdf...\n")
+        pb <- utils::txtProgressBar(style = 1)
+        for (i in 2:I) {
+          utils::setTxtProgressBar(pb, i/I)
+          qp$WarmStart(x = cdf[, i - 1L])
+          q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
+          qp$Update(q = q)
+          sol <- qp$Solve()
+          cdf[, i] <- pmin(1, pmax(0, sol$x))
+          conv[i] <- identical(sol$info$status, "maximum iterations reached")
+        }
+        close(pb)
+        cat("\n")
+      } else {
+        for (i in 2:I) {
+          qp$WarmStart(x = cdf[, i - 1L])
+          q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
+          qp$Update(q = q)
+          sol <- qp$Solve()
+          cdf[, i] <- pmin(1, pmax(0, sol$x))
+          conv[i] <- identical(sol$info$status, "maximum iterations reached")
+        }
       }
+      diagnostic <- list(
+        precision = ifelse(I > 1, abs(min(diff(t(cdf)))), 0),
+        convergence = mean(conv)
+      )
     }
-    close(pb)
-    cat("\n")
-    diagnostic <- list(
-      precision = ifelse(I > 1, abs(min(diff(t(cdf)))), 0),
-      convergence = mean(conv)
-    )
   }
   
   # Apply pava to estimated CDF to ensure monotonicity
-  if (nVar > 1) {
-    cdf <- cbind(pavaCorrect(cdf), 1)
-  }
+  if (nVar > 1) cdf <- cbind(pavaCorrect(cdf), 1)
   
   structure(list(X = X, y = cpY, cdf = cdf, thresholds = thresholds, 
     groups = groups, orders = orders, diagnostic = diagnostic,
