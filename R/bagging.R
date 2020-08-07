@@ -37,7 +37,7 @@
 #' no default values for \code{b} and \code{p}.
 #' 
 #' @return
-#' A list of predictions, see \code{\link{predict.idrfit}}).
+#' A list of predictions, see \code{\link{predict.idrfit}}.
 #' 
 #' @export
 idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),

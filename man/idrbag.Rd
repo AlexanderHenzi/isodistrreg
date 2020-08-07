@@ -24,7 +24,7 @@ relevant if \code{X} contains more than one variable. The same names as in
 \item{orders}{named vector giving for each group in \code{groups} the order
 that will be applied to this group. Only relevant if \code{X} contains more
 than one variable. The names of \code{orders} give the order, the entries
-give the group labels Available options: \code{"comp"} for componentwise
+give the group labels. Available options: \code{"comp"} for componentwise
 order, \code{"sd"} for stochastic dominance, \code{"icx"} for increasing
 convex order (see 'Details). Default is \code{"comp"} for all variables.
 The \code{"sd"} and \code{"icx"} orders can only be used with numeric
@@ -68,7 +68,7 @@ replacement?}
 the unique values of \code{y}.}
 }
 \value{
-A list of predictions, see \code{\link{predict.idrfit}}).
+A list of predictions, see \code{\link{predict.idrfit}}.
 }
 \description{
 Computes IDR predictions with bootstrap aggregating (bagging)

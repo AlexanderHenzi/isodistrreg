@@ -19,6 +19,7 @@
 #' \item use \code{\link[=predict.idrfit]{predict}(fit, data)}, where \code{fit}
 #'   is the model fit computed with \code{idr} and \code{data} is the data based
 #'   on which you want to make predictions.
+#' \item Try \code{\link{idrbag}} for IDR with (su)bagging.
 #' }
 #' The following pre-defined functions are available to evaluate IDR
 #' predictions:
