@@ -5,6 +5,21 @@
 
 using namespace Rcpp;
 
+// idrHazardCpp
+NumericMatrix idrHazardCpp(NumericVector w, NumericVector W, NumericVector Y, IntegerVector posY, NumericVector y);
+RcppExport SEXP _isodistrreg_idrHazardCpp(SEXP wSEXP, SEXP WSEXP, SEXP YSEXP, SEXP posYSEXP, SEXP ySEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type w(wSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type W(WSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Y(YSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type posY(posYSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
+    rcpp_result_gen = Rcpp::wrap(idrHazardCpp(w, W, Y, posY, y));
+    return rcpp_result_gen;
+END_RCPP
+}
 // isoCdf_sequential
 List isoCdf_sequential(NumericVector w, NumericVector W, NumericVector Y, IntegerVector posY, NumericVector y);
 RcppExport SEXP _isodistrreg_isoCdf_sequential(SEXP wSEXP, SEXP WSEXP, SEXP YSEXP, SEXP posYSEXP, SEXP ySEXP) {
@@ -46,6 +61,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_isodistrreg_idrHazardCpp", (DL_FUNC) &_isodistrreg_idrHazardCpp, 5},
     {"_isodistrreg_isoCdf_sequential", (DL_FUNC) &_isodistrreg_isoCdf_sequential, 5},
     {"_isodistrreg_pavaDec", (DL_FUNC) &_isodistrreg_pavaDec, 3},
     {"_isodistrreg_pavaCorrect", (DL_FUNC) &_isodistrreg_pavaCorrect, 1},
