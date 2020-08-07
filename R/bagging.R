@@ -71,19 +71,18 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   m <- length(grid)
   preds <- matrix(nrow = nrow(newdata), ncol = m, 0)
   if (progress) {
-    pb <- txtProgressBar(max = b)
+    pb <- utils::txtProgressBar(max = b)
     for (i in seq_len(b)) {
-      setTxtProgressBar(pb, i)
+      utils::setTxtProgressBar(pb, i)
       s <- sample(N, n, replace = replace)
       fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
         orders = orders, stoch = stoch, pars = pars, progress = FALSE)
       preds <- preds + cdf(predict(object = fit, data = newdata, digits = digits,
         interpolation = interpolation, asplitAvail = asplitAvail), grid)
     }
-    close (pb)
+    close(pb)
   } else {
     for (i in seq_len(b)) {
-      setTxtProgressBar(pb, i)
       s <- sample(N, n, replace = replace)
       fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
         orders = orders, stoch = stoch, pars = pars, progress = FALSE)
