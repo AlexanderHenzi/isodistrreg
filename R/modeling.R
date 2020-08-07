@@ -31,11 +31,11 @@ prepareData <- function(X, groups, orders) {
 #' Fit IDR to training data
 #'
 #' @description Fits isotonic distributional regression (IDR) to a training
-#' dataset.
+#'   dataset.
 #'
-#' @usage idr(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
-#' orders = c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE,
-#' eps_abs = 1e-5, eps_rel = 1e-5, max_iter = 10000L))
+#' @usage idr(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
+#'   c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5, 
+#'   eps_rel = 1e-5, max_iter = 10000L))
 #'
 #' @param y numeric vector (the response variable).
 #' @param X data frame of numeric or ordered factor variables (the regression
@@ -47,83 +47,78 @@ prepareData <- function(X, groups, orders) {
 #' @param orders named vector giving for each group in \code{groups} the order
 #'   that will be applied to this group. Only relevant if \code{X} contains more
 #'   than one variable. The names of \code{orders} give the order, the entries
-#'   give the group labels Available options: \code{"comp"} for
-#'   componentwise order, \code{"sd"} for stochastic dominance, \code{"icx"} for
-#'   increasing convex order (see 'Details). Default is \code{"comp"} for
-#'   all variables. The \code{"sd"} and \code{"icx"} orders can only be used
-#'   with numeric variables, but not with ordered factors.
-#' @param stoch stochastic order constraint used for estimation. Default is
-#'   \code{"sd"} for first order stochastic dominance. Use \code{"hazard"} for
-#'   hazard rate order (only available for one-dimensional \code{X}).
+#'   give the group labels Available options: \code{"comp"} for componentwise
+#'   order, \code{"sd"} for stochastic dominance, \code{"icx"} for increasing
+#'   convex order (see 'Details). Default is \code{"comp"} for all variables.
+#'   The \code{"sd"} and \code{"icx"} orders can only be used with numeric
+#'   variables, but not with ordered factors.
 #' @param pars parameters for quadratic programming optimization (only relevant
 #'   if \code{X} has more than one column), set using
 #'   \code{\link[osqp]{osqpSettings}}.
 #'
 #' @details This function computes the isotonic distributional regression (IDR)
-#' of a response \emph{y} on on one or more covariates \emph{X}. IDR estimates
-#' the cumulative distribution function (CDF) of \emph{y} conditional on
-#' \emph{X} by monotone regression, assuming that \emph{y} is more likely to
-#' take higher values, as \emph{X} increases. Formally, IDR assumes that the
-#' conditional CDF \eqn{F_{y | X = x}(z)} at each fixed threshold \emph{z}
-#' decreases, as \emph{x} increases, or equivalently, that the exceedance
-#' probabilities for any threshold \code{z} \eqn{P(y > z | X = x)} increase with
-#' \emph{x}.
+#'   of a response \emph{y} on on one or more covariates \emph{X}. IDR estimates
+#'   the cumulative distribution function (CDF) of \emph{y} conditional on
+#'   \emph{X} by monotone regression, assuming that \emph{y} is more likely to
+#'   take higher values, as \emph{X} increases. Formally, IDR assumes that the
+#'   conditional CDF \eqn{F_{y | X = x}(z)} at each fixed threshold \emph{z}
+#'   decreases, as \emph{x} increases, or equivalently, that the exceedance
+#'   probabilities for any threshold \code{z} \eqn{P(y > z | X = x)} increase
+#'   with \emph{x}.
 #'
-#' The conditional CDFs are estimated at each threshold in \code{unique(y)}.
-#' This is the set where the CDFs may have jumps. If \code{X} contains more than
-#' one variable, the CDFs are estimated by calling
-#' \code{\link[osqp]{solve_osqp}} from the package \pkg{osqp}
-#' \code{length(unique(y))} times. This might take a while if the training
-#' dataset is large.
+#'   The conditional CDFs are estimated at each threshold in \code{unique(y)}.
+#'   This is the set where the CDFs may have jumps. If \code{X} contains more
+#'   than one variable, the CDFs are estimated by calling
+#'   \code{\link[osqp]{solve_osqp}} from the package \pkg{osqp}
+#'   \code{length(unique(y))} times. This might take a while if the training
+#'   dataset is large.
 #'
-#' Use the argument \code{groups} to group \emph{exchangeable} covariates.
-#' Exchangeable covariates are indistinguishable except from the order in which
-#' they are labelled (e.g. ensemble weather forecasts, repeated measurements
-#' under the same measurement conditions).
+#'   Use the argument \code{groups} to group \emph{exchangeable} covariates.
+#'   Exchangeable covariates are indistinguishable except from the order in
+#'   which they are labelled (e.g. ensemble weather forecasts, repeated
+#'   measurements under the same measurement conditions).
 #'
-#' The following orders are available to perform the monotone regression in IDR:
-#' \itemize{
-#' \item Componentwise order (\code{"comp"}): A covariate vector \code{x1} is
-#'   greater than \code{x2} if \code{x1[i] >= x2[i]} holds for all components
-#'   \code{i}. This is the \emph{standard order used in multivariate monotone
-#'   regression} and \emph{should not be used for exchangeable variables (e.g.
-#'   perturbed ensemble forecasts)}.
-#' \item Stochastic dominance (\code{"sd"}): \code{x1} is greater than \code{x2}
-#'   in the stochastic order, if the (empirical) distribution of the elements of
+#'   The following orders are available to perform the monotone regression in
+#'   IDR: \itemize{ \item Componentwise order (\code{"comp"}): A covariate
+#'   vector \code{x1} is greater than \code{x2} if \code{x1[i] >= x2[i]} holds
+#'   for all components \code{i}. This is the \emph{standard order used in
+#'   multivariate monotone regression} and \emph{should not be used for
+#'   exchangeable variables (e.g. perturbed ensemble forecasts)}. \item
+#'   Stochastic dominance (\code{"sd"}): \code{x1} is greater than \code{x2} in
+#'   the stochastic order, if the (empirical) distribution of the elements of
 #'   \code{x1} is greater than the distribution of the elements of \code{x2} (in
 #'   first order) stochastic dominance. The \code{"sd"} order is invariant under
 #'   permutations of the grouped variables and therefore \emph{suitable for
-#'   exchangeable covariables}.
-#' \item Increasing convex order (\code{"icx"}): The \code{"icx"} order can
-#'   be used for groups of exchangeable variables. It should be used if the
-#'   variables have increasing variability, when their mean increases (e.g.
-#'   precipitation forecasts or other variables with right-skewed
-#'   distributions). More precisely, \code{"icx"} uses the increasing convex
-#'   stochastic order on the empirical distributions of the grouped variables.
-#' }
+#'   exchangeable covariables}. \item Increasing convex order (\code{"icx"}):
+#'   The \code{"icx"} order can be used for groups of exchangeable variables. It
+#'   should be used if the variables have increasing variability, when their
+#'   mean increases (e.g. precipitation forecasts or other variables with
+#'   right-skewed distributions). More precisely, \code{"icx"} uses the
+#'   increasing convex stochastic order on the empirical distributions of the
+#'   grouped variables. }
 #'
 #' @return An object of class \code{"idrfit"} containing the following
-#' components:
+#'   components:
 #'
-#' \item{\code{X}}{data frame of all distinct covariate combinations used for
+#'   \item{\code{X}}{data frame of all distinct covariate combinations used for
 #'   the fit.}
 #'
-#' \item{\code{y}}{list of all observed responses in the training data for given
-#'   covariate combinations in \code{X}.}
+#'   \item{\code{y}}{list of all observed responses in the training data for
+#'   given covariate combinations in \code{X}.}
 #'
-#' \item{\code{cdf}}{matrix containing the estimated CDFs, one CDF per row,
+#'   \item{\code{cdf}}{matrix containing the estimated CDFs, one CDF per row,
 #'   evaluated at \code{thresholds} (see next point). The CDF in the \code{i}th
 #'   row corredponds to the estimated conditional distribution of the response
 #'   given the covariates values in \code{X[i,]}.}
 #'
-#' \item{\code{thresholds}}{the thresholds at which the CDFs in \code{cdf} are
+#'   \item{\code{thresholds}}{the thresholds at which the CDFs in \code{cdf} are
 #'   evaluated. The entries in \code{cdf[,j]} are the conditional CDFs evaluated
 #'   at \code{thresholds[j]}.}
 #'
-#' \item{\code{groups}, \code{orders}}{ the groups and orders used for
+#'   \item{\code{groups}, \code{orders}}{ the groups and orders used for
 #'   estimation.}
 #'
-#' \item{\code{diagnostic}}{list giving a bound on the precision of the CDF
+#'   \item{\code{diagnostic}}{list giving a bound on the precision of the CDF
 #'   estimation (the maximal downwards-step in the CDF that has been detected)
 #'   and the fraction of CDF estimations that were stopped at the iteration
 #'   limit \code{max_iter}. Decrease the parameters \code{eps_abs} and/or
@@ -131,11 +126,11 @@ prepareData <- function(X, groups, orders) {
 #'   precision. See \code{\link[osqp]{osqpSettings}} for more optimization
 #'   parameters.}
 #'
-#' \item{\code{indices}}{ the row indices of the covariates in \code{X} in the
+#'   \item{\code{indices}}{ the row indices of the covariates in \code{X} in the
 #'   original training dataset (used for in-sample predictions with
 #'   \code{\link{predict.idrfit}}).}
 #'
-#' \item{\code{constraints}}{ (in multivariate IDR, \code{NULL} otherwise)
+#'   \item{\code{constraints}}{ (in multivariate IDR, \code{NULL} otherwise)
 #'   matrices giving the order constraints for optimization. Used in
 #'   \code{\link{predict.idrfit}}.}
 #'
@@ -151,14 +146,18 @@ prepareData <- function(X, groups, orders) {
 #' @export
 #' @importFrom osqp osqp
 #' @importFrom stats setNames
-#' 
-#' @references
-#' Stellato, B., Banjac, G., Goulart, P., Bemporad, A. y Boyd, S.. "OSQP: An
-#' Operator Splitting Solver for Quadratic Programs". ArXiv e-prints. 2017
-#' 
-#' Stellato, B., Banjac, G., Goulart, P., Bemporad, A. y Boyd, S.. osqp:
-#' Quadratic Programming Solver using the 'OSQP' Library. 2018, R package
-#' version 0.5.0. \url{https://CRAN.R-project.org/package=osqp}.
+#'
+#' @references Henzi, A., Moesching, A., & Duembgen, L. (2020). Accelerating the
+#' pool-adjacent-violators algorithm for isotonic distributional regression.
+#' arXiv preprint arXiv:2006.05527.
+#'
+#' Stellato, B., Banjac, G., Goulart, P., Bemporad, A., & Boyd, S. (2020).
+#' OSQP: An operator splitting solver for quadratic programs. Mathematical
+#' Programming Computation, 1-36.
+#'
+#' Bartolomeo Stellato, Goran Banjac, Paul Goulart and Stephen Boyd (2019).
+#' osqp: Quadratic Programming Solver using the 'OSQP' Library. R package
+#' version 0.6.0.3. https://CRAN.R-project.org/package=osqp
 #'
 #' @examples
 #' data("rain")
@@ -179,8 +178,8 @@ prepareData <- function(X, groups, orders) {
 #' fit <- idr(y = y, X = X, orders = orders, groups = groups)
 #' fit
 idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
-  orders = c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE,
-  eps_abs = 1e-5, eps_rel = 1e-5, max_iter = 10000L)) {
+  orders = c("comp" = 1), pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5, 
+  eps_rel = 1e-5, max_iter = 10000L)) {
     
   # Check input
   if (!is.vector(y, mode = "numeric")) 
@@ -207,10 +206,6 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   thresholds <- sort(unique(y))
   if ((nThr <- length(thresholds)) == 1) 
     stop("'y' must contain more than 1 distinct value")
-  if (ncol(X) > 1 & !identical(stoch, "sd"))
-    stop("only first order stochastic dominance for multivariate X available")
-  if (!identical(stoch, "sd") & ! identical(stoch, "hazard"))
-    stop("only 'sd' or 'hazard' allowed as stochastic order constraints")
   X <- prepareData(X, groups, orders)
   
   # Aggregate input data
@@ -229,17 +224,13 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     # One-dimensional IDR using PAVA
     constr <- NULL
     diagnostic <- list(precision = 0, convergence = 0)
-    if (identical(stoch, "sd")) {
-      cdf <- pavaDec(cpY, thresholds, weights)
-    } else if (identical(stoch, "hazard")) {
-      cdf <- idrHazardCpp(
-        w = weights,
-        W = rep(1, length(y)),
-        Y = sort(y),
-        posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
-        y = thresholds
-      )
-    }
+    cdf <- isoCdf_sequential(
+      w = weights,
+      W = rep(1, length(y)),
+      Y = sort(y),
+      posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
+      y = thresholds
+    )$CDF
   } else {
     # Multivariate IDR using osqp
     constr <- compOrd(X)
@@ -264,15 +255,15 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     conv[1] <- identical(sol$info$status, "maximum iterations reached")
     
     if (I > 1) {
-     for (i in 2:I) {
-      utils::setTxtProgressBar(pb, i/I)
-      qp$WarmStart(x = cdf[, i - 1L])
-      q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
-      qp$Update(q = q)
-      sol <- qp$Solve()
-      cdf[, i] <- pmin(1, pmax(0, sol$x))
-      conv[i] <- identical(sol$info$status, "maximum iterations reached")
-     }
+      for (i in 2:I) {
+        utils::setTxtProgressBar(pb, i/I)
+        qp$WarmStart(x = cdf[, i - 1L])
+        q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
+        qp$Update(q = q)
+        sol <- qp$Solve()
+        cdf[, i] <- pmin(1, pmax(0, sol$x))
+        conv[i] <- identical(sol$info$status, "maximum iterations reached")
+      }
     }
     close(pb)
     cat("\n")
@@ -283,8 +274,9 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   }
   
   # Apply pava to estimated CDF to ensure monotonicity
-  cdf <- pavaCorrect(cdf)
-  cdf <- cbind(cdf, 1)
+  if (nVar > 1) {
+    cdf <- cbind(pavaCorrect(cdf), 1)
+  }
   
   structure(list(X = X, y = cpY, cdf = cdf, thresholds = thresholds, 
     groups = groups, orders = orders, diagnostic = diagnostic,

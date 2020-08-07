@@ -197,10 +197,9 @@ idrF <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
       w = weights,
       W = rep(1, length(y)),
       Y = sort(y),
-      posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
+      posY = rep.int(seq_along(indices), lengths(indices))[order(unlist(cpY))],
       y = thresholds
     )$CDF
-
   } else {
     # Multivariate IDR using osqp
     constr <- compOrd(X)
