@@ -211,8 +211,8 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   thresholds <- sort(unique(y))
   if ((nThr <- length(thresholds)) == 1) 
     stop("'y' must contain more than 1 distinct value")
-  if (ncol(X) > 1 & !identical(stoch, "sd"))
-    stop("only first order stochastic dominance for multivariate X available")
+  # if (ncol(X) > 1 & !identical(stoch, "sd"))
+    # stop("only first order stochastic dominance for multivariate X available")
   if (!identical(stoch, "sd") & ! identical(stoch, "hazard"))
     stop("only 'sd' or 'hazard' allowed as stochastic order constraints")
   if (!isTRUE(progress) & !isFALSE(progress))
@@ -254,54 +254,61 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     }
   } else {
     # Multivariate IDR using osqp
-    constr <- compOrd(X)
-    N <- nrow(X)
-    cdf <- matrix(ncol = nThr - 1, nrow = N)
-    A <- trReduc(constr$paths, N)
-    nConstr <- nrow(A)
-    l <- rep(0, nConstr)
-    A <- Matrix::sparseMatrix(i = rep(seq_len(nConstr), 2), j = as.vector(A), 
-      x = rep(c(1, -1), each = nConstr), dims = c(nConstr, N))
-    P <- Matrix::sparseMatrix(i = 1:N, j = 1:N, x = weights)
-    i <- 1
-    I <- nThr - 1
-    conv <- vector("logical", I)
-    
-    q <- - weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
-    qp <- osqp::osqp(P = P, q = q, A = A, l = l, pars = pars)
-    sol <- qp$Solve()
-    cdf[, 1] <- pmin(1, pmax(0, sol$x))
-    conv[1] <- identical(sol$info$status, "maximum iterations reached")
-    
-    if (I > 1) {
-      if (progress) {
-        cat("Estimating cdf...\n")
-        pb <- utils::txtProgressBar(style = 1)
-        for (i in 2:I) {
-          utils::setTxtProgressBar(pb, i/I)
-          qp$WarmStart(x = cdf[, i - 1L])
-          q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
-          qp$Update(q = q)
-          sol <- qp$Solve()
-          cdf[, i] <- pmin(1, pmax(0, sol$x))
-          conv[i] <- identical(sol$info$status, "maximum iterations reached")
-        }
-        close(pb)
-        cat("\n")
-      } else {
-        for (i in 2:I) {
-          qp$WarmStart(x = cdf[, i - 1L])
-          q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
-          qp$Update(q = q)
-          sol <- qp$Solve()
-          cdf[, i] <- pmin(1, pmax(0, sol$x))
-          conv[i] <- identical(sol$info$status, "maximum iterations reached")
+    if (stoch == "hazard") {
+      tmp <- multivHazardLoop(X, thresholds, nThr, weights, cpY, pars)
+      constr <- tmp$constr
+      cdf <- tmp$cdf
+      diagnostic <- tmp$diagnostic
+    } else {
+      constr <- compOrd(X)
+      N <- nrow(X)
+      cdf <- matrix(ncol = nThr - 1, nrow = N)
+      A <- trReduc(constr$paths, N)
+      nConstr <- nrow(A)
+      l <- rep(0, nConstr)
+      A <- Matrix::sparseMatrix(i = rep(seq_len(nConstr), 2), j = as.vector(A), 
+        x = rep(c(1, -1), each = nConstr), dims = c(nConstr, N))
+      P <- Matrix::sparseMatrix(i = 1:N, j = 1:N, x = weights)
+      i <- 1
+      I <- nThr - 1
+      conv <- vector("logical", I)
+      
+      q <- - weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
+      qp <- osqp::osqp(P = P, q = q, A = A, l = l, pars = pars)
+      sol <- qp$Solve()
+      cdf[, 1] <- pmin(1, pmax(0, sol$x))
+      conv[1] <- identical(sol$info$status, "maximum iterations reached")
+      
+      if (I > 1) {
+        if (progress) {
+          cat("Estimating cdf...\n")
+          pb <- utils::txtProgressBar(style = 1)
+          for (i in 2:I) {
+            utils::setTxtProgressBar(pb, i/I)
+            qp$WarmStart(x = cdf[, i - 1L])
+            q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
+            qp$Update(q = q)
+            sol <- qp$Solve()
+            cdf[, i] <- pmin(1, pmax(0, sol$x))
+            conv[i] <- identical(sol$info$status, "maximum iterations reached")
+          }
+          close(pb)
+          cat("\n")
+        } else {
+          for (i in 2:I) {
+            qp$WarmStart(x = cdf[, i - 1L])
+            q <-  -weights * sapply(cpY, FUN = function(x) mean(thresholds[i] >= x))
+            qp$Update(q = q)
+            sol <- qp$Solve()
+            cdf[, i] <- pmin(1, pmax(0, sol$x))
+            conv[i] <- identical(sol$info$status, "maximum iterations reached")
+          }
         }
       }
       diagnostic <- list(
         precision = ifelse(I > 1, abs(min(diff(t(cdf)))), 0),
         convergence = mean(conv)
-      )
+      )   
     }
   }
   
