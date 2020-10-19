@@ -320,6 +320,11 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     indices = indices, constraints = constr), class = "idrfit")
 }
 
+#' Fast idr (for backwards compatibility)
+#' 
+#' export
+idrF <- idr
+
 #' Predict method for IDR fits
 #'
 #' @description Prediction based on IDR model fit.
