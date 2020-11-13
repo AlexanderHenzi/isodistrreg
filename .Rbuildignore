@@ -4,4 +4,6 @@
 ^README\.md$
 ^NEWS\.md$
 ^\.travis\.yml$
-^precipDATA_caseStudy\.rda$
+^simulation_example\.R$
+^simulation_example_functions\.R$
+^precipData_caseStudy\.rda$
