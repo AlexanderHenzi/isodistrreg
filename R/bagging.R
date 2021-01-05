@@ -23,8 +23,8 @@
 #'   \code{asplit} is not available.
 #' @param b number of (su)bagging samples.
 #' @param p size of (su)bagging samples relative to training data.
-#' @param replace draw samples with (\code{TRUE}) or without (\code{FALSE}) 
-#'     replacement?
+#' @param replace draw samples with (\code{TRUE}, \code{1}) or without
+#'     (\code{FALSE}, \code{0}) replacement?
 #' @param grid grid on which the predictive CDFs are evaluated. Default are
 #'     the unique values of \code{y}.
 #' @inheritParams idr

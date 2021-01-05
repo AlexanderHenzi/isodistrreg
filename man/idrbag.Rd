@@ -39,7 +39,8 @@ hazard rate order (under development, only available for one-dimensional
 if \code{X} has more than one column), set using
 \code{\link[osqp]{osqpSettings}}.}
 
-\item{progress}{display progressbar?}
+\item{progress}{display progressbar (\code{TRUE}, \code{FALSE} or \code{1},
+\code{0})?}
 
 \item{newdata}{\code{data.frame} containing variables with which to
 predict. Ordered factor variables are converted to numeric for computation,
@@ -61,8 +62,8 @@ IDR.}
 
 \item{p}{size of (su)bagging samples relative to training data.}
 
-\item{replace}{draw samples with (\code{TRUE}) or without (\code{FALSE}) 
-replacement?}
+\item{replace}{draw samples with (\code{TRUE}, \code{1}) or without
+(\code{FALSE}, \code{0}) replacement?}
 
 \item{grid}{grid on which the predictive CDFs are evaluated. Default are
 the unique values of \code{y}.}

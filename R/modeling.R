@@ -59,7 +59,8 @@ prepareData <- function(X, groups, orders) {
 #' @param pars parameters for quadratic programming optimization (only relevant
 #'   if \code{X} has more than one column), set using
 #'   \code{\link[osqp]{osqpSettings}}.
-#' @param progress display progressbar?
+#' @param progress display progressbar (\code{TRUE}, \code{FALSE} or \code{1},
+#'   \code{0})?
 #'
 #' @details This function computes the isotonic distributional regression (IDR)
 #'   of a response \emph{y} on on one or more covariates \emph{X}. IDR estimates

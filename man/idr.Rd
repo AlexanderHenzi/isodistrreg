@@ -37,7 +37,8 @@ hazard rate order (under development, only available for one-dimensional
 if \code{X} has more than one column), set using
 \code{\link[osqp]{osqpSettings}}.}
 
-\item{progress}{display progressbar?}
+\item{progress}{display progressbar (\code{TRUE}, \code{FALSE} or \code{1},
+\code{0})?}
 }
 \value{
 An object of class \code{"idrfit"} containing the following
