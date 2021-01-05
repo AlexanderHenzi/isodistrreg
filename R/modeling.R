@@ -212,11 +212,13 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   if ((nThr <- length(thresholds)) == 1) 
     stop("'y' must contain more than 1 distinct value")
   # if (ncol(X) > 1 & !identical(stoch, "sd"))
-    # stop("only first order stochastic dominance for multivariate X available")
+  #   stop("only first order stochastic dominance for multivariate X available")
   if (!identical(stoch, "sd") & ! identical(stoch, "hazard"))
     stop("only 'sd' or 'hazard' allowed as stochastic order constraints")
+  if (isTRUE(progress == 1)) progress <- TRUE
+  if (isTRUE(progress == 0)) progress <- FALSE 
   if (!isTRUE(progress) & !isFALSE(progress))
-    stop("'progress' must be TRUE or FALSE")
+    stop("'progress' must be TRUE/FALSE or 1/0")
   X <- prepareData(X, groups, orders)
   
   # Aggregate input data
@@ -319,11 +321,6 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     groups = groups, orders = orders, diagnostic = diagnostic,
     indices = indices, constraints = constr), class = "idrfit")
 }
-
-#' Fast idr (for backwards compatibility)
-#' 
-#' export
-idrF <- idr
 
 #' Predict method for IDR fits
 #'
