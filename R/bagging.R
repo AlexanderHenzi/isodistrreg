@@ -83,7 +83,7 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
       ysunique <- unique(ys)
       if (length(ysunique) == 1) {
         pos <- findInterval(ysunique, grid)
-        if (pos > 0) cdf[, 1:pos] <- cdf[, 1:pos] + 1
+        if (pos > 0) preds[, 1:pos] <- preds[, 1:pos] + 1
       } else {
       fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
         orders = orders, stoch = stoch, pars = pars, progress = FALSE)
