@@ -117,7 +117,7 @@ trReduc <- function(paths, n) {
 #' 
 #' @keywords internal
 splitArr <- function(x, MARGIN, asplitAvail = TRUE) {
-  if (isTRUE(asplitAvail)) return(asplit(x, MARGIN))
+  if (isTRUE(asplitAvail) || isTRUE(asplitAvail == 1)) return(asplit(x, MARGIN))
   unname(split(x, slice.index(x, MARGIN)))
 }
 
