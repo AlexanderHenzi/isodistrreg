@@ -53,10 +53,14 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     stop("'b' must be a positive integer smaller than length(y)")
   if (!is.numeric(p) | length(p) != 1 | p <= 0 | p >= 1)
     stop("'p' must be a number in (0,1)")
+  if (isTRUE(replace == 1)) replace <- TRUE
+  if (isTRUE(replace == 0)) replace <- FALSE
+  if (isTRUE(progress == 1)) progress <- TRUE
+  if (isTRUE(progress == 0)) progress <- FALSE  
   if (!isTRUE(replace) & !isFALSE(replace))
-    stop("'replace' must be TRUE or FALSE")
+    stop("'replace' must be TRUE/FALSE or 1/0")
   if (!isTRUE(progress) & !isFALSE(progress))
-    stop("'replace' must be TRUE or FALSE")
+    stop("'progress' must be TRUE/FALSE or 1/0")
   if (is.null(grid)) {
     grid <- sort(unique(y))
   } else {
@@ -75,19 +79,35 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     for (i in seq_len(b)) {
       utils::setTxtProgressBar(pb, i)
       s <- sample(N, n, replace = replace)
+      ys <- y[s]
+      ysunique <- unique(ys)
+      if (length(ysunique) == 1) {
+        pos <- findInterval(ysunique, grid)
+        if (pos > 0) cdf[, 1:pos] <- cdf[, 1:pos] + 1
+      } else {
       fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
         orders = orders, stoch = stoch, pars = pars, progress = FALSE)
-      preds <- preds + cdf(predict(object = fit, data = newdata, digits = digits,
-        interpolation = interpolation, asplitAvail = asplitAvail), grid)
+      preds <- preds + cdf(predict(object = fit, data = newdata,
+        digits = digits, interpolation = interpolation,
+        asplitAvail = asplitAvail), grid)
+      }
     }
     close(pb)
   } else {
     for (i in seq_len(b)) {
       s <- sample(N, n, replace = replace)
+      ys <- y[s]
+      ysunique <- unique(ys)
+      if (length(ysunique) == 1) {
+        pos <- findInterval(ysunique, grid)
+        if (pos > 0) cdf[, 1:pos] <- cdf[, 1:pos] + 1
+      } else {
       fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
         orders = orders, stoch = stoch, pars = pars, progress = FALSE)
-      preds <- preds + cdf(predict(object = fit, data = newdata, digits = digits,
-        interpolation = interpolation, asplitAvail = asplitAvail), grid)
+      preds <- preds + cdf(predict(object = fit, data = newdata,
+        digits = digits, interpolation = interpolation,
+        asplitAvail = asplitAvail), grid)
+      }
     }
   }
   preds <- asplit(round(preds / b, digits), 1)
