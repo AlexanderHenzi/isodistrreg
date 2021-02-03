@@ -21,7 +21,7 @@ Description: Isotonic distributional regression (IDR) is a powerful
     forecasts and observations, and serve as a benchmark in many other
     prediction problems.
 License: GPL (>= 2)
-Depends: R (>= 3.2)
+Depends: R (>= 3.5)
 Imports: Rcpp (>= 1.0.1),
 	osqp,
 	Matrix,
