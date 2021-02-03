@@ -70,13 +70,13 @@
 #' pred1 <- predict(model1, data = newX)
 #' 
 #' ## plot
-#' plot(pred1, 1)
+#' plot(pred1, 1, main = "LM based DIM")
 #' grd <- pred1[[1]]$points
 #' trueCdf <- pnorm(
 #'   grd,
 #'   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
 #' )
-#' points(grd, trueCdf, type = "l", col = 2, main = "LM based DIM")
+#' points(grd, trueCdf, type = "l", col = 2)
 #' 
 #' 
 #' ## generalized additive model for index estimation
@@ -91,13 +91,13 @@
 #' pred2 <- predict(model2, data = newX)
 #' 
 #' ## plot
-#' plot(pred2, 1)
+#' plot(pred2, 1, main = "GAM based DIM")
 #' grd <- pred2[[1]]$points
 #' trueCdf <- pnorm(
 #'   grd,
 #'   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
 #' )
-#' points(grd, trueCdf, type = "l", col = 2, main = "GAM based DIM")
+#' points(grd, trueCdf, type = "l", col = 2)
 #' 
 #' ## quantile random forest for index estimation (two-dimensional index
 #' ## consisting of (0.5, 0.9)-quantiles)
@@ -121,13 +121,13 @@
 #' pred3 <- predict(model3, data = newX)
 #' 
 #' ## plot
-#' plot(pred3, 1)
+#' plot(pred3, 1, main = "QRF based DIM")
 #' grd <- pred3[[1]]$points
 #' trueCdf <- pnorm(
 #'   grd,
 #'   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
 #' )
-#' points(grd, trueCdf, type = "l", col = 2, main = "QRF based DIM")
+#' points(grd, trueCdf, type = "l", col = 2)
 #' }
 dindexm <- function(formula, indexfit, data, response,
   pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5, eps_rel = 1e-5,
@@ -188,6 +188,6 @@ predict.dindexfit <- function(object, data = NULL, digits = 3,
   indexPred <- as.data.frame(indexPred)
   colnames(indexPred) <- paste0("x", seq_len(ncol(indexPred)))
   
-  predict.idrfit(object = idrFit, data = indexPred, digits = digits,
+  predict(object = idrFit, data = indexPred, digits = digits,
     interpolation = interpolation, asplitAvail = asplitAvail)
 }

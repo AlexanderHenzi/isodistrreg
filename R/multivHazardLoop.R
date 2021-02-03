@@ -43,12 +43,12 @@ multivHazardLoop <- function(X, thresholds, nThr, weights, cpY, pars) {
           conv[i] <- identical(sol$info$status, "maximum iterations reached")
         }
 
-    }
+     }
+    cdf <- 1 - cdf
     diagnostic <- list(
        precision = ifelse(I > 1, abs(min(diff(t(cdf)))), 0),
        convergence = mean(conv)
     )
-    cdf <- 1 - cdf
     
     return(list(cdf = cdf, diagnostic = diagnostic, constr = constr))
 }

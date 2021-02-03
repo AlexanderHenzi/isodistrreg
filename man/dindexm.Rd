@@ -82,13 +82,13 @@ model1 <- dindexm(
 pred1 <- predict(model1, data = newX)
 
 ## plot
-plot(pred1, 1)
+plot(pred1, 1, main = "LM based DIM")
 grd <- pred1[[1]]$points
 trueCdf <- pnorm(
   grd,
   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
 )
-points(grd, trueCdf, type = "l", col = 2, main = "LM based DIM")
+points(grd, trueCdf, type = "l", col = 2)
 
 
 ## generalized additive model for index estimation
@@ -103,13 +103,13 @@ model2 <- dindexm(
 pred2 <- predict(model2, data = newX)
 
 ## plot
-plot(pred2, 1)
+plot(pred2, 1, main = "GAM based DIM")
 grd <- pred2[[1]]$points
 trueCdf <- pnorm(
   grd,
   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
 )
-points(grd, trueCdf, type = "l", col = 2, main = "GAM based DIM")
+points(grd, trueCdf, type = "l", col = 2)
 
 ## quantile random forest for index estimation (two-dimensional index
 ## consisting of (0.5, 0.9)-quantiles)
@@ -133,13 +133,13 @@ model3 <- dindexm(
 pred3 <- predict(model3, data = newX)
 
 ## plot
-plot(pred3, 1)
+plot(pred3, 1, main = "QRF based DIM")
 grd <- pred3[[1]]$points
 trueCdf <- pnorm(
   grd,
   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
 )
-points(grd, trueCdf, type = "l", col = 2, main = "QRF based DIM")
+points(grd, trueCdf, type = "l", col = 2)
 }
 }
 \references{
