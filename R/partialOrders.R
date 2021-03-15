@@ -99,28 +99,6 @@ trReduc <- function(paths, n) {
   edges
 }
 
-#' Split array/matrix by margins (for R before and after 3.6)
-#' 
-#' @description Wrapper for \code{\link[base]{asplit}} and
-#' \code{\link[base]{split}}.
-#' 
-#' @usage
-#' splitArr(x, MARGIN, asplitAvail = TRUE)
-#' 
-#' @param x an array, including a matrix.
-#' @param MARGIN a vector giving the margins to split.
-#' @param asplitAvail choose \code{\link[base]{asplit}} (available in 
-#'     R >= 3.6), otherwise \code{\link[base]{split}} (less efficient).
-#' 
-#' @return
-#' A list array splitted along the given \code{MARGIN}.
-#' 
-#' @keywords internal
-splitArr <- function(x, MARGIN, asplitAvail = TRUE) {
-  if (isTRUE(asplitAvail) || isTRUE(asplitAvail == 1)) return(asplit(x, MARGIN))
-  unname(split(x, slice.index(x, MARGIN)))
-}
-
 #' Neighbor points with respect to componentwise order
 #'
 #' @description Find the neighbor points of the rows of a matrix \code{x} within
@@ -132,21 +110,18 @@ splitArr <- function(x, MARGIN, asplitAvail = TRUE) {
 #' different from \code{k}.
 #'
 #' @usage
-#' neighborPoints(x, X, orderX, asplitAvail = TRUE)
+#' neighborPoints(x, X, orderX)
 #'
 #' @param x numeric matrix with at least two columns.
 #' @param X numeric matrix with same number of columns as \code{x}.
 #' @param orderX output of \code{compOrd(X)}.
-#' @param asplitAvail use \code{\link[base]{asplit}} for splitting arrays
-#'   (default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
-#'   \code{asplit} is not available.
 #'
 #' @return
 #' Lists of length \code{nrow(x)} giving for each \code{x[i, ]} the indices
 #' of the smaller and the greater neighbor points within the rows of \code{X}.
 #' 
 #' @keywords internal
-neighborPoints <- function(x, X, orderX, asplitAvail = TRUE) {
+neighborPoints <- function(x, X, orderX) {
   colOrder <- orderX$colOrder
   nx <- nrow(x)
   k <- ncol(x)
@@ -189,7 +164,7 @@ neighborPoints <- function(x, X, orderX, asplitAvail = TRUE) {
     xGeqX[paths[, k], xGeqX[k, ]] <- FALSE
   }
   
-  smaller <- lapply(splitArr(xGeqX, 2, asplitAvail), which) # lapply(split(t(xGeqX), seq_len(nx)), which)
-  greater <- lapply(splitArr(xLeqX, 2, asplitAvail), which) # lapply(split(t(xLeqX), seq_len(nx)), which)
+  smaller <- lapply(asplit(xGeqX, 2), which) # lapply(split(t(xGeqX), seq_len(nx)), which)
+  greater <- lapply(asplit(xLeqX, 2), which) # lapply(split(t(xLeqX), seq_len(nx)), which)
   list(smaller = unname(smaller), greater = unname(greater))
 }

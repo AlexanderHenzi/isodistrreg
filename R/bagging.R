@@ -6,8 +6,7 @@
 #' @usage idrbag(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
 #'   c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE, eps_abs =
 #'   1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE, newdata, 
-#'   digits = 3, interpolation = "linear", asplitAvail = TRUE, b, p, 
-#'   replace = FALSE, grid = NULL)
+#'   digits = 3, interpolation = "linear", b, p, replace = FALSE, grid = NULL)
 #' 
 #' @param newdata \code{data.frame} containing variables with which to
 #'   predict. Ordered factor variables are converted to numeric for computation,
@@ -18,9 +17,6 @@
 #'   \code{"linear"}. Any other argument will select midpoint interpolation (see 
 #'   'Details' in \code{\link{predict.idrfit}}). Has no effect for multivariate
 #'   IDR.
-#' @param asplitAvail use \code{\link[base]{asplit}} for splitting arrays
-#'   (default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
-#'   \code{asplit} is not available.
 #' @param b number of (su)bagging samples.
 #' @param p size of (su)bagging samples relative to training data.
 #' @param replace draw samples with (\code{TRUE}, \code{1}) or without
@@ -43,7 +39,7 @@
 idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   orders = c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE,
   eps_abs = 1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE, newdata,
-  digits = 3, interpolation = "linear", asplitAvail = TRUE, b, p, 
+  digits = 3, interpolation = "linear", b, p, 
   replace = FALSE, grid = NULL) {
     
   if (!is.vector(y, mode = "numeric")) 
@@ -88,8 +84,7 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
       fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
         orders = orders, stoch = stoch, pars = pars, progress = FALSE)
       preds <- preds + cdf(predict(object = fit, data = newdata,
-        digits = digits, interpolation = interpolation,
-        asplitAvail = asplitAvail), grid)
+        digits = digits, interpolation = interpolation), grid)
       }
     }
     close(pb)
@@ -105,8 +100,7 @@ idrbag <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
       fit <- idr(y = y[s], X = X[s, , drop = FALSE], groups = groups,
         orders = orders, stoch = stoch, pars = pars, progress = FALSE)
       preds <- preds + cdf(predict(object = fit, data = newdata,
-        digits = digits, interpolation = interpolation,
-        asplitAvail = asplitAvail), grid)
+        digits = digits, interpolation = interpolation), grid)
       }
     }
   }
