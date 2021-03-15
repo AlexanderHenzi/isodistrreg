@@ -1,7 +1,7 @@
 Package: isodistrreg
 Type: Package
 Title: Isotonic Distributional Regression (IDR)
-Version: 0.1.0.9000
+Version: 0.1.0
 Date: 2019-09-09
 Authors@R: c(
     person("Alexander", "Henzi", email = "henzi.alexander@gmail.com",
@@ -21,7 +21,7 @@ Description: Isotonic distributional regression (IDR) is a powerful
     forecasts and observations, and serve as a benchmark in many other
     prediction problems.
 License: GPL (>= 2)
-Depends: R (>= 3.5)
+Depends: R (>= 3.6)
 Imports: Rcpp (>= 1.0.1),
 	osqp,
 	Matrix,
