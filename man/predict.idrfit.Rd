@@ -4,14 +4,7 @@
 \alias{predict.idrfit}
 \title{Predict method for IDR fits}
 \usage{
-\method{predict}{idrfit}(
-  object,
-  data = NULL,
-  digits = 3,
-  interpolation = "linear",
-  asplitAvail = TRUE,
-  ...
-)
+\method{predict}{idrfit}(object, data = NULL, digits = 3, interpolation = "linear", ...)
 }
 \arguments{
 \item{object}{IDR fit (object of class \code{"idrfit"}).}
@@ -27,10 +20,6 @@ the factor levels are identical in \code{data} and the training data for
 \item{interpolation}{interpolation method for univariate data. Default is 
 \code{"linear"}. Any other argument will select midpoint interpolation (see 
 'Details'). Has no effect for multivariate IDR.}
-
-\item{asplitAvail}{use \code{\link[base]{asplit}} for splitting arrays
-(default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
-\code{asplit} is not available.}
 
 \item{...}{included for generic function consistency.}
 }

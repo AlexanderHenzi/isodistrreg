@@ -7,8 +7,7 @@
 idrbag(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
   c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE, eps_abs =
   1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE, newdata, 
-  digits = 3, interpolation = "linear", asplitAvail = TRUE, b, p, 
-  replace = FALSE, grid = NULL)
+  digits = 3, interpolation = "linear", b, p, replace = FALSE, grid = NULL)
 }
 \arguments{
 \item{y}{numeric vector (the response variable).}
@@ -52,10 +51,6 @@ so ensure that the factor levels are identical in \code{newdata} and in
 \code{"linear"}. Any other argument will select midpoint interpolation (see 
 'Details' in \code{\link{predict.idrfit}}). Has no effect for multivariate
 IDR.}
-
-\item{asplitAvail}{use \code{\link[base]{asplit}} for splitting arrays
-(default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
-\code{asplit} is not available.}
 
 \item{b}{number of (su)bagging samples.}
 
