@@ -30,8 +30,7 @@ variables, but not with ordered factors.}
 
 \item{stoch}{stochastic order constraint used for estimation. Default is
 \code{"sd"} for first order stochastic dominance. Use \code{"hazard"} for
-hazard rate order (under development, only available for one-dimensional
-\code{X}).}
+hazard rate order (experimental).}
 
 \item{pars}{parameters for quadratic programming optimization (only relevant
 if \code{X} has more than one column), set using
