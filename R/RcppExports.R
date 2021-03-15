@@ -9,10 +9,6 @@ isoCdf_sequential <- function(w, W, Y, posY, y) {
     .Call(`_isodistrreg_isoCdf_sequential`, w, W, Y, posY, y)
 }
 
-pavaDec <- function(cpY, thresholds, w) {
-    .Call(`_isodistrreg_pavaDec`, cpY, thresholds, w)
-}
-
 pavaCorrect <- function(y) {
     .Call(`_isodistrreg_pavaCorrect`, y)
 }

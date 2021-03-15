@@ -35,19 +35,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// pavaDec
-NumericMatrix pavaDec(List cpY, NumericVector thresholds, NumericVector w);
-RcppExport SEXP _isodistrreg_pavaDec(SEXP cpYSEXP, SEXP thresholdsSEXP, SEXP wSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< List >::type cpY(cpYSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type thresholds(thresholdsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type w(wSEXP);
-    rcpp_result_gen = Rcpp::wrap(pavaDec(cpY, thresholds, w));
-    return rcpp_result_gen;
-END_RCPP
-}
 // pavaCorrect
 NumericMatrix pavaCorrect(NumericMatrix y);
 RcppExport SEXP _isodistrreg_pavaCorrect(SEXP ySEXP) {
@@ -63,7 +50,6 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_isodistrreg_idrHazardCpp", (DL_FUNC) &_isodistrreg_idrHazardCpp, 5},
     {"_isodistrreg_isoCdf_sequential", (DL_FUNC) &_isodistrreg_isoCdf_sequential, 5},
-    {"_isodistrreg_pavaDec", (DL_FUNC) &_isodistrreg_pavaDec, 3},
     {"_isodistrreg_pavaCorrect", (DL_FUNC) &_isodistrreg_pavaCorrect, 1},
     {NULL, NULL, 0}
 };
