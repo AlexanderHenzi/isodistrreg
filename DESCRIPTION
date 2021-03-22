@@ -2,24 +2,13 @@ Package: isodistrreg
 Type: Package
 Title: Isotonic Distributional Regression (IDR)
 Version: 0.1.0
-Date: 2019-09-09
-Authors@R: c(
-    person("Alexander", "Henzi", email = "henzi.alexander@gmail.com",
-    role = c("aut", "cre")),
-    person("Johanna", "Ziegel", email = "johanna.ziegel@stat.unibe.ch",
-    role = "aut"),
-    person("Tilmann", "Gneiting", email = "tilmann.gneiting@h-its.org",
-    role = "aut"))
+Date: 2021-03-16
+Authors@R: person("Alexander", "Henzi", email = "henzi.alexander@gmail.com",
+    role = c("aut", "cre"))
 Maintainer: Alexander Henzi <henzi.alexander@gmail.com>
-Description: Isotonic distributional regression (IDR) is a powerful
-    nonparametric technique for the estimation of distributions of a binary or 
-    numeric response variable conditional on numeric or ordinal covariates. IDR 
-    assumes that there is a monotone relationship between the response 
-    variable and the covariates, where the partial order on the covariate space
-    can be specified by the user, and has no tuning parameters. It can be used
-    to generate calibrated probabilistic weather forecasts from ensemble
-    forecasts and observations, and serve as a benchmark in many other
-    prediction problems.
+Description: Distributional regression under stochastic order restrictions for
+    numeric and binary response variables and partially ordered covariates. See
+    Henzi, Ziegel, Gneiting (2020) <arXiv:1909.03725>.
 License: GPL (>= 2)
 Depends: R (>= 3.6)
 Imports: Rcpp (>= 1.0.1),

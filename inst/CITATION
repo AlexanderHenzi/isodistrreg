@@ -1,0 +1,25 @@
+citHeader("To cite isodistrreg in publications use:")
+
+bibentry(
+  bibtype    = "Unpublished",
+  title    = "Isotonic Distributional Regression",
+  author   = c(person("Alexander", "Henzi"),
+               person("Johanna F", "Ziegel"),
+               person("Tilmann", "Gneiting")),
+  year     = "2020",
+  note     = "Preprint, arXiv:1909.03725"
+)
+
+
+citEntry(
+  entry        = "Unpublished",
+  title        = "Accelerating the pool-adjacent-violators algorithm for 
+                    isotonic distributional regression",
+  author       = c(person("Alexander", "Henzi"),
+                   person("Alexandre", "Moesching"),
+                   person("Lutz", "Duembgen")),
+  year         = "2020",
+  note         = "Preprint, arXiv:2006.05527",
+  textVersion  = "Henzi A, Moesching A, & Duembgen L (2020). Accelerating the pool-adjacent-violators algorithm for isotonic distributional regression. arXiv preprint arXiv:2006.05527.",
+  header = "To refer to the algorithm for the efficient computation of isotonic distributional regression, please cite:"
+)
