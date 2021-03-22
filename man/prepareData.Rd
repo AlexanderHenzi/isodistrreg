@@ -13,6 +13,10 @@ prepareData(X, groups, orders)
 
 \item{orders}{named vector of orders for groups.}
 }
+\value{
+Transformed data \code{X} with covariates modified according to the given
+order.
+}
 \description{
 Prepare data for IDR modeling with given orders
 }

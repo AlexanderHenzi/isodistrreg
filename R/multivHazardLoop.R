@@ -1,4 +1,9 @@
-#' Loop for multivariate estimation under hazard ratio ordering
+#' Loop for multivariate estimation under hazard ratio ordering (experimental,
+#' will possibly me modified)
+#' 
+#' @return 
+#' A list containing the estimated conditional CDFs, estimation diagnostics,
+#' and the constraint matrices for estimation.
 #' 
 #' @keywords internal
 multivHazardLoop <- function(X, thresholds, nThr, weights, cpY, pars) {

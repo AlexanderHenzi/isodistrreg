@@ -474,7 +474,6 @@ crps.data.frame <- function(predictions, y) {
 #' rawData <- rain[(4 * 365 + 1):(8 * 365), c("HRES", "CTR", paste0("P", 1:50))]
 #' rawPit <- pit(rawData, obs, seed = 123)
 #'
-#' par(mfrow = c(1, 2))
 #' hist(idrPit, xlab = "Probability Integral Transform",
 #'   ylab = "Density", freq = FALSE, main = "Postprocessed HRES")
 #' hist(rawPit, xlab = "Probability Integral Transform",

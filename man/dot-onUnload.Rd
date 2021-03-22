@@ -6,6 +6,9 @@
 \usage{
 .onUnload(libpath)
 }
+\value{
+No return value, called for side effects.
+}
 \description{
 Unload dll when package is unloaded
 }

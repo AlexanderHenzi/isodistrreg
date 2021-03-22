@@ -32,6 +32,9 @@ index function.}
 
 \item{...}{further arguments passed to the index prediction function.}
 }
+\value{
+A list of predictions, as for \code{\link{predict.idrfit}}.
+}
 \description{
 Prediction based on distributional index model fit.
 }

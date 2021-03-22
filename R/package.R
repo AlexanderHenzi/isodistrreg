@@ -37,6 +37,7 @@
 #' }
 #' Use the dataset \code{\link{rain}} to test IDR.
 #' 
+#' @docType package
 #' @name isodistrreg-package
 #' 
 #' @useDynLib isodistrreg, .registration = TRUE
@@ -49,9 +50,9 @@
 #' 
 #' @examples 
 #' 
+#' \donttest{
 #' ## A usage example:
 #' 
-#' \dontrun{
 #' # Prepare dataset: Half of the data as training dataset, other half for validation.
 #' # Consult the R documentation (?rain) for details about the dataset.
 #' data(rain)
@@ -116,13 +117,16 @@
 #' pitEns <- pit(validationData[, varNames], y)
 #' pitIdr <- pit(predictions, y)
 #' 
-#' par(mfrow = c(1, 2))
 #' hist(pitEns, main = "PIT of raw ensemble forecasts", freq = FALSE)
 #' hist(pitIdr, main = "PIT of IDR calibrated forecasts", freq = FALSE)
 #' }
 NULL
 
 #' Unload dll when package is unloaded
+#' 
+#' @return 
+#' No return value, called for side effects.
+#' 
 #' @keywords internal
 .onUnload <- function (libpath) {
   library.dynam.unload("isodistrreg", libpath)

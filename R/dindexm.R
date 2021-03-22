@@ -37,6 +37,11 @@
 #' \code{\link{idr}} is applied with the pseudo-covariates \code{g(x)} and
 #' response \code{y}.
 #' 
+#' @return 
+#' Object of class \code{dindexm}: A list containing the index model (first
+#' component) and the IDR fit on the pseudo-data with the index as covariate
+#' (second component).
+#' 
 #' @seealso 
 #' \code{\link{idr}} for more information on IDR,
 #' \code{\link{predict.dindexfit}} for (out-of-sample) predictions based on a
@@ -49,8 +54,6 @@
 #' @export
 #'
 #' @examples
-#' \dontrun{
-#' ## simulated data
 #' n <- 1000
 #' X <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n))
 #' y <- rnorm(n, 1 - X[, 1] + X[, 2]^2 / 3 - (1 - X[, 3]) * (1 + X[, 3]) / 2)
@@ -60,75 +63,23 @@
 #' newX <- data.frame(x1 = rnorm(10), x2 = rnorm(10), x3 = rnorm(10))
 #' 
 #' ## linear regression model for index
-#' model1 <- dindexm(
+#' model <- dindexm(
 #'   formula = y ~ poly(x1, degree = 2) + poly(x2, degree = 2) + 
 #'     poly(x3, degree = 2),
 #'   indexfit = lm,
 #'   response = "y",
 #'   data = data
 #' )
-#' pred1 <- predict(model1, data = newX)
+#' pred <- predict(model, data = newX)
 #' 
 #' ## plot
-#' plot(pred1, 1, main = "LM based DIM")
-#' grd <- pred1[[1]]$points
+#' plot(pred, 1, main = "LM based DIM")
+#' grd <- pred[[1]]$points
 #' trueCdf <- pnorm(
 #'   grd,
 #'   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
 #' )
 #' points(grd, trueCdf, type = "l", col = 2)
-#' 
-#' 
-#' ## generalized additive model for index estimation
-#' require(mgcv)
-#' 
-#' model2 <- dindexm(
-#'   formula = y ~ s(x1) + s(x2) + s(x3),
-#'   indexfit = gam,
-#'   response = "y",
-#'   data = data
-#' )
-#' pred2 <- predict(model2, data = newX)
-#' 
-#' ## plot
-#' plot(pred2, 1, main = "GAM based DIM")
-#' grd <- pred2[[1]]$points
-#' trueCdf <- pnorm(
-#'   grd,
-#'   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
-#' )
-#' points(grd, trueCdf, type = "l", col = 2)
-#' 
-#' ## quantile random forest for index estimation (two-dimensional index
-#' ## consisting of (0.5, 0.9)-quantiles)
-#' require(grf)
-#' 
-#' ## quantile random forest "index function" as required for dindexm
-#' qrf_index <- function(formula, data, ...) {
-#'   mf <- model.frame(formula = formula, data = data)
-#'   Y <- mf[, 1, drop = TRUE]
-#'   X <- mf[, -1, drop = FALSE]
-#'   quantile_forest(Y = Y, X = X, ...)
-#' }
-#' 
-#' model3 <- dindexm(
-#'   formula = y ~ .,
-#'   indexfit = qrf_index,
-#'   response = "y",
-#'   data = data,
-#'   quantiles = c(0.5, 0.9)
-#' )
-#' pred3 <- predict(model3, data = newX)
-#' 
-#' ## plot
-#' plot(pred3, 1, main = "QRF based DIM")
-#' grd <- pred3[[1]]$points
-#' trueCdf <- pnorm(
-#'   grd,
-#'   1 - newX[1, 1] + newX[1, 2]^2 / 3 - (1 - newX[1, 3]) * (1 + newX[1, 3]) / 2
-#' )
-#' points(grd, trueCdf, type = "l", col = 2)
-#' }
 dindexm <- function(formula, indexfit, data, response,
   pars = osqpSettings(verbose = FALSE, eps_abs = 1e-5, eps_rel = 1e-5,
   max_iter = 10000L), progress = TRUE, ...) {
@@ -165,6 +116,9 @@ dindexm <- function(formula, indexfit, data, response,
 #'   (default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
 #'   \code{asplit} is not available.
 #' @param ... further arguments passed to the index prediction function.
+#' 
+#' @return
+#' A list of predictions, as for \code{\link{predict.idrfit}}.
 #' 
 #' @export
 #' 

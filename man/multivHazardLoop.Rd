@@ -2,11 +2,17 @@
 % Please edit documentation in R/multivHazardLoop.R
 \name{multivHazardLoop}
 \alias{multivHazardLoop}
-\title{Loop for multivariate estimation under hazard ratio ordering}
+\title{Loop for multivariate estimation under hazard ratio ordering (experimental,
+will possibly me modified)}
 \usage{
 multivHazardLoop(X, thresholds, nThr, weights, cpY, pars)
 }
+\value{
+A list containing the estimated conditional CDFs, estimation diagnostics,
+and the constraint matrices for estimation.
+}
 \description{
-Loop for multivariate estimation under hazard ratio ordering
+Loop for multivariate estimation under hazard ratio ordering (experimental,
+will possibly me modified)
 }
 \keyword{internal}

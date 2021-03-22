@@ -30,10 +30,9 @@ have been removed.
 }
 \references{
 Bougeault et al. (2010) The THORPEX Interactive Grand Global Ensemble. Bull.
-Amer. Meteor. Soc., 91, 1059-1072,
-\url{https://doi.org/10.1175/2010BAMS2853.1}
+Amer. Meteor. Soc., 91, 1059-1072.
 
 Swinbank et al. (2016) The TIGGE project and its achievements. Bull. Amer.
-Meteor. Soc., 97, 49-67, \url{https://doi.org/10.1175/BAMS-D-13-00191.1}
+Meteor. Soc., 97, 49-67.
 }
 \keyword{datasets}

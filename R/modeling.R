@@ -7,6 +7,10 @@
 #' @param groups vector of groups.
 #' @param orders named vector of orders for groups.
 #' 
+#' @return 
+#' Transformed data \code{X} with covariates modified according to the given
+#' order.
+#' 
 #' @keywords internal
 prepareData <- function(X, groups, orders) {
   grNames <- names(groups)
@@ -148,10 +152,15 @@ prepareData <- function(X, groups, orders) {
 #' @seealso The S3 method \code{\link{predict.idrfit}} for predictions based on
 #'   an IDR fit.
 #'
+#' @author
+#' Code for the Pool-Adjacent Violators Algorithm (PAVA) is adapted from 
+#' R code by Lutz Duembgen (available on
+#' \url{https://www.imsv.unibe.ch/about_us/files/lutz_duembgen/software/index_eng.html}).
+#'
 #' @export
 #' @importFrom osqp osqp
 #' @importFrom stats setNames
-#'
+#' 
 #' @references Henzi, A., Moesching, A., & Duembgen, L. (2020). Accelerating the
 #' pool-adjacent-violators algorithm for isotonic distributional regression.
 #' arXiv preprint arXiv:2006.05527.

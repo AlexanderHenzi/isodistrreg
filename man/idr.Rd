@@ -165,3 +165,8 @@ version 0.6.0.3. https://CRAN.R-project.org/package=osqp
 The S3 method \code{\link{predict.idrfit}} for predictions based on
   an IDR fit.
 }
+\author{
+Code for the Pool-Adjacent Violators Algorithm (PAVA) is adapted from 
+R code by Lutz Duembgen (available on
+\url{https://www.imsv.unibe.ch/about_us/files/lutz_duembgen/software/index_eng.html}).
+}
