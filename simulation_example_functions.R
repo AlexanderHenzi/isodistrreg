@@ -8,7 +8,7 @@
 
 # File is available on GitHub: https://github.com/AlexanderHenzi/isodistrreg.
 
-# Last revised 2020/11/04
+# Last revised 2021/03/21
 
 #------------------------------------------------------------------------------#
 # fit distributional regression models
@@ -21,7 +21,7 @@ probFit <- function(method, data, ...) {
   # dot-arguments
   dotArgs <- list(...)
   
-  # regerssion methods
+  # regression methods
   if (identical(method, "idr")) {
     y <- data[, 1]
     X <- data[, -1, drop = FALSE]
@@ -35,7 +35,8 @@ probFit <- function(method, data, ...) {
       ydat = ydat,
       xdat = xdat,
       oykertype = dotArgs$oykertype,
-      nmulti = dotArgs$nmulti
+      nmulti = dotArgs$nmulti,
+      bwtype = bwtype
     )
   } else if (identical(method, "tram")) {
     if (is.ordered(data$y)) {

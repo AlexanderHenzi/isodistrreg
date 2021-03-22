@@ -10,7 +10,7 @@
 # Computation may take a few minutes depending on your CPU. Reduce "n" (size of
 # training data) and "nValid" (size of validation data) to increase the speed.
 
-# Last revised 2020/11/04
+# Last revised 2021/03/21
 
 #------------------------------------------------------------------------------#
 # packages (must be installed)
@@ -35,10 +35,13 @@ source("simulation_example_functions.R")
 # - "D" for "discontinuous"
 # - "P" for "poisson"
 # - "NI" for "non-isotonic"
-type <- "S" 
+type <- "S"
+# type <- Sys.getenv("type")
 
 # sample size for training and validation data (reduce to increase speed)
-n <- 500
+n <- 2000
+# n <- as.integer(Sys.getenv("n"))
+
 nValid <- 5000
 
 #------------------------------------------------------------------------------#
@@ -46,9 +49,10 @@ nValid <- 5000
 nFit <- n
 N <- nFit + nValid
 
+id <- 250
 # id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID")) # only on HPC cluster
 # id runs from 1 to 500
-# set.seed(n + id) # for reproducibility of training data
+set.seed(n + id) # for reproducibility of training data
 
 x <- runif(nFit, 0, 10)
 y <- switch(type,
@@ -60,7 +64,10 @@ y <- switch(type,
   "S" = rgamma(nFit, shape = sqrt(x), scale = pmin(pmax(x, 1), 6)),
 )
 
-# set.seed(id) # for reproducibility of validation data
+x <- x + runif(nFit, -1e-6, 1e-6)
+y <- y + runif(nFit, -1e-6, 1e-6)
+
+set.seed(id) # for reproducibility of validation data
 
 xValid <- runif(nValid, 0, 10)
 yValid <- switch(type,
@@ -136,10 +143,11 @@ MoreArgsPred <- list(
     y = y,                                        # for idr bagging
     K = 5000,                                     # grid for cdfs (tram)
     grd = switch(type,
-      "P" = factor(0:max(y), ordered = TRUE),    # grid for np predictions
+      "P" = factor(0:max(y), ordered = TRUE),     # grid for np predictions
       seq(min(newY) - 5, max(newY) + 5, 0.1)
     ),
-    tau = seq(0.005, 0.995, 0.001)               # for qrf
+    tau = seq(0.005, 0.995, 0.001),               # for qrf
+    range = range(data$x)
 )
 newdataList <- list(
   # data for out of sample predictions
@@ -156,7 +164,7 @@ newdataList <- list(
 for (j in seq_along(method)) {
   fit <- do.call(
     what = probFit,
-    args = c(list(method = method[[j]], data = dataList[[j]]), MoreArgs)
+    args = c(list(method = method[[j]], data = dataList[[j]][1:2000, ]), MoreArgs)
   )
   pred <- do.call(
     what = probPredict,
@@ -199,3 +207,9 @@ crpsRes <- c(
 
 # print results
 crpsRes
+
+# export
+save(
+  list = "crpsRes",
+  file = paste0("iqr_", id, "_", n, "_", type, ".rda")
+)
