@@ -1,3 +1,5 @@
-# isodistrreg 0.1.0.9000
+# isodistrreg 0.1.0
 
-* Added a `NEWS.md` file to track changes to the package.
+* isodistrreg is now on CRAN: https://CRAN.R-project.org/package=isodistrreg
+* removed argument `asplitAvail` from the functions. The package now requires
+  R version 3.6 or newer.

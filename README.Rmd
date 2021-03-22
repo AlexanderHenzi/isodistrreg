@@ -31,11 +31,18 @@ benchmark in many other prediction problems.
 
 ## Installation
 
-Download the development version from [GitHub](https://github.com/) with:
+Download the development version from [GitHub](https://github.com/) with
 
 ``` r
 # install.packages("devtools")
 devtools::install_github("AlexanderHenzi/isodistrreg", build_vignettes = TRUE)
+```
+
+or install the package from CRAN
+(https://CRAN.R-project.org/package=isodistrreg):
+
+``` r
+install.packages("isodistrreg")
 ```
 
 If the installation fails on Linux because of the error *Vignette re-building
