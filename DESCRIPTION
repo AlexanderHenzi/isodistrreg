@@ -8,7 +8,7 @@ Authors@R: person("Alexander", "Henzi", email = "henzi.alexander@gmail.com",
 Maintainer: Alexander Henzi <henzi.alexander@gmail.com>
 Description: Distributional regression under stochastic order restrictions for
     numeric and binary response variables and partially ordered covariates. See
-    Henzi, Ziegel, Gneiting (2020) <arXiv:1909.03725>.
+    Henzi, Ziegel, Gneiting (2021) <doi:10.1111/rssb.12450>.
 License: GPL (>= 2)
 Depends: R (>= 3.6)
 Imports: Rcpp (>= 1.0.1),
@@ -17,7 +17,7 @@ Imports: Rcpp (>= 1.0.1),
 	utils
 LinkingTo: Rcpp
 Encoding: UTF-8
-RoxygenNote: 7.1.0
+RoxygenNote: 7.1.2
 Suggests: 
     knitr,
     rmarkdown

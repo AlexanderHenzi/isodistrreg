@@ -48,8 +48,9 @@
 #' model with with \code{dindexm}.
 #' 
 #' @references
-#' Henzi, A., Kleger, G. R., & Ziegel, J. F. (2020). Distributional (Single)
-#' Index Models. arXiv preprint arXiv:2006.09219.
+#' Alexander Henzi, Gian-Reto Kleger & Johanna F. Ziegel (2021) Distributional
+#' (Single) Index Models, Journal of the American Statistical Association, DOI:
+#' <10.1080/01621459.2021.1938582>
 #'
 #' @export
 #'

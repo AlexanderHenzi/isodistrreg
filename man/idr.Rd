@@ -149,9 +149,10 @@ fit <- idr(y = y, X = X, orders = orders, groups = groups)
 fit
 }
 \references{
-Henzi, A., Moesching, A., & Duembgen, L. (2020). Accelerating the
-pool-adjacent-violators algorithm for isotonic distributional regression.
-arXiv preprint arXiv:2006.05527.
+Henzi, A., Moesching, A. & Duembgen, L. Accelerating the
+  Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression.
+  Methodol Comput Appl Probab (2022).
+  https://doi.org/10.1007/s11009-022-09937-2
 
 Stellato, B., Banjac, G., Goulart, P., Bemporad, A., & Boyd, S. (2020).
 OSQP: An operator splitting solver for quadratic programs. Mathematical

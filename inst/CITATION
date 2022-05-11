@@ -1,25 +1,28 @@
 citHeader("To cite isodistrreg in publications use:")
 
-bibentry(
-  bibtype    = "Unpublished",
-  title    = "Isotonic Distributional Regression",
+bibentry(bibtype = "Article",
+  title        = "Isotonic distributional regression",
   author   = c(person("Alexander", "Henzi"),
                person("Johanna F", "Ziegel"),
                person("Tilmann", "Gneiting")),
-  year     = "2020",
-  note     = "Preprint, arXiv:1909.03725"
+  journal = "Journal of the Royal Statistical Society: Series B (Statistical Methodology)",
+  year         = "2021",
+  volume       = "83",
+  number       = "5",
+  pages        = "963-993",
+  doi = "https://doi.org/10.1111/rssb.12450",
+  textVersion = "Henzi, A., Ziegel, J.F. and Gneiting, T. (2021), Isotonic distributional regression. J R Stat Soc Series B, 83: 963-993. https://doi.org/10.1111/rssb.12450"
 )
 
-
 citEntry(
-  entry        = "Unpublished",
+  entry        = "Article",
   title        = "Accelerating the pool-adjacent-violators algorithm for 
                     isotonic distributional regression",
   author       = c(person("Alexander", "Henzi"),
                    person("Alexandre", "Moesching"),
                    person("Lutz", "Duembgen")),
-  year         = "2020",
-  note         = "Preprint, arXiv:2006.05527",
-  textVersion  = "Henzi A, Moesching A, & Duembgen L (2020). Accelerating the pool-adjacent-violators algorithm for isotonic distributional regression. arXiv preprint arXiv:2006.05527.",
+  year         = "2022",
+  journal= "Methodology and computing in applied probability",
+  textVersion  = "Henzi, A., Moesching, A. & Duembgen, L. Accelerating the Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression. Methodol Comput Appl Probab (2022). https://doi.org/10.1007/s11009-022-09937-2",
   header = "To refer to the algorithm for the efficient computation of isotonic distributional regression, please cite:"
 )

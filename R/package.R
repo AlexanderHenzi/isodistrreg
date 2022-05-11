@@ -5,9 +5,10 @@
 #' 
 #' @section How does it work?:
 #' 
-#' Read the arXiv preprint `Isotonic Distributional Regression' on 
-#' \url{https://arxiv.org/abs/1909.03725} or by calling 
-#' \code{browseVignettes(package = "isodistrreg")}. 
+#' Read the arXiv preprint `Isotonic Distributional Regression' on
+#' \url{https://arxiv.org/abs/1909.03725} (published article:
+#' \url{https://doi.org/10.1111/rssb.12450}) or by calling
+#' \code{browseVignettes(package = "isodistrreg")}.
 #' 
 #' @section The \pkg{isodistrreg} package:
 #' 
@@ -42,11 +43,9 @@
 #' 
 #' @useDynLib isodistrreg, .registration = TRUE
 #' 
-#' @references 
-#' 
-#' Alexander Henzi, Johanna F. Ziegel, and Tilmann Gneiting. Isotonic
-#' Distributional Regression. arXiv e-prints, art. arXiv:1909.03725, Sep 2019.
-#' URL \url{https://arxiv.org/abs/1909.03725}.
+#' @references Henzi, A., Ziegel, J.F. and Gneiting, T. (2021), Isotonic
+#'   distributional regression. J R Stat Soc Series B, 83: 963-993.
+#'   https://doi.org/10.1111/rssb.12450
 #' 
 #' @examples 
 #' 

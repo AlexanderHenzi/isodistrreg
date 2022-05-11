@@ -118,9 +118,14 @@ hist(pitIdr, main = "PIT of IDR calibrated forecasts", freq = FALSE)
 
 ## References
 
-Alexander Henzi, Johanna F. Ziegel, and Tilmann Gneiting. Isotonic
-Distributional Regression. arXiv e-prints, art. arXiv:1909.03725, Sep
-2019. URL <https://arxiv.org/abs/1909.03725>.
+Henzi, A., Ziegel, J.F. and Gneiting, T. (2021), Isotonic distributional
+regression. J R Stat Soc Series B, 83: 963-993.
+<https://doi.org/10.1111/rssb.12450>
+
+Henzi, A., Moesching, A. & Duembgen, L. Accelerating the
+Pool-Adjacent-Violators Algorithm for Isotonic Distributional
+Regression. Methodol Comput Appl Probab (2022).
+<https://doi.org/10.1007/s11009-022-09937-2>
 
 The dataframe `precipData_caseStudy.rda` contains all data for the case
 study in the paper.

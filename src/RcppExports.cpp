@@ -5,6 +5,11 @@
 
 using namespace Rcpp;
 
+#ifdef RCPP_USE_GLOBAL_ROSTREAM
+Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
+Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
+#endif
+
 // idrHazardCpp
 NumericMatrix idrHazardCpp(NumericVector w, NumericVector W, NumericVector Y, IntegerVector posY, NumericVector y);
 RcppExport SEXP _isodistrreg_idrHazardCpp(SEXP wSEXP, SEXP WSEXP, SEXP YSEXP, SEXP posYSEXP, SEXP ySEXP) {
