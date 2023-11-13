@@ -9,11 +9,6 @@ List isoCdf_sequential(NumericVector w, NumericVector W, NumericVector Y,
   int mY = y.size();
   double yMax = y[mY - 1];
   
-  // K is the maximal index such that Y[K] < Y[K + 1]
-  int K = Y.size() - 1;
-  while (Y[K] == Y[K - 1]) K--;
-  K--;
-  if (Y[K] < yMax) yMax = Y[K];
   
   // yInd is used to check when to store the CDF at y[yInd]
   int yInd = 0;
