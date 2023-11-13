@@ -37,13 +37,16 @@ prepareData <- function(X, groups, orders) {
 #' @description Fits isotonic distributional regression (IDR) to a training
 #'   dataset.
 #'
-#' @usage idr(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
-#'   c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE, eps_abs =
+#' @usage idr(y, X, weights = NULL, groups = setNames(rep(1, ncol(X)),
+#'   colnames(X)), orders = c("comp" = 1), stoch = "sd",
+#'   pars = osqpSettings(verbose = FALSE, eps_abs =
 #'   1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE)
 #'
 #' @param y numeric vector (the response variable).
 #' @param X data frame of numeric or ordered factor variables (the regression
 #'   covariates).
+#' @param weights vector of positive weights (same length as y). Default is
+#'   all weights equal to one.
 #' @param groups named vector of length \code{ncol(X)} denoting groups of
 #'   variables that are to be ordered with the same order (see 'Details'). Only
 #'   relevant if \code{X} contains more than one variable. The same names as in
@@ -120,6 +123,8 @@ prepareData <- function(X, groups, orders) {
 #'   row corredponds to the estimated conditional distribution of the response
 #'   given the covariates values in \code{X[i,]}.}
 #'
+#'   \item{\code{weights}}{aggregated weights of the observations.}
+#'
 #'   \item{\code{thresholds}}{the thresholds at which the CDFs in \code{cdf} are
 #'   evaluated. The entries in \code{cdf[,j]} are the conditional CDFs evaluated
 #'   at \code{thresholds[j]}.}
@@ -192,7 +197,7 @@ prepareData <- function(X, groups, orders) {
 #'
 #' fit <- idr(y = y, X = X, orders = orders, groups = groups)
 #' fit
-idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
+idr <- function(y, X, weights = NULL, groups = setNames(rep(1, ncol(X)), colnames(X)),
   orders = c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE,
   eps_abs = 1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE) {
     
@@ -229,19 +234,27 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   if (isTRUE(progress == 0)) progress <- FALSE 
   if (!isTRUE(progress) & !isFALSE(progress))
     stop("'progress' must be TRUE/FALSE or 1/0")
+  if (!is.null(weights)) {
+     if (!is.vector(weights, "numeric") || length(weights) != length(y) || any(weights < 0))
+        stop("'weights' must be a vector of positive weights of same length as 'y'")
+  } else {
+    weights = rep(1, length(y))
+  }
   X <- prepareData(X, groups, orders)
   
   # Aggregate input data
   nVar <- ncol(X)
   oldNames <- names(X)
   names(X) <- NULL
-  x <- data.frame(y = y, ind = seq_along(y))
+  x <- data.frame(y = y, ind = seq_along(y), w = weights)
   X <- stats::aggregate(x = x, by = X, FUN = identity, simplify = FALSE)
   cpY <- X[["y"]]
   indices <- X[["ind"]]
+  w <- X[["w"]]
   X <- X[, 1:nVar, drop = FALSE]
   names(X) <- oldNames
-  weights <- sapply(indices, length)
+  w <- sapply(w, sum)
+  # weights <- sapply(indices, length)
   
   if (nVar == 1) {
     # One-dimensional IDR using PAVA
@@ -249,22 +262,24 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
     diagnostic <- list(precision = 0, convergence = 0)
     if (stoch == "sd") {
       cdf <- isoCdf_sequential(
-        w = weights,
-        W = rep(1, length(y)),
+        w = w,
+        W = weights[order(y)],# rep(1, length(y)),
         Y = sort(y),
         posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
         y = thresholds
       )$CDF
     } else {
       cdf <- idrHazardCpp(
-        w = weights,
-        W = rep(1, length(y)),
+        w = w,
+        W = weights[order(y)], #rep(1, length(y)),
         Y = sort(y),
         posY = rep.int(seq_along(indices),lengths(indices))[order(unlist(cpY))],
         y = thresholds
       )
     }
   } else {
+    weights <- w  
+      
     # Multivariate IDR using osqp
     if (stoch == "hazard") {
       tmp <- multivHazardLoop(X, thresholds, nThr, weights, cpY, pars)
@@ -327,7 +342,7 @@ idr <- function(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)),
   # Apply pava to estimated CDF to ensure monotonicity
   if (nVar > 1) cdf <- cbind(pavaCorrect(cdf), 1)
   
-  structure(list(X = X, y = cpY, cdf = cdf, thresholds = thresholds, 
+  structure(list(X = X, y = cpY, cdf = cdf, weights = w, thresholds = thresholds, 
     groups = groups, orders = orders, diagnostic = diagnostic,
     indices = indices, constraints = constr), class = "idrfit")
 }

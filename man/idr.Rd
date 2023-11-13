@@ -4,8 +4,9 @@
 \alias{idr}
 \title{Fit IDR to training data}
 \usage{
-idr(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
-  c("comp" = 1), stoch = "sd", pars = osqpSettings(verbose = FALSE, eps_abs =
+idr(y, X, weights = NULL, groups = setNames(rep(1, ncol(X)),
+  colnames(X)), orders = c("comp" = 1), stoch = "sd",
+  pars = osqpSettings(verbose = FALSE, eps_abs =
   1e-5, eps_rel = 1e-5, max_iter = 10000L), progress = TRUE)
 }
 \arguments{
@@ -13,6 +14,9 @@ idr(y, X, groups = setNames(rep(1, ncol(X)), colnames(X)), orders =
 
 \item{X}{data frame of numeric or ordered factor variables (the regression
 covariates).}
+
+\item{weights}{vector of positive weights (same length as y). Default is
+all weights equal to one.}
 
 \item{groups}{named vector of length \code{ncol(X)} denoting groups of
 variables that are to be ordered with the same order (see 'Details'). Only
@@ -53,6 +57,8 @@ An object of class \code{"idrfit"} containing the following
   evaluated at \code{thresholds} (see next point). The CDF in the \code{i}th
   row corredponds to the estimated conditional distribution of the response
   given the covariates values in \code{X[i,]}.}
+
+  \item{\code{weights}}{aggregated weights of the observations.}
 
   \item{\code{thresholds}}{the thresholds at which the CDFs in \code{cdf} are
   evaluated. The entries in \code{cdf[,j]} are the conditional CDFs evaluated
