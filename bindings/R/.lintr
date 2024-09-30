@@ -1,0 +1,4 @@
+error_on_lint: TRUE
+linters: linters_with_defaults(
+      object_name_linter = NULL
+    )

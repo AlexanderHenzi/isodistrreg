@@ -1,0 +1,27 @@
+[package]
+name = "isodistrreg-r"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description.workspace = true
+readme = "../../README.md"
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = [ "rlib", "staticlib" ]
+name = "isodistrreg_r"
+
+[[bin]]
+name = "document"
+path = "document.rs"
+
+[dependencies]
+extendr-api = "0.9.0"
+isodistrreg = { workspace = true, features = ["parallel", "partial-order", "serde", "subagging"] }
+itertools = { workspace = true }
+osqp = { workspace = true }
+indicatif = "0.18"
+crossbeam-channel = "0.5"

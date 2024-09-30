@@ -1,0 +1,47 @@
+[workspace]
+members = [
+    "isodistrreg",
+    "bindings/python", # PyO3 cdylib crate
+    "bindings/R/src/rust", # extendr cdylib crate
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.4.2"
+authors = [
+    "Alexander Henzi",
+    "Bram van den Heuvel",
+    "Martin Bladt",
+    "Johanna Ziegel",
+]
+edition = "2024"
+description = "Isotonic Distributional Regression (IDR)"
+readme = "README.md"
+repository = "https://github.com/AlexanderHenzi/isodistrreg"
+license = "GPL-2.0-or-later"
+keywords = [
+    "statistics",
+    "regression",
+    "distributional",
+    "isotonic",
+    "survival",
+]
+categories = [
+    "algorithms",
+    "mathematics",
+    "science",
+]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+isodistrreg = { path = "isodistrreg", features = ["partial-order"] }
+osqp = "1.0.1"
+itertools = "0.14.0"
+serde = "1.0.228"
+rayon = "1.11.0"
+
+[profile.release]
+lto = true
+codegen-units = 1

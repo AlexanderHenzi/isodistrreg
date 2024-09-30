@@ -1,0 +1,93 @@
+[project]
+name = "isodistrreg"
+version = "0.4.2"
+description = "Isotonic Distributional Regression (IDR)"
+readme = { file = "README.md", content-type = "text/markdown" }
+authors = [
+    { name = "Bram van den Heuvel", email = "bram.vandenheuvel@stat.math.ethz.ch" },
+    { name = "Alexander Henzi", email = "henzi.alexander@gmail.com" },
+    { name = "Martin Bladt", email = "martinbladt@math.ku.dk" },
+    { name = "Johanna Ziegel", email = "johanna.ziegel@stat.math.ethz.ch" },
+]
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Development Status :: 4 - Beta",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Intended Audience :: Science/Research",
+]
+keywords = [
+    "statistics",
+    "regression",
+    "distributional",
+    "isotonic",
+    "survival",
+]
+license = "GPL-2.0-or-later"
+license-files = ["LICENSE"]
+
+dependencies = [
+    "numpy>=1.20",  # numpy.typing introduced in 1.20
+]
+
+[project.urls]
+Repository = "https://github.com/AlexanderHenzi/isodistrreg"
+Issues = "https://github.com/AlexanderHenzi/isodistrreg/issues"
+
+[project.optional-dependencies]
+scikit-learn = [
+    "scikit-learn>=1.7.2",
+    "numpy>=1",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.9.0",
+    "mypy>=1.18.2",
+    "pre-commit>=4.3.0",
+]
+test = [
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "pandas>=2.3.3",  # to test the scikit learn interface
+]
+
+[tool.maturin]
+module-name = "isodistrreg._core"
+python-packages = ["isodistrreg"]
+python-source = "src"
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "isodistrreg._core"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sklearn.*"
+ignore_missing_imports = true
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+exclude = """
+/(
+  .git
+| .venv
+| build
+| dist
+)/
+"""

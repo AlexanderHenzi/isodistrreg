@@ -1,0 +1,7 @@
+\documentclass{article}
+\usepackage{pdfpages}
+%\VignetteIndexEntry{IDR: arXiv preprint}
+
+\begin{document}
+\includepdf[pages=-, fitpaper=true]{arXiv_preprint.pdf}
+\end{document}
