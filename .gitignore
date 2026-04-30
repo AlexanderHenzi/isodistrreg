@@ -1,9 +1,5 @@
-.Rhistory
-.RData
+.idea/
+
+target/
+
 .Rproj.user
-/src/*o
-*.dll
-*.tex
-*.aux
-*.log
-isodistrreg.Rproj

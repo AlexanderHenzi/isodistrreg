@@ -1,0 +1,375 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  UV_LINK_MODE: copy
+
+jobs:
+  # -----------------------------
+  # Core Rust crate
+  # -----------------------------
+
+  test_core_package:
+    name: Test core crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: isodistrreg
+      - run: cargo test --all-features
+        working-directory: isodistrreg
+
+  build_core_package_features:
+    name: Build core crate (features=${{ matrix.features || 'none' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "parallel", "partial-order", "subagging", "serde"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: isodistrreg
+          key: features-${{ matrix.features }}
+      - run: cargo build --no-default-features --features "${{ matrix.features }}"
+        working-directory: isodistrreg
+
+  # -----------------------------
+  # Lint (workspace-wide)
+  # -----------------------------
+
+  lint_rust_packages:
+    name: Lint Rust (rustfmt + clippy)
+    runs-on: ubuntu-latest
+    # Clippy compiles all workspace crates including the R bindings,
+    # whose extendr-api build script needs R.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake gfortran \
+            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
+            libuv1-dev
+      - run: cargo fmt --check
+      - run: cargo clippy -- -Dwarnings
+
+  # -----------------------------
+  # Python package
+  # -----------------------------
+
+  lint_python_package:
+    name: Lint Python (black + mypy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: bindings/python/uv.lock
+      - run: uv run --with black black --check .
+      - run: uv run --with mypy --with numpy mypy src/isodistrreg
+
+  test_python_package:
+    name: Test Python package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: bindings/python/uv.lock
+      - name: cargo test
+        working-directory: bindings/python
+        run: cargo test --all-features
+      - name: pytest
+        working-directory: bindings/python
+        run: |
+          uv sync --locked --group test --no-install-project
+          uv run --with maturin maturin develop
+          uv run --with scikit-learn --with pytest pytest -q
+
+  build_python_sdist:
+    name: Build Python sdist
+    needs: test_python_package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v4
+      - name: Build sdist
+        working-directory: bindings/python
+        run: uv run --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  build_python_wheels:
+    name: Build wheel (${{ matrix.target }})
+    needs: test_python_package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: "2_34"
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "2_34"
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          working-directory: bindings/python
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --out ${{ github.workspace }}/dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  check_python_package_pypi:
+    name: Check Python package (PyPI)
+    needs: [build_python_sdist, build_python_wheels]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v4
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: python-*
+          merge-multiple: true
+      - name: twine check
+        run: uv run --with twine twine check --strict dist/*
+      - name: check-wheel-contents
+        run: uv run --with check-wheel-contents check-wheel-contents dist/*.whl
+      - name: pyroma
+        working-directory: bindings/python
+        run: uv run --with pyroma pyroma --min 9 .
+      - name: Smoke test + version consistency
+        shell: bash
+        run: |
+          WHEEL=$(ls dist/*linux*x86_64.whl 2>/dev/null || ls dist/*.whl | head -1)
+          echo "$WHEEL"
+          uv run --no-project --with "$WHEEL" python -c "import isodistrreg; print('IDR:', isodistrreg.IDR); print('Import OK')"
+          INSTALLED_VERSION=$(uv run --no-project --with "$WHEEL" python -c "import isodistrreg; print(isodistrreg.__version__)")
+          DECLARED_VERSION=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('bindings/python/pyproject.toml').read_text())['project']['version'])")
+          if [ "$INSTALLED_VERSION" != "$DECLARED_VERSION" ]; then
+            echo "ERROR: Version mismatch! installed=$INSTALLED_VERSION declared=$DECLARED_VERSION"
+            exit 1
+          fi
+          echo "Version check passed: $INSTALLED_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+  # -----------------------------
+  # R package
+  # -----------------------------
+
+  test_r_package:
+    name: Test R Rust crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/R/src/rust
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake gfortran \
+            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
+            libuv1-dev
+      - run: cargo test --all-features
+        working-directory: bindings/R/src/rust
+
+  lint_r_package:
+    name: Lint R package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/R
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/R/src/rust
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake gfortran \
+            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
+            libuv1-dev
+      - uses: r-lib/actions/setup-renv@v2
+        with:
+          working-directory: bindings/R
+      - name: Lint
+        run: |
+          Rscript -e "install.packages(c('pkgload','lintr'))"
+          Rscript -e "pkgload::load_all(); r <- lintr::lint_package(); print(r); quit(save='no', status=length(r))"
+
+  build_r_package:
+    name: Build R package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/R/src/rust
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake gfortran \
+            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
+            libuv1-dev \
+            texinfo texlive
+      - uses: r-lib/actions/setup-renv@v2
+        with:
+          working-directory: bindings/R
+      - name: Build tarball
+        working-directory: bindings/R
+        run: |
+          Rscript -e "install.packages(c('pkgbuild', 'rextendr', 'tomledit', 'fs'))"
+          Rscript -e "rextendr::vendor_crates()"
+          Rscript -e "pkgbuild::build('.')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r-package
+          path: bindings/*.tar.gz
+          if-no-files-found: error
+
+  check_r_package:
+    name: R CMD check
+    needs: build_r_package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake gfortran \
+            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
+            libuv1-dev \
+            texinfo texlive
+      - uses: actions/download-artifact@v4
+        with:
+          name: r-package
+          path: bindings
+      - uses: r-lib/actions/setup-renv@v2
+        with:
+          working-directory: bindings/R
+      - name: R CMD check
+        working-directory: bindings/R
+        run: |
+          PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
+          Rscript -e "install.packages(c('testthat', 'osqp'))"
+          R CMD check --no-manual --no-build-vignettes "$PKG_TARBALL"
+
+  check_r_package_cran:
+    name: R CMD check --as-cran
+    needs: build_r_package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake gfortran \
+            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
+            libuv1-dev \
+            texinfo texlive \
+            devscripts tidy qpdf ghostscript texlive-fonts-extra libv8-dev
+      - uses: actions/download-artifact@v4
+        with:
+          name: r-package
+          path: bindings
+      - uses: r-lib/actions/setup-renv@v2
+        with:
+          working-directory: bindings/R
+      - name: R CMD check --as-cran
+        working-directory: bindings/R
+        run: |
+          PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
+          Rscript -e "install.packages(c('testthat', 'osqp', 'V8'))"
+          R CMD check --as-cran "$PKG_TARBALL"

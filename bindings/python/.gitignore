@@ -1,0 +1,16 @@
+.idea/
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Build outputs
+src/isodistrreg/_core.abi3.so
+

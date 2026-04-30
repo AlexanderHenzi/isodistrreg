@@ -1,9 +1,0 @@
-^.*\.Rproj$
-^\.Rproj\.user$
-^README\.Rmd$
-^README\.md$
-^NEWS\.md$
-^\.travis\.yml$
-^simulation_example\.R$
-^simulation_example_functions\.R$
-^precipData_caseStudy\.rda$

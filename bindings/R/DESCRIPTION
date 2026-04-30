@@ -1,0 +1,44 @@
+Package: isodistrreg
+Type: Package
+Title: Isotonic Distributional Regression (IDR)
+Version: 0.4.2
+Date: 2026-03-09
+Authors@R:
+  c(person(
+        "Bram",
+        "van den Heuvel",
+        email = "bram.vandenheuvel@stat.math.ethz.ch",
+        role = c("aut", "cre")),
+    person(
+        "Alexander",
+        "Henzi",
+        email = "henzi.alexander@gmail.com",
+        role = "aut"),
+    person(
+        "Martin",
+        "Bladt",
+        email = "martinbladt@math.ku.dk",
+        role = "aut"),
+    person(
+        "Johanna",
+        "Ziegel",
+        email = "johanna.ziegel@stat.math.ethz.ch",
+        role = "ths"))
+Description: Distributional regression under stochastic order restrictions for
+    numeric and binary response variables and partially ordered covariates. See
+    Henzi, Ziegel, Gneiting (2021) <doi:10.1111/rssb.12450>.
+License: GPL (>= 2)
+Depends: 
+    R (>= 4.2)
+Imports:
+    utils
+Encoding: UTF-8
+RoxygenNote: 7.3.3
+URL: https://github.com/AlexanderHenzi/isodistrreg
+BugReports: https://github.com/AlexanderHenzi/isodistrreg/issues
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Config/rextendr/version: 0.5.0
+Config/build/bootstrap: TRUE
+SystemRequirements: Cargo (Rust's package manager), rustc
