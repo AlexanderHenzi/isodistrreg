@@ -15,23 +15,18 @@ other prediction problems.
 
 ## Installation
 
-Download the development version from [GitHub](https://github.com/) with
+An older version (IDR only, no S-IDR for right-censored data) is available on
+CRAN, you can install it with `install.packages("isodistrreg")`. If the
+installation fails on Linux because of the error *Vignette re-building failed*,
+try installing with `build_vignettes = FALSE` or make sure that texinfo is
+installed (e.g., `sudo apt-get install texinfo`).
 
-``` r
-# install.packages("devtools")
-devtools::install_github("AlexanderHenzi/isodistrreg", build_vignettes = TRUE)
-```
+The latest version can be build from source as follows:
 
-or install the package from CRAN
-(<https://CRAN.R-project.org/package=isodistrreg>):
-
-``` r
-install.packages("isodistrreg")
-```
-
-If the installation fails on Linux because of the error *Vignette
-re-building failed*, try installing with `build_vignettes = FALSE` or
-make sure that texinfo is installed (`sudo apt-get install texinfo`).
+1. You need [a working rust installation](https://extendr.rs/rextendr/articles/setting_up_rust.html)
+2. Install the build dependencies in your R environment: `install.packages(c("rextendr", "tomledit",
+   "fs"))`
+3. Run `pak::pak("AlexanderHenzi/isodistrreg/bindings/R")`
 
 ## Usage Examples
 

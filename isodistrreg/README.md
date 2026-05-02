@@ -15,12 +15,12 @@ for background and references.
 
 ```toml
 [dependencies]
-isodistrreg = { git = "https://github.com/AlexanderHenzi/isodistrreg" }
+isodistrreg = "0.4"
 ```
 
 Enable optional features as needed:
 
 ```toml
 [dependencies]
-isodistrreg = { git = "https://github.com/AlexanderHenzi/isodistrreg", features = ["partial-order"] }
+isodistrreg = { version = "0.4", features = ["partial-order"] }
 ```

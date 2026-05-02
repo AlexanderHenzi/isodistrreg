@@ -6,11 +6,11 @@ for right-censored outcomes as encountered in survival analysis.
 
 ## Language bindings
 
-| Language | Path | Install |
-|----------|------|---------|
-| **Python** | [`bindings/python`](bindings/python/README.md) | `pip install isodistrreg` |
-| **R** | [`bindings/R`](bindings/R/README.md) | `devtools::install_github("AlexanderHenzi/isodistrreg")` or CRAN |
-| **Rust** | [`isodistrreg`](isodistrreg/README.md) | Add `isodistrreg` to your `Cargo.toml` |
+| Language | Path |
+|----------|------|
+| **Python** | [`bindings/python`](bindings/python/README.md) |
+| **R** | [`bindings/R`](bindings/R/README.md) |
+| **Rust** | [`isodistrreg`](isodistrreg/README.md) |
 
 ## References
 
