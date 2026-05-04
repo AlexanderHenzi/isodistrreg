@@ -8,33 +8,8 @@ references.
 
 ## Installation
 
-```bash
-pip install isodistrreg
-```
-
-## Parallelism
-
-The package supports optional parallelism via [rayon](https://docs.rs/rayon).
-To install with parallelism enabled, build from source with the `parallel`
-Cargo feature:
-
-```bash
-maturin develop --features parallel
-```
-
-When built with parallelism, you can control the number of threads at runtime
-using the `RAYON_NUM_THREADS` environment variable:
-
-```bash
-# Use 4 threads
-RAYON_NUM_THREADS=4 python my_script.py
-
-# Use a single thread (disables parallelism at runtime)
-RAYON_NUM_THREADS=1 python my_script.py
-```
-
-If `RAYON_NUM_THREADS` is not set, rayon defaults to using all available CPU
-cores.
+1. Download the right `.whl` for your platform from the artifacts of a recent [GitHub Actions](https://github.com/AlexanderHenzi/isodistrreg/actions) run artifacts
+2. Run `pip install /path/to/wheel/xxx.whl`
 
 ## Examples
 
