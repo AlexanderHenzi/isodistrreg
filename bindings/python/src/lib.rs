@@ -1872,12 +1872,12 @@ fn kaplan_meier<'py>(
             "all arguments should be array-like with the same length",
         ));
     }
-    if let Some(ref w) = weight {
-        if !w.as_array().iter().all(|&w| w >= 0.0 && w.is_finite()) {
-            return Err(PyValueError::new_err(
-                "weights should be nonnegative and finite",
-            ));
-        }
+    if let Some(ref w) = weight
+        && !w.as_array().iter().all(|&w| w >= 0.0 && w.is_finite())
+    {
+        return Err(PyValueError::new_err(
+            "weights should be nonnegative and finite",
+        ));
     }
 
     let y_observed_view = y_observed.as_array();
