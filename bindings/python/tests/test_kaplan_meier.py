@@ -4,12 +4,13 @@ import pytest
 
 from isodistrreg import kaplan_meier
 
-
 TIME_VALUES = [1, 3, 5, 5, 7, 9, 11]
 EVENT_VALUES = [True, False, True, True, True, False, True]
 
 EXPECTED_TIMES = np.array([1, 5, 7, 11])
-EXPECTED_SURVIVAL = np.array([6 / 7, (6 / 7) * (3 / 5), (6 / 7) * (3 / 5) * (2 / 3), 0.0])
+EXPECTED_SURVIVAL = np.array(
+    [6 / 7, (6 / 7) * (3 / 5), (6 / 7) * (3 / 5) * (2 / 3), 0.0]
+)
 
 
 @pytest.mark.parametrize(
