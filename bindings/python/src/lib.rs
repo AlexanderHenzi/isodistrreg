@@ -1812,8 +1812,7 @@ fn kaplan_meier_jumps<T: TimeValue>(
         None => {
             let order = argsort_unstable_by::<Increasing, _>(
                 |a, b| {
-                    y[a]
-                        .total_cmp(&y[b])
+                    y[a].total_cmp(&y[b])
                         .then(y_observed[a].cmp(&y_observed[b]).reverse())
                 },
                 n,
@@ -1855,10 +1854,7 @@ fn kaplan_meier<'py>(
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyArray1<f64>>)> {
     // Normalize the input into a numpy array without coercing its dtype, so
     // the returned event-time array can match the dtype of `y`.
-    let y_array: Bound<'py, PyAny> = py
-        .import("numpy")?
-        .getattr("asarray")?
-        .call1((y,))?;
+    let y_array: Bound<'py, PyAny> = py.import("numpy")?.getattr("asarray")?.call1((y,))?;
 
     let (y_dtype, n) = {
         let untyped = y_array.cast::<PyUntypedArray>()?;
