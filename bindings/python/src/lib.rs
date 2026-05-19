@@ -918,7 +918,7 @@ impl IDR {
                     (OrderingInfo::empty(), Vec::new())
                 };
 
-                let global_cdf_vec = if let Some(ref gcdf) = global_cdf {
+                let global_cdf_vec = if let Some(gcdf) = global_cdf {
                     let gcdf_array = gcdf.as_array();
                     if gcdf_array.len() != n_thresh {
                         return Err(PyValueError::new_err(format!(
@@ -1872,7 +1872,7 @@ fn kaplan_meier<'py>(
             "all arguments should be array-like with the same length",
         ));
     }
-    if let Some(ref w) = weight
+    if let Some(w) = weight.as_ref()
         && !w.as_array().iter().all(|&w| w >= 0.0 && w.is_finite())
     {
         return Err(PyValueError::new_err(
