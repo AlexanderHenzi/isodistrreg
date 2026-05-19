@@ -20,7 +20,7 @@ use numpy::ndarray::{
 use numpy::{
     AllowTypeChange, Element, IntoPyArray, IxDyn, PyArray, PyArray1, PyArray2, PyArrayDescrMethods,
     PyArrayDyn, PyArrayLike, PyArrayLike1, PyArrayLike2, PyArrayLikeDyn, PyArrayMethods,
-    PyUntypedArrayMethods,
+    PyUntypedArray, PyUntypedArrayMethods, dtype,
 };
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
@@ -1733,6 +1733,112 @@ fn broadcast_shapes<const M: usize>(shapes: [&[usize]; M]) -> Option<Vec<usize>>
     Some(result)
 }
 
+/// Time-axis element types accepted by [`kaplan_meier`].
+///
+/// Abstracts the total-order comparison used by the algorithm: floats use
+/// [`f64::total_cmp`] / [`f32::total_cmp`] (NaN-safe), integers use [`Ord::cmp`].
+trait TimeValue: Element + Copy + PartialEq + 'static {
+    fn total_cmp(&self, other: &Self) -> Ordering;
+}
+
+macro_rules! impl_time_value_float {
+    ($($t:ty),+ $(,)?) => {$(
+        impl TimeValue for $t {
+            #[inline]
+            fn total_cmp(&self, other: &Self) -> Ordering {
+                <$t>::total_cmp(self, other)
+            }
+        }
+    )+};
+}
+
+macro_rules! impl_time_value_int {
+    ($($t:ty),+ $(,)?) => {$(
+        impl TimeValue for $t {
+            #[inline]
+            fn total_cmp(&self, other: &Self) -> Ordering {
+                Ord::cmp(self, other)
+            }
+        }
+    )+};
+}
+
+impl_time_value_float!(f32, f64);
+impl_time_value_int!(i8, i16, i32, i64, u8, u16, u32, u64);
+
+fn kaplan_meier_jumps<T: TimeValue>(
+    y: ArrayView1<'_, T>,
+    y_observed: ArrayView1<'_, bool>,
+    weight: Option<ArrayView1<'_, f64>>,
+) -> Vec<(T, f64)> {
+    let n = y.len();
+    match weight {
+        Some(weights) => {
+            let order = argsort_unstable_by::<Increasing, _>(
+                // Sort event times before censoring times; sort zero-weight
+                // observations to the end so they don't perturb the estimator.
+                |a, b| match (weights[a] == 0.0, weights[b] == 0.0) {
+                    (true, true) => Ordering::Equal,
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    (false, false) => y[a]
+                        .total_cmp(&y[b])
+                        .then(y_observed[a].cmp(&y_observed[b]).reverse()),
+                },
+                n,
+            );
+            order
+                .chunk_by(|&i, &j| y[i] == y[j] && y_observed[i] == y_observed[j])
+                .scan((1.0, weights.sum()), |(s, total_weight), group| {
+                    let group_weight: f64 = group.iter().map(|&i| weights[i]).sum();
+                    let head = group[0];
+                    let time = y[head];
+                    let event = y_observed[head];
+
+                    if *total_weight <= 0.0 {
+                        return None;
+                    }
+
+                    let jump = event.then(|| {
+                        *s *= (1.0 - group_weight / *total_weight).clamp(0.0, 1.0);
+                        (time, *s)
+                    });
+                    *total_weight -= group_weight;
+                    Some(jump)
+                })
+                .flatten()
+                .collect()
+        }
+        None => {
+            let order = argsort_unstable_by::<Increasing, _>(
+                |a, b| {
+                    y[a]
+                        .total_cmp(&y[b])
+                        .then(y_observed[a].cmp(&y_observed[b]).reverse())
+                },
+                n,
+            );
+            order
+                .chunk_by(|&i, &j| y[i] == y[j] && y_observed[i] == y_observed[j])
+                .scan((1.0, n), |(s, total_count), group| {
+                    let group_count = group.len();
+                    let head = group[0];
+                    let time = y[head];
+                    let event = y_observed[head];
+
+                    let jump = event.then(|| {
+                        *s *= (*total_count - group_count) as f64 / *total_count as f64;
+                        (time, *s)
+                    });
+                    *total_count -= group_count;
+                    Some(jump)
+                })
+                .flatten()
+                .collect()
+        }
+    }
+}
+
 #[allow(clippy::type_complexity)]
 #[pyfunction(
     signature = (
@@ -1743,120 +1849,74 @@ fn broadcast_shapes<const M: usize>(shapes: [&[usize]; M]) -> Option<Vec<usize>>
 )]
 fn kaplan_meier<'py>(
     py: Python<'py>,
-    y: PyArrayLike1<'py, f64>,
-    y_observed: PyArrayLike1<'py, bool>,
-    weight: Option<PyArrayLike1<'py, f64>>,
-) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
-    let n = y.len();
+    y: &Bound<'py, PyAny>,
+    y_observed: PyArrayLike1<'py, bool, AllowTypeChange>,
+    weight: Option<PyArrayLike1<'py, f64, AllowTypeChange>>,
+) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyArray1<f64>>)> {
+    // Normalize the input into a numpy array without coercing its dtype, so
+    // the returned event-time array can match the dtype of `y`.
+    let y_array: Bound<'py, PyAny> = py
+        .import("numpy")?
+        .getattr("asarray")?
+        .call1((y,))?;
 
-    if (y_observed.len() != n) | weight.as_ref().is_some_and(|w| w.len() != n) {
+    let (y_dtype, n) = {
+        let untyped = y_array.cast::<PyUntypedArray>()?;
+        if untyped.ndim() != 1 {
+            return Err(PyValueError::new_err(format!(
+                "y should be 1-dimensional, got an array with {} dimensions",
+                untyped.ndim(),
+            )));
+        }
+        (untyped.dtype(), untyped.len())
+    };
+
+    if y_observed.len() != n || weight.as_ref().is_some_and(|w| w.len() != n) {
         return Err(PyValueError::new_err(
             "all arguments should be array-like with the same length",
         ));
     }
+    if let Some(ref w) = weight {
+        if !w.as_array().iter().all(|&w| w >= 0.0 && w.is_finite()) {
+            return Err(PyValueError::new_err(
+                "weights should be nonnegative and finite",
+            ));
+        }
+    }
 
-    let (times, survival) = match weight {
-        Some(weights) => {
-            if !weights
-                .as_array()
-                .iter()
-                .all(|&w| w >= 0.0 && w.is_finite())
-            {
-                return Err(PyValueError::new_err(
-                    "weights should be nonnegative and finite",
-                ));
+    let y_observed_view = y_observed.as_array();
+    let weight_view = weight.as_ref().map(|w| w.as_array());
+
+    fn run<'py, T: TimeValue>(
+        py: Python<'py>,
+        y_array: Bound<'py, PyAny>,
+        y_observed: ArrayView1<'_, bool>,
+        weight: Option<ArrayView1<'_, f64>>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyArray1<f64>>)> {
+        let typed: Bound<'py, PyArray1<T>> = y_array.cast_into()?;
+        let readonly = typed.readonly();
+        let jumps = kaplan_meier_jumps::<T>(readonly.as_array(), y_observed, weight);
+        let (times, survival): (Vec<T>, Vec<f64>) = jumps.into_iter().unzip();
+        Ok((
+            PyArray1::from_vec(py, times).into_any(),
+            PyArray1::from_vec(py, survival),
+        ))
+    }
+
+    macro_rules! dispatch {
+        ($($T:ty),+ $(,)?) => {$(
+            if y_dtype.is_equiv_to(&dtype::<$T>(py)) {
+                return run::<$T>(py, y_array, y_observed_view, weight_view);
             }
-            let order = argsort_unstable_by::<Increasing, _>(
-                // Sort event events before censoring times
-                |a, b| match (
-                    *weights.get(a).unwrap() == 0.0,
-                    *weights.get(b).unwrap() == 0.0,
-                ) {
-                    (true, true) => Ordering::Equal,
-                    (true, false) => Ordering::Greater,
-                    (false, true) => Ordering::Less,
-                    (false, false) => y.get(a).unwrap().total_cmp(y.get(b).unwrap()).then(
-                        y_observed
-                            .get(a)
-                            .unwrap()
-                            .cmp(y_observed.get(b).unwrap())
-                            .reverse(),
-                    ),
-                },
-                n,
-            );
-            order
-                .chunk_by(|&i, &j| y.get(i) == y.get(j) && y_observed.get(i) == y_observed.get(j))
-                .scan(
-                    (1.0, weights.as_array().sum()),
-                    |(s, total_weight), group_indices| {
-                        let group_weight = group_indices
-                            .iter()
-                            .map(|&i| weights.get(i).unwrap())
-                            .sum::<f64>();
-                        let example_index = group_indices[0];
-                        let time = *y.get(example_index).unwrap();
-                        let event = *y_observed.get(example_index).unwrap();
+        )+};
+    }
 
-                        if *total_weight <= 0.0 {
-                            return None;
-                        }
+    dispatch!(f64, f32, i64, i32, i16, i8, u64, u32, u16, u8);
 
-                        let maybe_jump = if event {
-                            *s *= (1.0 - group_weight / *total_weight).clamp(0.0, 1.0);
-                            Some((time, *s))
-                        } else {
-                            None
-                        };
-                        *total_weight -= group_weight;
-
-                        Some(maybe_jump)
-                    },
-                )
-                .flatten()
-                .collect()
-        }
-        None => {
-            let order = argsort_unstable_by::<Increasing, _>(
-                // Sort event events before censoring times
-                |a, b| {
-                    y.get(a).unwrap().total_cmp(y.get(b).unwrap()).then(
-                        y_observed
-                            .get(a)
-                            .unwrap()
-                            .cmp(y_observed.get(b).unwrap())
-                            .reverse(),
-                    )
-                },
-                n,
-            );
-            order
-                .chunk_by(|&i, &j| y.get(i) == y.get(j) && y_observed.get(i) == y_observed.get(j))
-                .scan((1.0, n), |(s, total_count), group_indices| {
-                    let group_count = group_indices.len();
-                    let example_index = group_indices[0];
-                    let time = *y.get(example_index).unwrap();
-                    let event = *y_observed.get(example_index).unwrap();
-
-                    let maybe_jump = if event {
-                        *s *= (*total_count - group_count) as f64 / *total_count as f64;
-                        Some((time, *s))
-                    } else {
-                        None
-                    };
-                    *total_count -= group_count;
-
-                    Some(maybe_jump)
-                })
-                .flatten()
-                .collect()
-        }
-    };
-
-    Ok((
-        PyArray1::from_vec(py, times),
-        PyArray1::from_vec(py, survival),
-    ))
+    Err(PyValueError::new_err(format!(
+        "unsupported dtype for y: {}",
+        y_dtype.str()?,
+    )))
 }
 
 mod park;
