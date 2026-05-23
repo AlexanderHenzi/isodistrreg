@@ -1,6 +1,7 @@
 use crate::functionals::CauchyMeanValueFunctional;
 use crate::partial_order::{BitSet, routines};
 use crate::structures::{Direction, Observation};
+use num_traits::Float as NumFloat;
 use std::collections::HashMap;
 use std::iter::once;
 
@@ -16,7 +17,7 @@ pub fn algorithm_pre_sorted<
     observations: impl ExactSizeIterator<Item = I>,
     edges: &[(usize, usize)],
     functional: &F,
-) -> Vec<f64> {
+) -> Vec<F::Value> {
     match (observations.len() - 1) / BitSet::<1>::capacity() {
         0..1 => algorithm_pre_sorted_sized::<D, _, 1, _>(observations, edges, functional),
         1..2 => algorithm_pre_sorted_sized::<D, _, 2, _>(observations, edges, functional),
@@ -43,7 +44,7 @@ fn algorithm_pre_sorted_sized<
     observations: impl ExactSizeIterator<Item = I>,
     edges: &[(usize, usize)],
     functional: &F,
-) -> Vec<f64>
+) -> Vec<F::Value>
 where
     F::Response: Default,
 {
@@ -96,13 +97,13 @@ pub fn algorithm_pre_sorted_inner<
     predecessors: &[BitSet<B>],
     get_data: &G,
     functional: &F,
-) -> Vec<f64> {
+) -> Vec<F::Value> {
     // Store the sequence of lower sets and their values
-    let mut out = vec![f64::NAN; n];
+    let mut out = vec![F::Value::nan(); n];
     let mut a_prev = if D::IS_INCREASING {
-        f64::NEG_INFINITY
+        F::Value::neg_infinity()
     } else {
-        f64::INFINITY
+        F::Value::infinity()
     };
 
     // Cache may or may not be used - depends on the functional
@@ -120,9 +121,9 @@ pub fn algorithm_pre_sorted_inner<
         );
 
         a_prev = if D::IS_INCREASING {
-            f64::max(best_value, a_prev)
+            best_value.max(a_prev)
         } else {
-            f64::min(best_value, a_prev)
+            best_value.min(a_prev)
         };
         for item in chosen.iter() {
             out[topological_order[item]] = a_prev;
@@ -147,12 +148,12 @@ fn select_extreme_lower_set<
     predecessors: &[BitSet<B>],
     get_data: G,
     functional: &F,
-    cache: &mut HashMap<BitSet<B>, f64>,
-) -> (BitSet<B>, f64) {
+    cache: &mut HashMap<BitSet<B>, F::Value>,
+) -> (BitSet<B>, F::Value) {
     let mut best_value = if D::IS_INCREASING {
-        f64::INFINITY
+        F::Value::infinity()
     } else {
-        f64::NEG_INFINITY
+        F::Value::neg_infinity()
     };
     let mut contenders = Vec::new();
 
@@ -184,14 +185,14 @@ fn dfs<
 >(
     in_set: BitSet<B>,
     forbidden: &BitSet<B>,
-    best_value: &mut f64,
+    best_value: &mut F::Value,
     contenders: &mut Vec<BitSet<B>>,
     successors_inclusive: &[BitSet<B>],
     predecessors: &[BitSet<B>],
     active: &BitSet<B>,
     get_data: &G,
     functional: &F,
-    cache: &mut HashMap<BitSet<B>, f64>,
+    cache: &mut HashMap<BitSet<B>, F::Value>,
 ) {
     let decided = in_set.union(forbidden);
     let undecided = active.difference(&decided);

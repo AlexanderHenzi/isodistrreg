@@ -6,17 +6,17 @@ use std::mem;
 pub struct Interpolation<'a> {
     lower_neighbors: Vec<usize>,
     upper_neighbors: Vec<usize>,
-    cdfs: &'a [f64],
-    global_cdf: &'a [f64],
+    cdfs: &'a [f32],
+    global_cdf: &'a [f32],
 }
 
 impl<'a> Interpolation<'a> {
-    pub fn new(
-        target: &[f64],
-        covariates: &[f64],
+    pub fn new<X: PartialOrd>(
+        target: &[X],
+        covariates: &[X],
         ordering_info: &OrderingInfo,
         increasing: bool,
-        (cdfs, global_cdf): (&'a [f64], &'a [f64]),
+        (cdfs, global_cdf): (&'a [f32], &'a [f32]),
         workspace: &mut PredictionWorkspace,
     ) -> Self {
         let mut lower_neighbors: Vec<_> =
@@ -36,24 +36,24 @@ impl<'a> Interpolation<'a> {
         }
     }
 
-    fn get_cdf_value(&self, i: usize, j: usize) -> f64 {
+    fn get_cdf_value(&self, i: usize, j: usize) -> f32 {
         let n_threshold = self.global_cdf.len();
         self.cdfs[i * n_threshold + j]
     }
 }
 
 impl CovariateInterpolator for Interpolation<'_> {
-    fn interpolate_index(&self, index: usize) -> f64 {
+    fn interpolate_index(&self, index: usize) -> f32 {
         let upper_bound = self
             .lower_neighbors
             .iter()
             .map(|&i| self.get_cdf_value(i, index))
-            .reduce(f64::min);
+            .reduce(f32::min);
         let lower_bound = self
             .upper_neighbors
             .iter()
             .map(|&i| self.get_cdf_value(i, index))
-            .reduce(f64::max);
+            .reduce(f32::max);
         match (lower_bound, upper_bound) {
             (Some(lower), Some(upper)) => lower.midpoint(upper),
             (Some(lower), None) => lower,
@@ -72,7 +72,7 @@ impl CovariateInterpolator for Interpolation<'_> {
 }
 
 impl IntoIterator for Interpolation<'_> {
-    type Item = f64;
+    type Item = f32;
     type IntoIter = CdfInterpolation<Self>;
 
     fn into_iter(self) -> Self::IntoIter {

@@ -26,12 +26,19 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(
+        serialize = "T: Serialize, T::X: Serialize, T::Y: Serialize, T::CovariateOrder: Serialize",
+        deserialize = "T: Deserialize<'de>, T::X: Deserialize<'de>, T::Y: Deserialize<'de>, T::CovariateOrder: Deserialize<'de>"
+    ))
+)]
 pub struct Fit<T: IsotonicDistributionalRegressionFit> {
     pub fits: Vec<T>,
     /// All covariates that were available to this problem, deduplicated.
-    pub covariates: Vec<f64>,
+    pub covariates: Vec<T::X>,
     /// All uncensored responses that were available to this problem, deduplicated.
-    pub thresholds: Vec<f64>,
+    pub thresholds: Vec<T::Y>,
     /// For each fit, map the global threshold to the fit of the threshold.
     pub threshold_map: Vec<ResponseCoordinate>,
     pub covariate_groups: T::CovariateOrder,
@@ -41,8 +48,8 @@ impl<T: IsotonicDistributionalRegressionFit> Fit<T> {
     /// Creates a [`Fit`] directly from pre-computed components.
     pub fn from_parts(
         fit: T,
-        covariates: Vec<f64>,
-        thresholds: Vec<f64>,
+        covariates: Vec<T::X>,
+        thresholds: Vec<T::Y>,
         covariate_groups: T::CovariateOrder,
     ) -> Self
     where
@@ -168,17 +175,18 @@ pub struct Interpolation<'a, I: CovariateInterpolator + 'a> {
 }
 
 impl<I: CovariateInterpolator> CovariateInterpolator for Interpolation<'_, I> {
-    fn interpolate_index(&self, index: usize) -> f64 {
+    fn interpolate_index(&self, index: usize) -> f32 {
         let n_subfits = self.interpolations.len();
         debug_assert_eq!(self.threshold_map.len() % n_subfits, 0);
 
         let subfit_thresholds = &self.threshold_map[index * n_subfits..];
-        self.interpolations
+        let sum: f32 = self
+            .interpolations
             .iter()
             .zip(subfit_thresholds)
             .map(|(interpolation, &response)| interpolation.interpolate(response))
-            .sum::<f64>()
-            / n_subfits as f64
+            .sum();
+        sum / n_subfits as f32
     }
 
     fn is_empty(&self) -> bool {
@@ -194,7 +202,7 @@ impl<I: CovariateInterpolator> CovariateInterpolator for Interpolation<'_, I> {
 }
 
 impl<I: CovariateInterpolator> IntoIterator for Interpolation<'_, I> {
-    type Item = f64;
+    type Item = f32;
     type IntoIter = CdfInterpolation<Self>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -278,19 +286,25 @@ impl<const STEPS: usize> ProgressTracker for MultiTracker<'_, STEPS> {
 
 macro_rules! impl_idr_fit_for {
     ($inner:ty) => {
-        impl IsotonicDistributionalRegressionFit for Fit<$inner> {
-            type Covariate<'a> = <$inner as IsotonicDistributionalRegressionFit>::Covariate<'a>;
+        impl<X: crate::Float, Y: crate::Float> IsotonicDistributionalRegressionFit for Fit<$inner>
+        where
+            <$inner as IsotonicDistributionalRegressionFit>::Config: Clone,
+            <$inner as IsotonicDistributionalRegressionFit>::CovariateOrder: Clone,
+        {
+            type X = X;
+            type Y = Y;
+            type XInput<'a> = <$inner as IsotonicDistributionalRegressionFit>::XInput<'a>;
             type CovariateOrder = <$inner as IsotonicDistributionalRegressionFit>::CovariateOrder;
             type Config = (
                 Config,
                 <$inner as IsotonicDistributionalRegressionFit>::Config,
             );
 
-            fn fit(
-                x: &[f64],
-                y: &[f64],
+            fn fit<W: crate::Float>(
+                x: &[X],
+                y: &[Y],
                 y_observed: Option<&[bool]>,
-                weight: Option<&[f64]>,
+                weight: Option<&[W]>,
                 covariate_order: Self::CovariateOrder,
                 response_order: StochasticOrder,
                 decreasing: bool,
@@ -371,8 +385,8 @@ macro_rules! impl_idr_fit_for {
 
                     let fit_subsample = |subsample: Vec<usize>| -> Result<$inner, Error> {
                         let len = config.subsample_size * dimension;
-                        let mut sub_x = vec![f64::NAN; len];
-                        let mut sub_y = vec![f64::NAN; config.subsample_size];
+                        let mut sub_x: Vec<X> = vec![X::nan(); len];
+                        let mut sub_y: Vec<Y> = vec![Y::nan(); config.subsample_size];
                         for (i, &sample) in subsample.iter().enumerate() {
                             sub_x[i * dimension..(i + 1) * dimension]
                                 .copy_from_slice(&x[sample * dimension..(sample + 1) * dimension]);
@@ -437,7 +451,7 @@ macro_rules! impl_idr_fit_for {
 
                 let covariates = unique_covariates(x, dimension);
 
-                let mut thresholds = match y_observed {
+                let mut thresholds: Vec<Y> = match y_observed {
                     Some(observed) => y
                         .iter()
                         .zip(observed)
@@ -446,7 +460,7 @@ macro_rules! impl_idr_fit_for {
                         .collect(),
                     None => Vec::from(y),
                 };
-                thresholds.sort_unstable_by(|a, b| a.total_cmp(b));
+                thresholds.sort_unstable_by(|a, b| crate::functionals::TotalCmp::total_cmp(a, b));
                 thresholds.dedup();
                 let threshold_map = derive_threshold_map(&thresholds, &fits);
                 Ok(Self {
@@ -460,7 +474,7 @@ macro_rules! impl_idr_fit_for {
 
             fn interpolate_covariate<'a>(
                 &'a self,
-                covariate: Self::Covariate<'_>,
+                covariate: Self::XInput<'_>,
             ) -> impl CovariateInterpolator + IntoCdfIterator + 'a {
                 let interpolations = self
                     .fits
@@ -473,7 +487,7 @@ macro_rules! impl_idr_fit_for {
                 }
             }
 
-            fn thresholds(&self) -> &[f64] {
+            fn thresholds(&self) -> &[Y] {
                 &self.thresholds
             }
 
@@ -487,14 +501,14 @@ macro_rules! impl_idr_fit_for {
 }
 
 #[cfg(feature = "partial-order")]
-impl_idr_fit_for!(partial_order::Fit);
-impl_idr_fit_for!(total_order::Fit);
+impl_idr_fit_for!(partial_order::Fit<X, Y>);
+impl_idr_fit_for!(total_order::Fit<X, Y>);
 
 #[cfg(feature = "partial-order")]
-impl Fit<partial_order::Fit> {
+impl<X: crate::Float, Y: crate::Float> Fit<partial_order::Fit<X, Y>> {
     pub fn interpolate_covariate_with_workspace(
         &self,
-        covariate: <Self as IsotonicDistributionalRegressionFit>::Covariate<'_>,
+        covariate: <Self as IsotonicDistributionalRegressionFit>::XInput<'_>,
         workspace: &mut PredictionWorkspace,
     ) -> Interpolation<'_, partial_order::Interpolation<'_>> {
         let interpolations = self
@@ -509,12 +523,12 @@ impl Fit<partial_order::Fit> {
     }
 }
 
-impl Fit<total_order::Fit> {
-    pub fn predict_grid<I: IntoIterator<Item = f64>>(
+impl<X: crate::Float, Y: crate::Float> Fit<total_order::Fit<X, Y>> {
+    pub fn predict_grid<I: IntoIterator<Item = X>>(
         &self,
         covariates: I,
-        thresholds: impl IntoIterator<Item = f64>,
-    ) -> GridPredictor<'_, I::IntoIter> {
+        thresholds: impl IntoIterator<Item = Y>,
+    ) -> GridPredictor<'_, X, I::IntoIter> {
         let mut covariate_iter = covariates.into_iter();
         let first_query = covariate_iter.next().expect("empty grid is not supported");
         let states = self
@@ -543,30 +557,31 @@ impl Fit<total_order::Fit> {
     }
 }
 
-pub struct GridPredictor<'a, I> {
+pub struct GridPredictor<'a, X, I> {
     covariate_iter: I,
-    states: Vec<GridPredictorState<'a>>,
+    states: Vec<GridPredictorState<'a, X>>,
     thresholds: Vec<ResponseCoordinate>,
     threshold_index: usize,
     threshold_map: &'a [ResponseCoordinate],
 }
 
-impl<I: Iterator<Item = f64>> Iterator for GridPredictor<'_, I> {
-    type Item = f64;
+impl<X: crate::Float, I: Iterator<Item = X>> Iterator for GridPredictor<'_, X, I> {
+    type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.threshold_index < self.thresholds.len() {
             let active_threshold = self.thresholds[self.threshold_index];
-            let value = match active_threshold {
+            let value: f32 = match active_threshold {
                 ResponseCoordinate::StrictlyBelowAll => 0.0,
                 ResponseCoordinate::AboveOrAtIndex(index) => {
                     let n_subagg = self.states.len();
-                    self.states
+                    let sum: f32 = self
+                        .states
                         .iter()
                         .zip(&self.threshold_map[index * n_subagg..])
                         .map(|(state, &response)| state.interpolation.interpolate(response))
-                        .sum::<f64>()
-                        / n_subagg as f64
+                        .sum();
+                    sum / n_subagg as f32
                 }
             };
 
@@ -595,9 +610,12 @@ impl<I: Iterator<Item = f64>> Iterator for GridPredictor<'_, I> {
     }
 }
 
-impl<I: ExactSizeIterator<Item = f64>> ExactSizeIterator for GridPredictor<'_, I> {}
+impl<X: crate::Float, I: ExactSizeIterator<Item = X>> ExactSizeIterator
+    for GridPredictor<'_, X, I>
+{
+}
 
-fn unique_covariates(covariates: &[f64], dimension: usize) -> Vec<f64> {
+fn unique_covariates<X: crate::Float>(covariates: &[X], dimension: usize) -> Vec<X> {
     debug_assert_eq!(covariates.len() % dimension, 0);
     let n_covariates = covariates.len() / dimension;
 
@@ -618,7 +636,7 @@ fn unique_covariates(covariates: &[f64], dimension: usize) -> Vec<f64> {
 }
 
 fn derive_threshold_map<F: IsotonicDistributionalRegressionFit>(
-    thresholds: &[f64],
+    thresholds: &[F::Y],
     fits: &[F],
 ) -> Vec<ResponseCoordinate> {
     // TODO: Avoid this transpose
@@ -649,7 +667,7 @@ mod test {
         let weight = vec![1.0; 4];
         let covariate_order = CovariateGroups::parse([("sd", [0usize, 1])], 2).unwrap();
 
-        let fit = Fit::<partial_order::Fit>::fit(
+        let fit = Fit::<partial_order::Fit<f64, f64>>::fit::<f64>(
             &covariates,
             &responses,
             None,
@@ -680,7 +698,7 @@ mod test {
 
     #[test]
     fn test_plain_wrapper() {
-        let fit = Fit::<total_order::Fit>::fit(
+        let fit = Fit::<total_order::Fit<f64, f64>>::fit::<f64>(
             &[1.0, 2.0, 3.0],
             &[4.0, 3.0, 2.0],
             Some(&[false, true, true]),
@@ -721,7 +739,7 @@ mod test {
             2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0,
         ];
 
-        let fit = Fit::<partial_order::Fit>::fit(
+        let fit = Fit::<partial_order::Fit<f64, f64>>::fit::<f64>(
             &covariates,
             &responses,
             None,
@@ -743,7 +761,7 @@ mod test {
 
     #[test]
     fn test_larger() {
-        let fit = Fit::<total_order::Fit>::fit(
+        let fit = Fit::<total_order::Fit<f64, f64>>::fit::<f64>(
             &(0..20).map(|i| i as f64).collect::<Vec<_>>(),
             &(10..30).map(|i| i as f64).collect::<Vec<_>>(),
             None,
@@ -771,7 +789,7 @@ mod test {
             23.27694686,
         ];
         let responses = [3., 23., 165., 5., 57.];
-        let fit = Fit::<total_order::Fit>::fit(
+        let fit = Fit::<total_order::Fit<f64, f64>>::fit::<f64>(
             &covariates,
             &responses,
             Some(&[false, false, true, false, true]),
@@ -783,24 +801,12 @@ mod test {
             &crate::NoProgress,
         )
         .unwrap();
-        let result = covariates
-            .into_iter()
-            .flat_map(|c| fit.cdf(c))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            result,
-            [
-                1.0,
-                1.0,
-                (19.0484518 - 18.91235784) / (23.27694686 - 18.91235784),
-                1.0,
-                0.0,
-                1.0,
-                1.0,
-                1.0,
-                1.0,
-                1.0,
-            ],
-        );
+        let result: Vec<f32> = covariates.into_iter().flat_map(|c| fit.cdf(c)).collect();
+        // Match the production path: prediction.rs computes the interpolation share in `X`
+        // precision (here f64) and only narrows to f32 at the end.
+        let share =
+            ((19.0484518_f64 - 18.91235784_f64) / (23.27694686_f64 - 18.91235784_f64)) as f32;
+        let expected: Vec<f32> = vec![1.0, 1.0, share, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        assert!(crate::test::is_relative_eq_vec(&result, &expected));
     }
 }

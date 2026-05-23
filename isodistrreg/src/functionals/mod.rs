@@ -12,15 +12,21 @@ pub use recursive_clipping::ClippingWrapper;
 pub trait Functional: Send + Sync {
     type Censoring: Clone + Copy + Default + Send + Sync;
     type Response: Clone + Copy + Default + Send + Sync;
+    /// Output precision of this functional. f32 for the production [`KaplanMeier`] path
+    /// (matching the rest of the censored algorithm body); f64 for the research-only
+    /// [`Variance`] / [`ExpectedShortfall`] / [`Average`] functionals.
+    type Value: crate::Float;
     fn evaluate<Cov>(
         &self,
         obs: impl IntoIterator<Item = Observation<Cov, Self::Response, Self::Censoring>> + Clone,
-    ) -> f64;
+    ) -> Self::Value;
 }
 
 pub trait CauchyMeanValueFunctional {
     type Censoring: Clone + Copy + Default + Send + Sync;
     type Response: Clone + Copy + Default + Send + Sync;
+    /// Output precision of this functional; see [`Functional::Value`].
+    type Value: crate::Float;
 
     /// Per-block state held in the algorithm's PAV stack.
     type Block;
@@ -57,11 +63,11 @@ pub trait CauchyMeanValueFunctional {
         I: Iterator<Item = Observation<(), Self::Response, Self::Censoring>> + Clone;
 
     /// Read the current value of a block (used by the algorithm for ordering checks).
-    fn block_value(&self, block: &Self::Block) -> f64;
+    fn block_value(&self, block: &Self::Block) -> Self::Value;
 
     /// Convenience: evaluate over a contiguous range by sequentially merging singletons.
     /// Used by external callers; the PAV algorithm drives the primitives directly.
-    fn evaluate_total_order<G, I>(&self, elements: Range<usize>, get_data: &G) -> f64
+    fn evaluate_total_order<G, I>(&self, elements: Range<usize>, get_data: &G) -> Self::Value
     where
         G: Fn(usize) -> I + Clone,
         I: Iterator<Item = Observation<(), Self::Response, Self::Censoring>> + Clone,
@@ -96,8 +102,8 @@ pub trait CauchyMeanValueFunctional {
         successors_inclusive: &[BitSet<B>],
         predecessors: &[BitSet<B>],
         get_data: &G,
-        cache: &mut HashMap<BitSet<B>, f64>,
-    ) -> f64;
+        cache: &mut HashMap<BitSet<B>, Self::Value>,
+    ) -> Self::Value;
 }
 
 /// Marker trait: Can this functional be computed on a single value?
@@ -120,6 +126,7 @@ impl Default for Average {
 impl Functional for Average {
     type Censoring = ();
     type Response = f64;
+    type Value = f64;
     fn evaluate<Cov>(
         &self,
         obs: impl IntoIterator<Item = Observation<Cov, Self::Response, Self::Censoring>>,
@@ -140,6 +147,7 @@ impl SingletonDefinedFunctional for Average {}
 impl CauchyMeanValueFunctional for Average {
     type Censoring = ();
     type Response = f64;
+    type Value = f64;
 
     /// `(weight, weighted_sum)`. Mean is the quotient.
     type Block = (f64, f64);
@@ -199,8 +207,8 @@ impl CauchyMeanValueFunctional for Average {
         _successors_inclusive: &[BitSet<B>],
         _predecessors: &[BitSet<B>],
         get_data: &G,
-        _cache: &mut HashMap<BitSet<B>, f64>,
-    ) -> f64 {
+        _cache: &mut HashMap<BitSet<B>, Self::Value>,
+    ) -> Self::Value {
         self.evaluate(elements.iter().flat_map(get_data))
     }
 }
@@ -220,6 +228,7 @@ impl Default for Variance {
 impl Functional for Variance {
     type Censoring = ();
     type Response = f64;
+    type Value = f64;
     fn evaluate<Cov>(
         &self,
         obs: impl IntoIterator<Item = Observation<Cov, Self::Response, Self::Censoring>> + Clone,
@@ -261,6 +270,7 @@ impl ExpectedShortfall {
 impl Functional for ExpectedShortfall {
     type Censoring = ();
     type Response = f64;
+    type Value = f64;
     fn evaluate<Cov>(
         &self,
         obs: impl IntoIterator<Item = Observation<Cov, Self::Response, Self::Censoring>>,
@@ -310,6 +320,13 @@ pub trait TotalCmp: Copy + PartialOrd {
     fn total_cmp(&self, other: &Self) -> Ordering;
 }
 
+impl TotalCmp for f32 {
+    #[inline]
+    fn total_cmp(&self, other: &Self) -> Ordering {
+        f32::total_cmp(self, other)
+    }
+}
+
 impl TotalCmp for f64 {
     #[inline]
     fn total_cmp(&self, other: &Self) -> Ordering {
@@ -336,10 +353,15 @@ impl<T> KaplanMeier<T> {
 impl<T: Default + Sync + Send + TotalCmp> Functional for KaplanMeier<T> {
     type Censoring = bool;
     type Response = T;
+    type Value = f32;
     fn evaluate<Cov>(
         &self,
         obs: impl IntoIterator<Item = Observation<Cov, Self::Response, Self::Censoring>>,
-    ) -> f64 {
+    ) -> f32 {
+        // Keep the at-risk count and the survival product in f64: the running product
+        // `(1 - w / at_risk)` chains O(n) multiplications and is precision-sensitive.
+        // We narrow once at the return so the partial-order censored algorithm body
+        // can stay in f32 end-to-end (matching the rest of the censored stack).
         let mut at_risk = 0.0;
         let mut subset: Vec<_> = obs
             .into_iter()
@@ -367,7 +389,7 @@ impl<T: Default + Sync + Send + TotalCmp> Functional for KaplanMeier<T> {
             at_risk -= o.weight;
         }
 
-        1.0 - survival
+        (1.0 - survival) as f32
     }
 }
 impl<T: Default + Sync + Send + TotalCmp> SingletonDefinedFunctional for KaplanMeier<T> {}

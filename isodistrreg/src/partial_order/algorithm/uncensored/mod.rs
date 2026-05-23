@@ -3,7 +3,7 @@ pub mod hazard_rate_order;
 use crate::partial_order::algorithm::uncensored::hazard_rate_order::update_constraint_matrix;
 use crate::partial_order::routines::derive_transitive_reduction;
 use crate::partial_order::{
-    AlgorithmContext, AlgorithmOutput, Config, OrderingInfo, QualityIndicators,
+    AlgorithmOutput, Config, OrderingInfo, QualityIndicators, UncensoredContext,
 };
 use crate::progress::ProgressTracker;
 use crate::routines::transpose;
@@ -14,7 +14,7 @@ use std::iter::repeat_n;
 
 #[must_use]
 pub fn algorithm<D: Direction, const HRO: bool>(
-    context: &AlgorithmContext,
+    context: &UncensoredContext<f64, f64>,
     config: Config,
     progress: &dyn ProgressTracker,
 ) -> AlgorithmOutput {
@@ -46,7 +46,7 @@ pub fn algorithm<D: Direction, const HRO: bool>(
                 .map(|w| w / context.x_weight[0])
                 .scan(0.0, |acc, share| {
                     *acc += share;
-                    Some(*acc)
+                    Some(*acc as f32)
                 })
                 .collect(),
             ordering_info: OrderingInfo::from_edges(constraint_edges, context.n_covariate()),
@@ -207,7 +207,8 @@ pub fn algorithm<D: Direction, const HRO: bool>(
 
     // Apply PAVA along thresholds for each row, then append 1.0
     for cdf in cdfs.chunks_mut(context.n_threshold()) {
-        let increasing = tonic_regression_pre_sorted::<Increasing>(cdf.iter().map(|&v| (v, 1.0)));
+        let increasing =
+            tonic_regression_pre_sorted::<Increasing, _, _>(cdf.iter().map(|&v| (v, 1.0)));
         for (initial, cleaned) in cdf.iter_mut().zip(increasing) {
             *initial = cleaned;
         }
@@ -215,8 +216,10 @@ pub fn algorithm<D: Direction, const HRO: bool>(
 
     let convergence_fraction = 1.0 - iter_limit_hit_count as f64 / context.n_threshold() as f64;
 
+    // OSQP and the warm-started PAVA above run in f64; narrow once at the algorithm boundary
+    // to match `AlgorithmOutput::cdfs`.
     AlgorithmOutput {
-        cdfs,
+        cdfs: cdfs.into_iter().map(|v| v as f32).collect(),
         ordering_info: OrderingInfo::from_edges(constraint_edges, context.n_covariate()),
         quality_indicators: QualityIndicators {
             precision,

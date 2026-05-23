@@ -21,6 +21,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py313", "either"] }
 numpy = "0.28.0"
 isodistrreg = { workspace = true, features = ["parallel", "serde", "subagging"] }
+num-traits = "0.2"
 itertools = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 bincode = { version = "2.0.1", features = ["serde"] }

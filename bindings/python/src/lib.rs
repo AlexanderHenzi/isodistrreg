@@ -8,7 +8,9 @@ use isodistrreg::routines::{argsort_unstable_by, lexicographic_cmp};
 use isodistrreg::{CovariateInterpolator, Observation, ResponseCoordinate};
 use isodistrreg::{Decreasing, Direction, Increasing, StochasticOrder};
 use isodistrreg::{Error, quantile};
-use isodistrreg::{IsotonicDistributionalRegressionFit, NoProgress, ProgressTracker, subagging};
+use isodistrreg::{
+    Float, IsotonicDistributionalRegressionFit, NoProgress, ProgressTracker, subagging,
+};
 use isodistrreg::{partial_order, total_order};
 use itertools::EitherOrBoth::{Both, Left, Right};
 use itertools::{Either, EitherOrBoth, izip};
@@ -85,8 +87,7 @@ use std::sync::{Mutex, OnceLock};
 ///     Solver settings. For multivariate covariates this may contain an
 ///     ``"osqp_settings"`` dict with keys ``"verbose"`` (bool),
 ///     ``"eps_abs"`` (float), ``"eps_rel"`` (float), ``"max_iter"``
-///     (int). For univariate covariates this may contain ``"epsilon"``
-///     (float), cdf values smaller than this may be rounded.
+///     (int). Univariate covariates currently have no tunable knobs.
 /// seed : int, optional
 ///     Random seed for reproducibility. Only relevant when (su)bagging is
 ///     active (i.e. when ``subsamples`` is set).
@@ -106,43 +107,620 @@ use std::sync::{Mutex, OnceLock};
 #[allow(clippy::upper_case_acronyms)]
 #[pyclass(module = "isodistrreg._core")]
 struct IDR {
-    inner: Fit,
+    inner: FitImpl,
 }
 
+/// Runtime-dispatch wrapper over the four `(X, Y) ∈ {f32, f64}²` combinations.
+///
+/// The pyclass `IDR` holds one of these; per-method dispatch goes through the
+/// `dispatch_dtype!` macro. The variant *is* the dtype tag — `.X` and `.thresholds`
+/// return arrays whose dtype matches the variant. No internal `as f64` upcast at fit
+/// time; f32 inputs stay in f32 storage throughout.
 #[derive(Deserialize, Serialize)]
-enum Fit {
-    Partial(subagging::Fit<partial_order::Fit>),
+enum FitImpl {
+    F32F32(Fit<f32, f32>),
+    F32F64(Fit<f32, f64>),
+    F64F32(Fit<f64, f32>),
+    F64F64(Fit<f64, f64>),
+}
+
+/// Generic over `(X, Y)` — the covariate and threshold precisions. The four concrete
+/// monomorphizations live in `FitImpl`'s variants. Pure Rust; no PyO3 coupling.
+#[derive(Deserialize, Serialize)]
+#[serde(bound(
+    serialize = "X: Serialize, Y: Serialize",
+    deserialize = "X: Deserialize<'de>, Y: Deserialize<'de>"
+))]
+enum Fit<X: Float, Y: Float> {
+    Partial(subagging::Fit<partial_order::Fit<X, Y>>),
     Total {
-        fit: subagging::Fit<total_order::Fit>,
+        fit: subagging::Fit<total_order::Fit<X, Y>>,
         squeeze: bool,
     },
 }
 
-impl IDR {
-    /// Returns (order, n_covariates, covariate_dim, n_thresholds, n_subsamples, increasing).
-    fn summary(&self) -> (&str, usize, usize, usize, usize, bool) {
-        match &self.inner {
-            Fit::Total { fit, .. } => (
-                "total",
-                fit.covariates.len(),
-                1,
-                fit.thresholds.len(),
-                fit.fits.len(),
-                fit.fits.first().is_none_or(|f| f.increasing),
-            ),
-            Fit::Partial(fit) => {
-                let dim = fit.covariate_groups.dimension;
-                (
-                    "partial",
-                    fit.covariates.len() / dim,
-                    dim,
-                    fit.thresholds.len(),
-                    fit.fits.len(),
-                    fit.fits.first().is_none_or(|f| f.increasing),
-                )
-            }
+/// Dispatch a method body across all four `FitImpl` variants. Inside the body, `$fit`
+/// binds to `&Fit<X, Y>` for the corresponding precision combo. The body must type-check
+/// generically over `<X: Float, Y: Float>` — calling generic helpers is the common case.
+macro_rules! dispatch_dtype {
+    ($impl:expr, $fit:ident => $body:expr) => {
+        match $impl {
+            FitImpl::F32F32($fit) => $body,
+            FitImpl::F32F64($fit) => $body,
+            FitImpl::F64F32($fit) => $body,
+            FitImpl::F64F64($fit) => $body,
+        }
+    };
+}
+
+/// Detect whether a NumPy array's dtype is f32 (otherwise treat as f64).
+/// Used to pick the FitImpl variant at fit / from_cdfs time.
+#[derive(Copy, Clone, Debug)]
+enum InputDtype {
+    F32,
+    F64,
+}
+
+fn detect_input_dtype(arr: &Bound<'_, PyAny>) -> InputDtype {
+    if let Ok(untyped) = arr.cast::<PyUntypedArray>() {
+        let py = arr.py();
+        if untyped.dtype().is_equiv_to(&dtype::<f32>(py)) {
+            return InputDtype::F32;
         }
     }
+    InputDtype::F64
+}
+
+/// Cast an f64 array down to the model's covariate precision. For X=f64 this is the
+/// identity; for X=f32 each element is narrowed via `<X as NumCast>::from`. Used at the
+/// API boundary of prediction methods so users can keep passing f64-valued arrays.
+fn cast_to_x<X: Float>(arr: ArrayViewD<'_, f64>) -> ArrayD<X> {
+    arr.map(|&c| num_traits::NumCast::from(c).unwrap())
+}
+
+/// Body of `predict` (mean). Generic over the inner `Fit<X, Y>`. Returns an `ArrayD<Y>` —
+/// the output dtype matches the model's response precision. The inner trapezoidal sum is
+/// already accumulated in f64 inside `Fit::mean` and narrowed to `Y` at the return, so
+/// f32-storage models keep f64-quality accumulation but expose an f32 result.
+fn predict_of<X: Float, Y: Float>(
+    fit: &Fit<X, Y>,
+    cov_f64: ArrayViewD<'_, f64>,
+) -> Result<ArrayD<Y>, Error> {
+    let cov = cast_to_x(cov_f64);
+    match (fit, cov.shape()) {
+        (Fit::Total { fit, squeeze: true }, _) => Ok(cov.map(|&c| fit.mean(c))),
+        (
+            Fit::Total {
+                fit,
+                squeeze: false,
+            },
+            &[.., 1],
+        ) => {
+            let (_, out_shape) = cov.shape().split_last().unwrap();
+            let result = cov.iter().map(|&c| fit.mean(c)).collect();
+            Ok(ArrayD::from_shape_vec(IxDyn(out_shape), result).unwrap())
+        }
+        (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
+            let (_, out_shape) = shape.split_last().unwrap();
+            let mut storage = None;
+            let result = cov
+                .rows()
+                .into_iter()
+                .map(|row| {
+                    let slice = maybe_allocate_view(&row, &mut storage);
+                    fit.mean(slice)
+                })
+                .collect();
+            Ok(ArrayD::from_shape_vec(IxDyn(out_shape), result).unwrap())
+        }
+        (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., 1)",
+        }),
+        (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., d)",
+        }),
+    }
+}
+
+/// Body of `cdf`. Output is f32 (matches CDF storage precision).
+fn cdf_of<X: Float, Y: Float>(
+    fit: &Fit<X, Y>,
+    cov_f64: ArrayViewD<'_, f64>,
+) -> Result<ArrayD<f32>, Error> {
+    let cov = cast_to_x(cov_f64);
+    let in_shape = cov.shape().to_vec();
+    match (fit, cov.shape()) {
+        (Fit::Total { fit, squeeze: true }, _) => {
+            let mut out_shape = in_shape.clone();
+            out_shape.push(fit.n_threshold());
+            let result = cov.iter().flat_map(|&c| fit.cdf(c)).collect();
+            Ok(ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap())
+        }
+        (
+            Fit::Total {
+                fit,
+                squeeze: false,
+            },
+            &[.., 1],
+        ) => {
+            let (_, base) = in_shape.split_last().unwrap();
+            let mut out_shape = base.to_vec();
+            out_shape.push(fit.n_threshold());
+            let result = cov.iter().flat_map(|&c| fit.cdf(c)).collect();
+            Ok(ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap())
+        }
+        (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
+            let (_, base) = in_shape.split_last().unwrap();
+            let mut out_shape = base.to_vec();
+            out_shape.push(fit.n_threshold());
+            let mut result = Vec::with_capacity(out_shape.iter().product());
+            let mut storage = None;
+            for row in cov.rows() {
+                let slice = maybe_allocate_view(&row, &mut storage);
+                result.extend(fit.cdf(slice));
+            }
+            Ok(ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap())
+        }
+        (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., 1)",
+        }),
+        (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., d)",
+        }),
+    }
+}
+
+/// Body of `cdf_at`. Like `cdf`, but evaluates at user-supplied response values rather
+/// than the training grid.
+fn cdf_at_of<X: Float, Y: Float>(
+    fit: &Fit<X, Y>,
+    cov_f64: ArrayViewD<'_, f64>,
+    thr_f64: ArrayViewD<'_, f64>,
+) -> Result<ArrayD<f32>, Error> {
+    let cov = cast_to_x(cov_f64);
+    let thr = thr_f64.map(|&t| num_traits::NumCast::from(t).unwrap());
+
+    fn execute<I: CovariateInterpolator>(
+        cov_interpolated: ArrayD<I>,
+        thr_coords: ArrayD<ResponseCoordinate>,
+    ) -> Result<ArrayD<f32>, Error> {
+        let broadcasted = broadcast(cov_interpolated.shape(), thr_coords.shape())?;
+        let mut output = ArrayD::zeros(IxDyn(&broadcasted));
+        Zip::from(&mut output)
+            .and_broadcast(&cov_interpolated)
+            .and_broadcast(&thr_coords)
+            .for_each(|out, c, &t| {
+                *out = c.interpolate(t);
+            });
+        Ok(output)
+    }
+
+    match (fit, cov.shape()) {
+        (Fit::Total { fit, squeeze: true }, _) => {
+            let cov_coords = cov.map(|&c| fit.interpolate_covariate(c));
+            let thr_coords = thr.map(|&t| fit.get_response_coordinate(t));
+            execute(cov_coords, thr_coords)
+        }
+        (
+            Fit::Total {
+                fit,
+                squeeze: false,
+            },
+            &[.., 1],
+        ) => {
+            let (_, without_last) = cov.shape().split_last().unwrap();
+            let flat: Vec<_> = cov.iter().map(|&c| fit.interpolate_covariate(c)).collect();
+            let cov_coords = ArrayD::from_shape_vec(IxDyn(without_last), flat).unwrap();
+            let thr_coords = thr.map(|&t| fit.get_response_coordinate(t));
+            execute(cov_coords, thr_coords)
+        }
+        (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
+            let (_, without_last) = cov.shape().split_last().unwrap();
+            let mut storage = None;
+            let mut workspace = PredictionWorkspace::new();
+            let flat: Vec<_> = cov
+                .rows()
+                .into_iter()
+                .map(|c| {
+                    let slice = maybe_allocate_view(&c, &mut storage);
+                    fit.interpolate_covariate_with_workspace(slice, &mut workspace)
+                })
+                .collect();
+            let cov_coords = ArrayD::from_shape_vec(IxDyn(without_last), flat).unwrap();
+            let thr_coords = thr.map(|&t| fit.get_response_coordinate(t));
+            execute(cov_coords, thr_coords)
+        }
+        (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., 1)",
+        }),
+        (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., d)",
+        }),
+    }
+}
+
+/// Generic body of `from_cdfs`. One shape, four monomorphizations dispatched by
+/// `IDR::from_cdfs` based on the user's detected covariate/threshold dtype combo.
+fn from_cdfs_typed<X: Float + Element, Y: Float + Element>(
+    cdfs: PyArrayLike2<f32, AllowTypeChange>,
+    x: Bound<'_, PyAny>,
+    y: Bound<'_, PyAny>,
+    global_cdf: Option<PyArrayLike1<f32, AllowTypeChange>>,
+) -> PyResult<Fit<X, Y>>
+where
+    for<'a, 'py> Vec<X>: pyo3::FromPyObject<'a, 'py>,
+    for<'a, 'py> Vec<Y>: pyo3::FromPyObject<'a, 'py>,
+{
+    let x: PyArrayLikeDyn<X, AllowTypeChange> = x.extract()?;
+    let y: PyArrayLike1<Y, AllowTypeChange> = y.extract()?;
+    let mut covariates_allocation = None;
+    let covariates = parse_covariates(&x, &mut covariates_allocation)?;
+
+    let cdfs_array = cdfs.as_array();
+    let thresholds_array = y.as_array();
+    let n_cdfs_rows = cdfs_array.shape()[0];
+    let n_cdfs_cols = cdfs_array.shape()[1];
+    let n_thresh = thresholds_array.len();
+
+    if n_cdfs_rows != covariates.n {
+        let n = covariates.n;
+        return Err(PyValueError::new_err(format!(
+            "Number of CDF rows ({n_cdfs_rows}) must match number of covariates ({n})"
+        )));
+    }
+    if n_cdfs_cols != n_thresh {
+        return Err(PyValueError::new_err(format!(
+            "Number of CDF columns ({n_cdfs_cols}) must match number of thresholds ({n_thresh})"
+        )));
+    }
+
+    let thresholds_vec: Vec<Y> = thresholds_array.iter().copied().collect();
+    if !thresholds_vec.windows(2).all(|w| w[0] < w[1]) {
+        return Err(PyValueError::new_err(
+            "Thresholds must be sorted in strictly increasing order",
+        ));
+    }
+    for (left, right) in covariates
+        .slice
+        .chunks_exact(covariates.dimension)
+        .zip(covariates.slice.chunks_exact(covariates.dimension).skip(1))
+    {
+        if lexicographic_cmp(left, right) != Ordering::Less {
+            return Err(PyValueError::new_err(
+                "Covariates must be sorted in strictly increasing lexicographic order and contain no duplicates",
+            ));
+        }
+    }
+
+    let cdfs_flat: Vec<f32> = cdfs_array.iter().copied().collect();
+    let covariates_owned = covariates.slice.to_vec();
+
+    match covariates.dimension {
+        0 => unreachable!(),
+        1 => {
+            let subagging_covariates = covariates_owned.clone();
+            let inner_fit = total_order::Fit {
+                increasing: true,
+                cdfs: cdfs_flat,
+                covariates: covariates_owned,
+                thresholds: thresholds_vec.clone(),
+                quality_indicators: total_order::QualityIndicators {
+                    // `epsilon` is set by `weight_noise_floor(n_total)` at fit time; for
+                    // reconstructed fits `n_total` is unknown, so we follow the same
+                    // convention as `precision`/`convergence_fraction` (NaN).
+                    epsilon: f64::NAN,
+                },
+            };
+            let subagging_fit = subagging::Fit::from_parts(
+                inner_fit,
+                subagging_covariates,
+                thresholds_vec,
+                Increasing,
+            );
+            Ok(Fit::Total {
+                fit: subagging_fit,
+                squeeze: covariates.squeeze,
+            })
+        }
+        _ => {
+            let covariate_groups = CovariateGroups::empty(covariates.dimension);
+            let (ordering_info, edges_covariates) = if covariates.n > 0 {
+                let edges = derive_transitive_reduction(
+                    &covariates_owned,
+                    covariates.n,
+                    covariates.dimension,
+                );
+                (
+                    OrderingInfo::from_edges(edges, covariates.n),
+                    covariates_owned.clone(),
+                )
+            } else {
+                (OrderingInfo::empty(), Vec::new())
+            };
+
+            let global_cdf_vec: Vec<f32> = if let Some(gcdf) = global_cdf {
+                let gcdf_array = gcdf.as_array();
+                if gcdf_array.len() != n_thresh {
+                    return Err(PyValueError::new_err(format!(
+                        "global_cdf length ({}) must match number of thresholds ({n_thresh})",
+                        gcdf_array.len(),
+                    )));
+                }
+                gcdf_array.iter().copied().collect()
+            } else if covariates.n > 0 {
+                // Unweighted average of per-covariate CDFs; accumulate in f64, downcast.
+                let mut avg = vec![0.0f64; n_thresh];
+                for i in 0..covariates.n {
+                    for j in 0..n_thresh {
+                        avg[j] += cdfs_flat[i * n_thresh + j] as f64;
+                    }
+                }
+                let denom = covariates.n as f64;
+                avg.into_iter().map(|v| (v / denom) as f32).collect()
+            } else {
+                Vec::new()
+            };
+
+            let inner_fit = partial_order::Fit {
+                increasing: true,
+                cdfs: cdfs_flat,
+                global_cdf: global_cdf_vec,
+                covariate_groups: covariate_groups.clone(),
+                covariates: covariates_owned,
+                ordering_info,
+                thresholds: thresholds_vec.clone(),
+                quality_indicators: QualityIndicators {
+                    precision: f64::NAN,
+                    convergence_fraction: f64::NAN,
+                },
+            };
+            let subagging_fit = subagging::Fit::from_parts(
+                inner_fit,
+                edges_covariates,
+                thresholds_vec,
+                covariate_groups,
+            );
+            Ok(Fit::Partial(subagging_fit))
+        }
+    }
+}
+
+/// Zero-copy NumPy view over the typed covariate buffer of a `Fit<X, Y>`. Used by the
+/// `X` getter — the storage already matches the user's input dtype, so no narrowing.
+fn x_view<'py, X: Float + Element, Y: Float>(
+    fit: &Fit<X, Y>,
+    this: &Bound<'py, IDR>,
+) -> Bound<'py, PyArrayDyn<X>> {
+    let view = match fit {
+        Fit::Partial(fit) => {
+            let d = fit.covariate_groups.dimension;
+            let n = fit.covariates.len() / d;
+            ArrayView2::from_shape((n, d), &fit.covariates)
+                .unwrap()
+                .into_dyn()
+        }
+        Fit::Total { fit, squeeze: true } => ArrayView1::from(&fit.covariates).into_dyn(),
+        Fit::Total {
+            fit,
+            squeeze: false,
+        } => ArrayView2::from_shape((fit.covariates.len(), 1), &fit.covariates)
+            .unwrap()
+            .into_dyn(),
+    };
+    // SAFETY: data lives inside `this` and won't be reallocated. We set the pyclass `this`
+    // as the base; Python keeps `this` alive while the NumPy array exists.
+    unsafe { PyArrayDyn::borrow_from_array(&view, this.clone().into_any()) }
+}
+
+/// Zero-copy NumPy view over the typed threshold buffer of a `Fit<X, Y>`.
+fn thresholds_view<'py, X: Float, Y: Float + Element>(
+    fit: &Fit<X, Y>,
+    this: &Bound<'py, IDR>,
+) -> Bound<'py, PyArray1<Y>> {
+    let slice: &[Y] = match fit {
+        Fit::Partial(fit) => &fit.thresholds,
+        Fit::Total { fit, .. } => &fit.thresholds,
+    };
+    let view = ArrayView1::from_shape(slice.len(), slice).unwrap();
+    // SAFETY: as above.
+    unsafe { PyArray1::borrow_from_array(&view, this.clone().into_any()) }
+}
+
+/// Body of `quantile`. Returns an f64 array (consistent with the existing Python API).
+fn quantile_of<X: Float, Y: Float>(
+    fit: &Fit<X, Y>,
+    cov_f64: ArrayViewD<'_, f64>,
+    prb: ArrayViewD<'_, f64>,
+    upper: bool,
+) -> Result<ArrayD<f64>, Error> {
+    let cov = cast_to_x(cov_f64);
+
+    fn execute<Y: Float, I: CovariateInterpolator>(
+        cov_interpolated: ArrayD<I>,
+        prb: ArrayViewD<'_, f64>,
+        upper: bool,
+        thresholds: &[Y],
+    ) -> Result<ArrayD<f64>, Error> {
+        let broadcasted = broadcast(cov_interpolated.shape(), prb.shape())?;
+        let mut output = ArrayD::zeros(IxDyn(&broadcasted));
+        Zip::from(&mut output)
+            .and_broadcast(&cov_interpolated)
+            .and_broadcast(&prb)
+            .for_each(|out, c, &p| {
+                *out = quantile(c, p as f32, upper, thresholds).to_f64().unwrap();
+            });
+        Ok(output)
+    }
+
+    match (fit, cov.shape()) {
+        (Fit::Total { fit, squeeze: true }, _) => {
+            let cov_interpolated = cov.map(|&c| fit.interpolate_covariate(c));
+            execute(cov_interpolated, prb, upper, &fit.thresholds)
+        }
+        (
+            Fit::Total {
+                fit,
+                squeeze: false,
+            },
+            &[.., 1],
+        ) => {
+            let (_, without_last) = cov.shape().split_last().unwrap();
+            let flat: Vec<_> = cov.iter().map(|&c| fit.interpolate_covariate(c)).collect();
+            let cov_interpolated = ArrayD::from_shape_vec(IxDyn(without_last), flat).unwrap();
+            execute(cov_interpolated, prb, upper, &fit.thresholds)
+        }
+        (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
+            let (_, without_last) = cov.shape().split_last().unwrap();
+            let mut storage = None;
+            let mut workspace = PredictionWorkspace::new();
+            let flat: Vec<_> = cov
+                .rows()
+                .into_iter()
+                .map(|c| {
+                    let slice = maybe_allocate_view(&c, &mut storage);
+                    fit.interpolate_covariate_with_workspace(slice, &mut workspace)
+                })
+                .collect();
+            let cov_interpolated = ArrayD::from_shape_vec(IxDyn(without_last), flat).unwrap();
+            execute(cov_interpolated, prb, upper, &fit.thresholds)
+        }
+        (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., 1)",
+        }),
+        (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
+            shape: shape.to_vec(),
+            message: "expected an argument of shape (..., d)",
+        }),
+    }
+}
+
+/// Generic body of the `fit` constructor — one shape, eight monomorphizations dispatched
+/// by `IDR::fit` on the detected `(covariate_dtype, threshold_dtype, weight_dtype)` combo.
+/// Trades the old "PyArrayLike<f64, AllowTypeChange>" widening for a typed extract at the
+/// user's precision; storage in the returned `Fit<X, Y>` matches the user's input dtype, and
+/// weights are passed through at `W` so the kernels narrow once on read (to `f32` for the
+/// total-order family, `f64` for the OSQP-backed partial-order family).
+#[allow(clippy::too_many_arguments)]
+fn fit_typed<X: Float + Element, Y: Float + Element, W: Float + Element>(
+    py: Python<'_>,
+    y: Bound<'_, PyAny>,
+    x: Bound<'_, PyAny>,
+    y_observed: Option<PyArrayLike1<bool, AllowTypeChange>>,
+    sample_weight: Option<Bound<'_, PyAny>>,
+    x_order: Option<Vec<(String, Vec<usize>)>>,
+    response_order: StochasticOrder,
+    decreasing: bool,
+    subsamples: Option<usize>,
+    subsample_size: Option<Either<usize, f64>>,
+    replace: bool,
+    settings: EitherOrBoth<partial_order::Config, total_order::Config>,
+    seed: Option<u64>,
+    n_jobs: usize,
+    progress_bar: Option<&KdamProgress>,
+) -> PyResult<Fit<X, Y>>
+where
+    for<'a, 'py> Vec<X>: pyo3::FromPyObject<'a, 'py>,
+    for<'a, 'py> Vec<Y>: pyo3::FromPyObject<'a, 'py>,
+    for<'a, 'py> Vec<W>: pyo3::FromPyObject<'a, 'py>,
+{
+    let y: PyArrayLike1<Y, AllowTypeChange> = y.extract()?;
+    let x: PyArrayLikeDyn<X, AllowTypeChange> = x.extract()?;
+    let sample_weight: Option<PyArrayLike1<W, AllowTypeChange>> =
+        sample_weight.map(|s| s.extract()).transpose()?;
+
+    let mut covariates_allocation = None;
+    let x_parsed = parse_covariates(&x, &mut covariates_allocation)?;
+
+    assert_safe_view(&y)?;
+    if y.is_empty() {
+        return Err(PyValueError::new_err("y is empty, need at least some data"));
+    }
+    let mut responses_allocation = None;
+    let y_parsed = maybe_allocate(&y, &mut responses_allocation);
+
+    let mut observed_allocation = None;
+    let maybe_observed = y_observed
+        .as_ref()
+        .map(|array_like| maybe_allocate(array_like, &mut observed_allocation));
+
+    let mut weight_allocation = None;
+    let maybe_weights = sample_weight
+        .as_ref()
+        .map(|array_like| maybe_allocate(array_like, &mut weight_allocation));
+
+    let covariate_order = x_order
+        .map(|orders| {
+            CovariateGroups::parse(orders, x_parsed.dimension).map_err(|e| {
+                PyValueError::new_err(format!("covariate groups couldn't be parsed: {e}"))
+            })
+        })
+        .transpose()?;
+
+    let progress: &dyn ProgressTracker = match progress_bar {
+        Some(pb) => pb,
+        None => &NoProgress,
+    };
+
+    py.detach(|| {
+        let config = subagging::Config::parse(
+            subsamples,
+            subsample_size,
+            replace,
+            x_parsed.n,
+            seed,
+            n_jobs,
+        )?;
+        match (x_parsed.dimension, covariate_order, settings) {
+            (0, _, _) => unreachable!(),
+            (1, None, Right(settings) | Both(_, settings)) => subagging::Fit::fit::<W>(
+                x_parsed.slice,
+                y_parsed,
+                maybe_observed,
+                maybe_weights,
+                Increasing,
+                response_order,
+                decreasing,
+                (config, settings),
+                progress,
+            )
+            .map(|fit| Fit::Total {
+                fit,
+                squeeze: x_parsed.squeeze,
+            }),
+            (_, covariate_groups, Left(settings) | Both(settings, _)) => {
+                let order =
+                    covariate_groups.unwrap_or_else(|| CovariateGroups::empty(x_parsed.dimension));
+                subagging::Fit::fit::<W>(
+                    x_parsed.slice,
+                    y_parsed,
+                    maybe_observed,
+                    maybe_weights,
+                    order,
+                    response_order,
+                    decreasing,
+                    (config, settings),
+                    progress,
+                )
+                .map(Fit::Partial)
+            }
+            _ => Err(Error::CovariateDimensionMismatch {
+                shape: if x_parsed.squeeze {
+                    vec![x_parsed.n]
+                } else {
+                    vec![x_parsed.n, x_parsed.dimension]
+                },
+                message: "found settings which relate to a different covariate dimension",
+            }),
+        }
+    })
+    .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 #[allow(non_snake_case)]
@@ -171,10 +749,10 @@ impl IDR {
     )]
     fn fit(
         py: Python,
-        y: PyArrayLike1<f64, AllowTypeChange>,
-        X: PyArrayLikeDyn<f64, AllowTypeChange>,
+        y: Bound<'_, PyAny>,
+        X: Bound<'_, PyAny>,
         y_observed: Option<PyArrayLike1<bool, AllowTypeChange>>,
-        sample_weight: Option<PyArrayLike1<f64, AllowTypeChange>>,
+        sample_weight: Option<Bound<'_, PyAny>>,
         X_order: Option<Vec<(String, Vec<usize>)>>,
         y_order: Option<&str>,
         decreasing: bool,
@@ -186,34 +764,16 @@ impl IDR {
         n_jobs: usize,
         progress: bool,
     ) -> PyResult<Self> {
-        let mut covariates_allocation = None;
-        let x_parsed = parse_covariates(&X, &mut covariates_allocation)?;
-
-        assert_safe_view_f64(&y)?;
-        if y.is_empty() {
-            return Err(PyValueError::new_err("y is empty, need at least some data"));
-        }
-        let mut responses_allocation = None;
-        let y_parsed = maybe_allocate(&y, &mut responses_allocation);
-
-        let mut observed_allocation = None;
-        let maybe_observed = y_observed
+        // Pick the storage precision from the user's input dtypes. Each (X, Y) combo lands
+        // in its own FitImpl variant — no internal f64-widening. Weights carry a separate
+        // dtype `W`; we detect it independently so f32 weights flow without a widen, and
+        // default to f64 when no weight is provided (the impl will narrow once on read).
+        let covariate_dtype = detect_input_dtype(&X);
+        let threshold_dtype = detect_input_dtype(&y);
+        let weight_dtype = sample_weight
             .as_ref()
-            .map(|array_like| maybe_allocate(array_like, &mut observed_allocation));
-
-        let mut weight_allocation = None;
-        let maybe_weights = sample_weight
-            .as_ref()
-            .map(|array_like| maybe_allocate(array_like, &mut weight_allocation));
-
-        let covariate_order = X_order
-            .map(|orders| {
-                CovariateGroups::parse(orders, x_parsed.dimension).map_err(|e| {
-                    PyValueError::new_err(format!("covariate groups couldn't be parsed: {e}"))
-                })
-            })
-            .transpose()?;
-        // covariate_order is not used anymore if the covariate is one-dimensional
+            .map(detect_input_dtype)
+            .unwrap_or(InputDtype::F64);
 
         let response_order = y_order
             .map(|name| {
@@ -223,7 +783,6 @@ impl IDR {
             })
             .transpose()?
             .unwrap_or(StochasticOrder::StochasticDominance);
-
         let settings =
             parse_config(settings, py).map_err(|e| PyValueError::new_err(e.to_string()))?;
 
@@ -231,72 +790,63 @@ impl IDR {
             ensure_notebook_mode_set(py);
             KdamProgress::new()
         });
-        let progress: &dyn ProgressTracker = match &progress_bar {
-            Some(pb) => pb,
-            None => &NoProgress,
-        };
 
-        let fit = py.detach(|| {
-            let config = subagging::Config::parse(
-                subsamples,
-                subsample_size,
-                replace,
-                x_parsed.n,
-                seed,
-                n_jobs,
-            )?;
-            match (x_parsed.dimension, covariate_order, settings) {
-                (0, _, _) => unreachable!(),
-                (1, None, Right(settings) | Both(_, settings)) => {
-                    subagging::Fit::<total_order::Fit>::fit(
-                        x_parsed.slice,
-                        y_parsed,
-                        maybe_observed,
-                        maybe_weights,
-                        Increasing,
-                        response_order,
-                        decreasing,
-                        (config, settings),
-                        progress,
-                    )
-                    .map(|fit| Fit::Total {
-                        fit,
-                        squeeze: x_parsed.squeeze,
-                    })
-                }
-                (_, covariate_groups, Left(settings) | Both(settings, _)) => {
-                    let order = covariate_groups
-                        .unwrap_or_else(|| CovariateGroups::empty(x_parsed.dimension));
-                    subagging::Fit::<partial_order::Fit>::fit(
-                        x_parsed.slice,
-                        y_parsed,
-                        maybe_observed,
-                        maybe_weights,
-                        order,
-                        response_order,
-                        decreasing,
-                        (config, settings),
-                        progress,
-                    )
-                    .map(Fit::Partial)
-                }
-                _ => Err(Error::CovariateDimensionMismatch {
-                    shape: if x_parsed.squeeze {
-                        vec![x_parsed.n]
-                    } else {
-                        vec![x_parsed.n, x_parsed.dimension]
-                    },
-                    message: "found settings which relate to a different covariate dimension",
-                }),
+        // Dispatch over the 2×2×2 = 8 (X, Y, W) precision combos. Each leaf calls
+        // `fit_typed::<X, Y, W>` and wraps the result in the matching `FitImpl` variant.
+        macro_rules! dispatch_fit {
+            ($variant:ident, $x:ty, $y:ty, $w:ty) => {
+                fit_typed::<$x, $y, $w>(
+                    py,
+                    y,
+                    X,
+                    y_observed,
+                    sample_weight,
+                    X_order,
+                    response_order,
+                    decreasing,
+                    subsamples,
+                    subsample_size,
+                    replace,
+                    settings,
+                    seed,
+                    n_jobs,
+                    progress_bar.as_ref(),
+                )
+                .map(FitImpl::$variant)
+            };
+        }
+        let inner = match (covariate_dtype, threshold_dtype, weight_dtype) {
+            (InputDtype::F32, InputDtype::F32, InputDtype::F32) => {
+                dispatch_fit!(F32F32, f32, f32, f32)
             }
-        });
+            (InputDtype::F32, InputDtype::F32, InputDtype::F64) => {
+                dispatch_fit!(F32F32, f32, f32, f64)
+            }
+            (InputDtype::F32, InputDtype::F64, InputDtype::F32) => {
+                dispatch_fit!(F32F64, f32, f64, f32)
+            }
+            (InputDtype::F32, InputDtype::F64, InputDtype::F64) => {
+                dispatch_fit!(F32F64, f32, f64, f64)
+            }
+            (InputDtype::F64, InputDtype::F32, InputDtype::F32) => {
+                dispatch_fit!(F64F32, f64, f32, f32)
+            }
+            (InputDtype::F64, InputDtype::F32, InputDtype::F64) => {
+                dispatch_fit!(F64F32, f64, f32, f64)
+            }
+            (InputDtype::F64, InputDtype::F64, InputDtype::F32) => {
+                dispatch_fit!(F64F64, f64, f64, f32)
+            }
+            (InputDtype::F64, InputDtype::F64, InputDtype::F64) => {
+                dispatch_fit!(F64F64, f64, f64, f64)
+            }
+        }?;
 
         if let Some(pb) = &progress_bar {
             pb.finish();
         }
 
-        fit.map(|fit| IDR { inner: fit })
-            .map_err(|validation_error| PyValueError::new_err(validation_error.to_string()))
+        Ok(IDR { inner })
     }
 
     /// Predict the conditional mean.
@@ -315,52 +865,37 @@ impl IDR {
     /// numpy.ndarray
     ///     Predicted conditional means. The trailing covariate dimension is
     ///     consumed, so the output shape is the input shape without the last
-    ///     axis (or unchanged for squeezed univariate input).
+    ///     axis (or unchanged for squeezed univariate input). The dtype
+    ///     matches the model's response dtype (``thresholds.dtype``): f64
+    ///     for models fitted with f64 responses, f32 for f32 responses. The
+    ///     trapezoidal-sum integral is accumulated in f64 internally and
+    ///     narrowed at the return, so f32 outputs stay accurate to f64
+    ///     round-off for n_thresholds well above 10⁵.
+    #[allow(clippy::type_complexity)]
     fn predict<'py>(
         &self,
         py: Python<'py>,
         X: PyArrayLikeDyn<f64, AllowTypeChange>,
-    ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
-        let cov_array = X.as_array();
-        let array = match (&self.inner, cov_array.shape()) {
-            (Fit::Total { fit, squeeze: true }, _) => Ok(cov_array.map(|&c| fit.mean(c))),
-            (
-                Fit::Total {
-                    fit,
-                    squeeze: false,
-                },
-                &[.., 1],
-            ) => {
-                let (_, out_shape) = cov_array.shape().split_last().unwrap();
-                // Compute result in a flat array to avoid copying while dropping the last dim
-                let result = X.as_array().iter().map(|&c| fit.mean(c)).collect();
-                Ok(ArrayD::from_shape_vec(IxDyn(out_shape), result).unwrap())
+    ) -> PyResult<Either<Bound<'py, PyArrayDyn<f64>>, Bound<'py, PyArrayDyn<f32>>>> {
+        let cov = X.as_array();
+        match &self.inner {
+            FitImpl::F32F64(_) | FitImpl::F64F64(_) => {
+                let array = py.detach(|| match &self.inner {
+                    FitImpl::F32F64(f) => predict_of(f, cov.view()),
+                    FitImpl::F64F64(f) => predict_of(f, cov.view()),
+                    _ => unreachable!(),
+                });
+                Ok(Either::Left(finalize(array, py)?))
             }
-            (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
-                let (_, out_shape) = shape.split_last().unwrap();
-                let mut storage = None;
-                let view = X.as_array();
-                let result = view
-                    .rows()
-                    .into_iter()
-                    .map(|row| {
-                        let slice = maybe_allocate_view(&row, &mut storage);
-                        fit.mean(slice)
-                    })
-                    .collect();
-                Ok(ArrayD::from_shape_vec(IxDyn(out_shape), result).unwrap())
+            FitImpl::F32F32(_) | FitImpl::F64F32(_) => {
+                let array = py.detach(|| match &self.inner {
+                    FitImpl::F32F32(f) => predict_of(f, cov.view()),
+                    FitImpl::F64F32(f) => predict_of(f, cov.view()),
+                    _ => unreachable!(),
+                });
+                Ok(Either::Right(finalize(array, py)?))
             }
-            (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., 1)",
-            }),
-            (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., d)",
-            }),
-        };
-
-        finalize(array, py)
+        }
     }
 
     /// Predict the full CDF at all training thresholds.
@@ -384,51 +919,9 @@ impl IDR {
         &self,
         py: Python<'py>,
         X: PyArrayLikeDyn<f64, AllowTypeChange>,
-    ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
-        let covariates_array = X.as_array();
-        let in_shape = covariates_array.shape();
-        let array = py.detach(|| match (&self.inner, in_shape) {
-            (Fit::Total { fit, squeeze: true }, _) => {
-                let mut out_shape = in_shape.to_vec();
-                out_shape.push(fit.n_threshold());
-                let result = covariates_array.iter().flat_map(|&c| fit.cdf(c)).collect();
-                Ok(ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap())
-            }
-            (
-                Fit::Total {
-                    fit,
-                    squeeze: false,
-                },
-                &[.., 1],
-            ) => {
-                let (_, base_shape) = in_shape.split_last().unwrap();
-                let mut out_shape = base_shape.to_vec();
-                out_shape.push(fit.n_threshold());
-                let result = covariates_array.iter().flat_map(|&c| fit.cdf(c)).collect();
-                Ok(ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap())
-            }
-            (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
-                let (_, base_shape) = in_shape.split_last().unwrap();
-                let mut out_shape = base_shape.to_vec();
-                out_shape.push(fit.n_threshold());
-                let mut result = Vec::with_capacity(out_shape.iter().product());
-                let mut storage = None;
-                for row in covariates_array.rows() {
-                    let slice = maybe_allocate_view(&row, &mut storage);
-                    result.extend(fit.cdf(slice))
-                }
-                Ok(ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap())
-            }
-            (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., 1)",
-            }),
-            (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., d)",
-            }),
-        });
-
+    ) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
+        let cov = X.as_array();
+        let array = py.detach(|| dispatch_dtype!(&self.inner, fit => cdf_of(fit, cov.view())));
         finalize(array, py)
     }
 
@@ -462,73 +955,11 @@ impl IDR {
         py: Python<'py>,
         X: PyArrayLikeDyn<f64, AllowTypeChange>,
         y: PyArrayLikeDyn<f64, AllowTypeChange>,
-    ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
+    ) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
         let cov = X.as_array();
         let thr = y.as_array();
-
-        fn execute<I: CovariateInterpolator>(
-            cov_interpolated: ArrayD<I>,
-            thr: ArrayD<ResponseCoordinate>,
-        ) -> Result<ArrayD<f64>, Error> {
-            let broadcasted = broadcast(cov_interpolated.shape(), thr.shape())?;
-            let mut output = ArrayD::zeros(IxDyn(&broadcasted));
-            Zip::from(&mut output)
-                .and_broadcast(&cov_interpolated)
-                .and_broadcast(&thr)
-                .for_each(|out, c, &t| {
-                    *out = c.interpolate(t);
-                });
-            Ok(output)
-        }
-
-        let result = py.detach(|| match (&self.inner, cov.shape()) {
-            (Fit::Total { fit, squeeze: true }, _) => {
-                let cov_coordinates = cov.map(|&c| fit.interpolate_covariate(c));
-                let thr_coordinates = thr.map(|&t| fit.get_response_coordinate(t));
-                execute(cov_coordinates, thr_coordinates)
-            }
-            (
-                Fit::Total {
-                    fit,
-                    squeeze: false,
-                },
-                &[.., 1],
-            ) => {
-                let (_, without_last) = cov.shape().split_last().unwrap();
-                let cov_coordinates_flat =
-                    cov.iter().map(|&c| fit.interpolate_covariate(c)).collect();
-                let cov_coordinates =
-                    ArrayD::from_shape_vec(IxDyn(without_last), cov_coordinates_flat).unwrap();
-                let thr_coordinates = thr.map(|&t| fit.get_response_coordinate(t));
-                execute(cov_coordinates, thr_coordinates)
-            }
-            (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
-                let (_, without_last) = cov.shape().split_last().unwrap();
-                let mut storage = None;
-                let mut workspace = PredictionWorkspace::new();
-                let cov_coordinates_flat = cov
-                    .rows()
-                    .into_iter()
-                    .map(|c| {
-                        let slice = maybe_allocate_view(&c, &mut storage);
-                        fit.interpolate_covariate_with_workspace(slice, &mut workspace)
-                    })
-                    .collect();
-                let cov_coordinates =
-                    ArrayD::from_shape_vec(without_last, cov_coordinates_flat).unwrap();
-                let thr_coordinates = thr.map(|&t| fit.get_response_coordinate(t));
-                execute(cov_coordinates, thr_coordinates)
-            }
-            (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., 1)",
-            }),
-            (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., d)",
-            }),
-        });
-
+        let result = py
+            .detach(|| dispatch_dtype!(&self.inner, fit => cdf_at_of(fit, cov.view(), thr.view())));
         finalize(result, py)
     }
 
@@ -558,17 +989,24 @@ impl IDR {
         py: Python<'py>,
         X: PyArrayLike1<f64, AllowTypeChange>,
         y: PyArrayLike1<f64, AllowTypeChange>,
-    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let Fit::Total { fit, squeeze: true } = &self.inner else {
-            return Err(PyValueError::new_err(Error::OrderMismatch.to_string()));
-        };
-
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
         let cov = X.as_array();
         let thr = y.as_array();
-        let flat = fit
-            .predict_grid(cov.iter().copied(), thr.iter().copied())
-            .collect();
-
+        let flat: Vec<f32> = match &self.inner {
+            FitImpl::F32F32(Fit::Total { fit, squeeze: true }) => fit
+                .predict_grid(cov.iter().map(|&v| v as f32), thr.iter().map(|&v| v as f32))
+                .collect(),
+            FitImpl::F32F64(Fit::Total { fit, squeeze: true }) => fit
+                .predict_grid(cov.iter().map(|&v| v as f32), thr.iter().copied())
+                .collect(),
+            FitImpl::F64F32(Fit::Total { fit, squeeze: true }) => fit
+                .predict_grid(cov.iter().copied(), thr.iter().map(|&v| v as f32))
+                .collect(),
+            FitImpl::F64F64(Fit::Total { fit, squeeze: true }) => fit
+                .predict_grid(cov.iter().copied(), thr.iter().copied())
+                .collect(),
+            _ => return Err(PyValueError::new_err(Error::OrderMismatch.to_string())),
+        };
         let result = Array2::from_shape_vec([cov.len(), thr.len()], flat).unwrap();
         Ok(result.into_pyarray(py))
     }
@@ -614,66 +1052,9 @@ impl IDR {
     ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
         let cov = X.as_array();
         let prb = q.as_array();
-
-        fn execute(
-            cov_interpolated: ArrayD<impl CovariateInterpolator>,
-            prb: ArrayViewD<f64>,
-            upper: bool,
-            thresholds: &[f64],
-        ) -> Result<ArrayD<f64>, Error> {
-            let broadcasted = broadcast(cov_interpolated.shape(), prb.shape())?;
-            let mut output = ArrayD::zeros(IxDyn(&broadcasted));
-            Zip::from(&mut output)
-                .and_broadcast(&cov_interpolated)
-                .and_broadcast(&prb)
-                .for_each(|out, c, &p| {
-                    *out = quantile(c, p, upper, thresholds);
-                });
-            Ok(output)
-        }
-
-        let output = py.detach(|| match (&self.inner, cov.shape()) {
-            (Fit::Total { fit, squeeze: true }, _) => {
-                let cov_interpolated = cov.map(|&c| fit.interpolate_covariate(c));
-                execute(cov_interpolated, prb, upper, &fit.thresholds)
-            }
-            (
-                Fit::Total {
-                    fit,
-                    squeeze: false,
-                },
-                &[.., 1],
-            ) => {
-                let (_, without_last) = cov.shape().split_last().unwrap();
-                let flat = cov.iter().map(|&c| fit.interpolate_covariate(c)).collect();
-                let cov_interpolated = ArrayD::from_shape_vec(IxDyn(without_last), flat).unwrap();
-                execute(cov_interpolated, prb, upper, &fit.thresholds)
-            }
-            (Fit::Partial(fit), shape) if shape.last() == Some(&fit.covariate_groups.dimension) => {
-                let (_, without_last) = cov.shape().split_last().unwrap();
-                let mut storage = None;
-                let mut workspace = PredictionWorkspace::new();
-                let flat = cov
-                    .rows()
-                    .into_iter()
-                    .map(|c| {
-                        let slice = maybe_allocate_view(&c, &mut storage);
-                        fit.interpolate_covariate_with_workspace(slice, &mut workspace)
-                    })
-                    .collect();
-                let cov_interpolated = ArrayD::from_shape_vec(IxDyn(without_last), flat).unwrap();
-                execute(cov_interpolated, prb, upper, &fit.thresholds)
-            }
-            (Fit::Total { squeeze: false, .. }, shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., 1)",
-            }),
-            (Fit::Partial(_), shape) => Err(Error::CovariateDimensionMismatch {
-                shape: shape.to_vec(),
-                message: "expected an argument of shape (..., d)",
-            }),
-        });
-
+        let output = py.detach(
+            || dispatch_dtype!(&self.inner, fit => quantile_of(fit, cov.view(), prb.view(), upper)),
+        );
         finalize(output, py)
     }
 
@@ -684,30 +1065,31 @@ impl IDR {
     /// 2-D array with one column. For multivariate models this is a 2-D
     /// array of shape ``(n_unique, d)``.
     #[getter]
-    fn X<'py>(this: Bound<'py, Self>) -> Bound<'py, PyArrayDyn<f64>> {
-        let me = this.borrow();
-        let array_view = match &me.inner {
-            Fit::Partial(fit) => {
-                let covariate_dimension = fit.covariate_groups.dimension;
-                let n_covariate = fit.covariates.len() / covariate_dimension;
-                ArrayView2::from_shape((n_covariate, covariate_dimension), &fit.covariates)
-                    .unwrap()
-                    .into_dyn()
+    fn X<'py>(
+        this: Bound<'py, Self>,
+    ) -> Either<Bound<'py, PyArrayDyn<f64>>, Bound<'py, PyArrayDyn<f32>>> {
+        // Build a zero-copy view over the typed covariate buffer (storage matches the
+        // user's input dtype) and expose it as a read-only NumPy array.
+        match &this.borrow().inner {
+            FitImpl::F64F64(_) | FitImpl::F64F32(_) => {
+                let arr = match &this.borrow().inner {
+                    FitImpl::F64F64(f) => x_view(f, &this),
+                    FitImpl::F64F32(f) => x_view(f, &this),
+                    _ => unreachable!(),
+                };
+                arr.readwrite().make_nonwriteable();
+                Either::Left(arr)
             }
-            Fit::Total { fit, squeeze: true } => ArrayView1::from(&fit.covariates).into_dyn(),
-            Fit::Total {
-                fit,
-                squeeze: false,
-            } => ArrayView2::from_shape((fit.covariates.len(), 1), &fit.covariates)
-                .unwrap()
-                .into_dyn(),
-        };
-
-        // SAFETY: data lives inside `this` and won't be reallocated. We set the pyclass `this` as
-        // the base; Python keeps `this` alive while the NumPy array exists.
-        let arr = unsafe { PyArrayDyn::borrow_from_array(&array_view, this.into_any()) };
-        arr.readwrite().make_nonwriteable(); // now Python sees a read-only view
-        arr
+            FitImpl::F32F32(_) | FitImpl::F32F64(_) => {
+                let arr = match &this.borrow().inner {
+                    FitImpl::F32F32(f) => x_view(f, &this),
+                    FitImpl::F32F64(f) => x_view(f, &this),
+                    _ => unreachable!(),
+                };
+                arr.readwrite().make_nonwriteable();
+                Either::Right(arr)
+            }
+        }
     }
 
     /// The unique training response thresholds (read-only).
@@ -715,23 +1097,35 @@ impl IDR {
     /// A sorted 1-D array of the distinct response values observed during
     /// training. These are the points at which ``cdf`` returns values.
     #[getter]
-    fn thresholds<'py>(this: Bound<'py, Self>) -> Bound<'py, PyArray1<f64>> {
-        let me = this.borrow();
-        let slice = match &me.inner {
-            Fit::Partial(fit) => &fit.thresholds,
-            Fit::Total { fit, .. } => &fit.thresholds,
-        };
-        let array_view = ArrayView1::from_shape(slice.len(), slice).unwrap();
-        // SAFETY: data lives inside `this` and won't be reallocated. We set the pyclass `this` as
-        // the base; Python keeps `this` alive while the NumPy array exists.
-        let arr = unsafe { PyArray1::borrow_from_array(&array_view, this.into_any()) };
-        arr.readwrite().make_nonwriteable(); // now Python sees a read-only view
-        arr
+    fn thresholds<'py>(
+        this: Bound<'py, Self>,
+    ) -> Either<Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f32>>> {
+        match &this.borrow().inner {
+            FitImpl::F32F64(_) | FitImpl::F64F64(_) => {
+                let arr = match &this.borrow().inner {
+                    FitImpl::F32F64(f) => thresholds_view(f, &this),
+                    FitImpl::F64F64(f) => thresholds_view(f, &this),
+                    _ => unreachable!(),
+                };
+                arr.readwrite().make_nonwriteable();
+                Either::Left(arr)
+            }
+            FitImpl::F32F32(_) | FitImpl::F64F32(_) => {
+                let arr = match &this.borrow().inner {
+                    FitImpl::F32F32(f) => thresholds_view(f, &this),
+                    FitImpl::F64F32(f) => thresholds_view(f, &this),
+                    _ => unreachable!(),
+                };
+                arr.readwrite().make_nonwriteable();
+                Either::Right(arr)
+            }
+        }
     }
 
     fn __repr__(&self) -> String {
         let (order, n_covariates, covariate_dim, n_thresholds, n_subsamples, increasing) =
             self.summary();
+        let (x_dtype, y_dtype) = self.dtype_names();
         let direction = if increasing {
             "increasing"
         } else {
@@ -743,6 +1137,8 @@ impl IDR {
             format!("thresholds={n_thresholds}"),
             format!("order='{order}'"),
             format!("direction='{direction}'"),
+            format!("X={x_dtype}"),
+            format!("y={y_dtype}"),
         ];
         if n_subsamples > 1 {
             parts.push(format!("subsamples={n_subsamples}"));
@@ -753,6 +1149,7 @@ impl IDR {
     fn __str__(&self) -> String {
         let (order, n_covariates, covariate_dim, n_thresholds, n_subsamples, increasing) =
             self.summary();
+        let (x_dtype, y_dtype) = self.dtype_names();
         let direction = if increasing {
             "increasing"
         } else {
@@ -762,11 +1159,11 @@ impl IDR {
             "Isotonic Distributional Regression model".to_string(),
             format!("  Order:       {order} ({direction})"),
             format!(
-                "  Covariates:  {n_covariates} unique value{} ({covariate_dim}-dimensional)",
+                "  Covariates:  {n_covariates} unique value{} ({covariate_dim}-dimensional, {x_dtype})",
                 if n_covariates == 1 { "" } else { "s" }
             ),
             format!(
-                "  Thresholds:  {n_thresholds} unique value{}",
+                "  Thresholds:  {n_thresholds} unique value{} ({y_dtype})",
                 if n_thresholds == 1 { "" } else { "s" }
             ),
         ];
@@ -776,7 +1173,8 @@ impl IDR {
         lines.join("\n")
     }
 
-    // Pickle: return (callable, args)
+    // Pickle: return (callable, args). The variant of `FitImpl` is the dtype combo, so
+    // bincode round-trips it directly via serde's variant tag.
     fn __reduce_ex__<'py>(&self, py: Python<'py>, _protocol: u8) -> PyResult<Bound<'py, PyTuple>> {
         let buf = bincode::serde::encode_to_vec(&self.inner, bincode::config::standard())
             .map_err(|e| PyException::new_err(e.to_string()))?;
@@ -789,8 +1187,9 @@ impl IDR {
 
     #[classmethod]
     fn _from_bytes(_cls: &Bound<'_, PyType>, b: &[u8]) -> PyResult<Self> {
-        let (inner, _) = bincode::serde::decode_from_slice(b, bincode::config::standard())
-            .map_err(|e| PyException::new_err(e.to_string()))?;
+        let (inner, _): (FitImpl, _) =
+            bincode::serde::decode_from_slice(b, bincode::config::standard())
+                .map_err(|e| PyException::new_err(e.to_string()))?;
         Ok(IDR { inner })
     }
 
@@ -799,15 +1198,30 @@ impl IDR {
     /// Parameters
     /// ----------
     /// cdfs : array_like, shape (n_covariates, n_thresholds)
-    ///     Matrix of CDF values (one row per unique covariate).
+    ///     Matrix of CDF values (one row per unique covariate). Interpreted
+    ///     as ``np.float32`` internally, which matches the algorithm's
+    ///     storage precision: CDFs are always kept in f32 inside an IDR fit
+    ///     regardless of the covariate/threshold dtype. ``np.float64`` input
+    ///     is accepted but silently narrowed to ``np.float32`` with no
+    ///     warning. The narrowed values are bit-identical to what a fresh
+    ///     ``IDR(...)`` fit would produce (storage is f32 either way), but
+    ///     precision is lost relative to the user's f64 input — pre-round
+    ///     to f32 on the caller side if you want to make the narrowing
+    ///     explicit. Pass ``np.float32`` to avoid the silent cast.
     /// X : array_like, shape (n_covariates,) or (n_covariates, d)
-    ///     Unique covariate values in strictly increasing lexicographic order.
+    ///     Unique covariate values in strictly increasing lexicographic
+    ///     order. The covariate storage dtype follows the array's dtype
+    ///     (``np.float32`` or ``np.float64``).
     /// y : array_like, shape (n_thresholds,)
-    ///     Unique thresholds in strictly increasing order.
+    ///     Unique thresholds in strictly increasing order. The threshold
+    ///     storage dtype follows the array's dtype (``np.float32`` or
+    ///     ``np.float64``).
     /// global_cdf : array_like, shape (n_thresholds,), optional
     ///     For multivariate covariates, the CDF prediction for covariates
     ///     that are incomparable to every training covariate. When omitted,
     ///     approximated by the unweighted average of the per-covariate CDFs.
+    ///     Same dtype convention as ``cdfs``: interpreted as ``np.float32``,
+    ///     and ``np.float64`` input is silently narrowed.
     ///
     /// Returns
     /// -------
@@ -824,150 +1238,72 @@ impl IDR {
     #[pyo3(signature = (cdfs, X, y, global_cdf=None))]
     fn from_cdfs(
         _cls: &Bound<'_, PyType>,
-        cdfs: PyArrayLike2<f64, AllowTypeChange>,
-        X: PyArrayLikeDyn<f64, AllowTypeChange>,
-        y: PyArrayLike1<f64, AllowTypeChange>,
-        global_cdf: Option<PyArrayLike1<f64, AllowTypeChange>>,
+        cdfs: PyArrayLike2<f32, AllowTypeChange>,
+        X: Bound<'_, PyAny>,
+        y: Bound<'_, PyAny>,
+        global_cdf: Option<PyArrayLike1<f32, AllowTypeChange>>,
     ) -> PyResult<Self> {
-        let mut covariates_allocation = None;
-        let covariates = parse_covariates(&X, &mut covariates_allocation)?;
-
-        let cdfs_array = cdfs.as_array();
-        let thresholds_array = y.as_array();
-
-        let n_cdfs_rows = cdfs_array.shape()[0];
-        let n_cdfs_cols = cdfs_array.shape()[1];
-        let n_thresh = thresholds_array.len();
-
-        // Dimension checks
-        if n_cdfs_rows != covariates.n {
-            let n = covariates.n;
-            return Err(PyValueError::new_err(format!(
-                "Number of CDF rows ({n_cdfs_rows}) must match number of covariates ({n})"
-            )));
-        }
-        if n_cdfs_cols != n_thresh {
-            return Err(PyValueError::new_err(format!(
-                "Number of CDF columns ({n_cdfs_cols}) must match number of thresholds ({n_thresh})"
-            )));
-        }
-
-        let thresholds_vec: Vec<f64> = thresholds_array.iter().copied().collect();
-        if !thresholds_vec.windows(2).all(|w| w[0] < w[1]) {
-            return Err(PyValueError::new_err(
-                "Thresholds must be sorted in strictly increasing order",
-            ));
-        }
-
-        // Check covariates are sorted in strictly increasing lexicographic order
-        for (left, right) in covariates
-            .slice
-            .chunks_exact(covariates.dimension)
-            .zip(covariates.slice.chunks_exact(covariates.dimension).skip(1))
-        {
-            if lexicographic_cmp(left, right) != Ordering::Less {
-                return Err(PyValueError::new_err(
-                    "Covariates must be sorted in strictly increasing lexicographic order and contain no duplicates",
-                ));
+        // Pick the storage precision from the user's input dtypes (same convention as `fit`).
+        let covariate_dtype = detect_input_dtype(&X);
+        let threshold_dtype = detect_input_dtype(&y);
+        let inner = match (covariate_dtype, threshold_dtype) {
+            (InputDtype::F32, InputDtype::F32) => {
+                from_cdfs_typed::<f32, f32>(cdfs, X, y, global_cdf).map(FitImpl::F32F32)
             }
+            (InputDtype::F32, InputDtype::F64) => {
+                from_cdfs_typed::<f32, f64>(cdfs, X, y, global_cdf).map(FitImpl::F32F64)
+            }
+            (InputDtype::F64, InputDtype::F32) => {
+                from_cdfs_typed::<f64, f32>(cdfs, X, y, global_cdf).map(FitImpl::F64F32)
+            }
+            (InputDtype::F64, InputDtype::F64) => {
+                from_cdfs_typed::<f64, f64>(cdfs, X, y, global_cdf).map(FitImpl::F64F64)
+            }
+        }?;
+        Ok(IDR { inner })
+    }
+}
+
+/// Body of `summary` — generic over the inner `Fit<X, Y>`.
+fn summary_of<X: Float, Y: Float>(
+    fit: &Fit<X, Y>,
+) -> (&'static str, usize, usize, usize, usize, bool) {
+    match fit {
+        Fit::Total { fit, .. } => (
+            "total",
+            fit.covariates.len(),
+            1,
+            fit.thresholds.len(),
+            fit.fits.len(),
+            fit.fits.first().is_none_or(|f| f.increasing),
+        ),
+        Fit::Partial(fit) => {
+            let dim = fit.covariate_groups.dimension;
+            (
+                "partial",
+                fit.covariates.len() / dim,
+                dim,
+                fit.thresholds.len(),
+                fit.fits.len(),
+                fit.fits.first().is_none_or(|f| f.increasing),
+            )
         }
+    }
+}
 
-        // Flatten CDFs in row-major order (= covariate-major, which is the internal layout)
-        let cdfs_flat: Vec<f64> = cdfs_array.iter().copied().collect();
+impl IDR {
+    /// Returns (order, n_covariates, covariate_dim, n_thresholds, n_subsamples, increasing).
+    fn summary(&self) -> (&'static str, usize, usize, usize, usize, bool) {
+        dispatch_dtype!(&self.inner, fit => summary_of(fit))
+    }
 
-        let covariates_owned = covariates.slice.to_vec();
-
-        match covariates.dimension {
-            0 => unreachable!(),
-            1 => {
-                let subagging_covariates = covariates_owned.clone();
-                let inner_fit = total_order::Fit {
-                    increasing: true,
-                    cdfs: cdfs_flat,
-                    covariates: covariates_owned,
-                    thresholds: thresholds_vec.clone(),
-                    quality_indicators: total_order::QualityIndicators { epsilon: f64::NAN },
-                };
-                let subagging_fit = subagging::Fit::from_parts(
-                    inner_fit,
-                    subagging_covariates,
-                    thresholds_vec,
-                    Increasing,
-                );
-                Ok(IDR {
-                    inner: Fit::Total {
-                        fit: subagging_fit,
-                        squeeze: covariates.squeeze,
-                    },
-                })
-            }
-            _ => {
-                let covariate_groups = CovariateGroups::empty(covariates.dimension);
-
-                let (ordering_info, edges_covariates) = if covariates.n > 0 {
-                    let edges = derive_transitive_reduction(
-                        &covariates_owned,
-                        covariates.n,
-                        covariates.dimension,
-                    );
-                    (
-                        OrderingInfo::from_edges(edges, covariates.n),
-                        covariates_owned.clone(),
-                    )
-                } else {
-                    (OrderingInfo::empty(), Vec::new())
-                };
-
-                let global_cdf_vec = if let Some(gcdf) = global_cdf {
-                    let gcdf_array = gcdf.as_array();
-                    if gcdf_array.len() != n_thresh {
-                        return Err(PyValueError::new_err(format!(
-                            "global_cdf length ({}) must match number of thresholds ({n_thresh})",
-                            gcdf_array.len(),
-                        )));
-                    }
-                    gcdf_array.iter().copied().collect()
-                } else if covariates.n > 0 {
-                    // Unweighted average of per-covariate CDFs; a rough approximation
-                    // since the true global CDF should be weighted by the number of
-                    // observations at each covariate.
-                    let mut avg = vec![0.0; n_thresh];
-                    for i in 0..covariates.n {
-                        for j in 0..n_thresh {
-                            avg[j] += cdfs_flat[i * n_thresh + j];
-                        }
-                    }
-                    for v in &mut avg {
-                        *v /= covariates.n as f64;
-                    }
-                    avg
-                } else {
-                    Vec::new()
-                };
-
-                let inner_fit = partial_order::Fit {
-                    increasing: true,
-                    cdfs: cdfs_flat,
-                    global_cdf: global_cdf_vec,
-                    covariate_groups: covariate_groups.clone(),
-                    covariates: covariates_owned,
-                    ordering_info,
-                    thresholds: thresholds_vec.clone(),
-                    quality_indicators: QualityIndicators {
-                        precision: f64::NAN,
-                        convergence_fraction: f64::NAN,
-                    },
-                };
-                let subagging_fit = subagging::Fit::from_parts(
-                    inner_fit,
-                    edges_covariates,
-                    thresholds_vec,
-                    covariate_groups,
-                );
-                Ok(IDR {
-                    inner: Fit::Partial(subagging_fit),
-                })
-            }
+    /// NumPy-style dtype names for `.X` and `.thresholds`, derived from the FitImpl variant.
+    fn dtype_names(&self) -> (&'static str, &'static str) {
+        match &self.inner {
+            FitImpl::F32F32(_) => ("float32", "float32"),
+            FitImpl::F32F64(_) => ("float32", "float64"),
+            FitImpl::F64F32(_) => ("float64", "float32"),
+            FitImpl::F64F64(_) => ("float64", "float64"),
         }
     }
 }
@@ -1026,10 +1362,10 @@ fn ensure_notebook_mode_set(py: Python) {
     });
 }
 
-fn finalize(
-    result: Result<Array<f64, IxDyn>, Error>,
+fn finalize<T: numpy::Element>(
+    result: Result<Array<T, IxDyn>, Error>,
     py: Python,
-) -> PyResult<Bound<PyArrayDyn<f64>>> {
+) -> PyResult<Bound<PyArrayDyn<T>>> {
     match result {
         Ok(array) => Ok(array.into_pyarray(py)),
         Err(e) => Err(PyValueError::new_err(e.to_string())),
@@ -1043,11 +1379,11 @@ fn broadcast(covariate: &[usize], other: &[usize]) -> Result<Vec<usize>, Error> 
     })
 }
 
-fn parse_covariates<'a>(
-    covariates: &'a PyArrayLikeDyn<f64, AllowTypeChange>,
-    storage: &'a mut Option<Vec<f64>>,
-) -> PyResult<Covariates<'a>> {
-    assert_safe_view_f64(covariates)?;
+fn parse_covariates<'a, F: Float + Element>(
+    covariates: &'a PyArrayLikeDyn<F, AllowTypeChange>,
+    storage: &'a mut Option<Vec<F>>,
+) -> PyResult<Covariates<'a, F>> {
+    assert_safe_view(covariates)?;
 
     match covariates.shape() {
         &[0] => Err(PyValueError::new_err(
@@ -1081,8 +1417,8 @@ fn parse_covariates<'a>(
 /// Represents a 2d array.
 ///
 /// TODO: Replace with something from an existing library?
-struct Covariates<'a> {
-    slice: &'a [f64],
+struct Covariates<'a, F> {
+    slice: &'a [F],
     n: usize,
     dimension: usize,
     squeeze: bool,
@@ -1093,7 +1429,7 @@ fn parse_config(
     py: Python,
 ) -> Result<EitherOrBoth<partial_order::Config, total_order::Config>, Error> {
     let mut partial_order_config = partial_order::Config::default();
-    let mut total_order_config = total_order::Config::default();
+    let total_order_config = total_order::Config;
 
     let Some(mut config) = maybe_config else {
         return Ok(Both(partial_order_config, total_order_config));
@@ -1101,7 +1437,7 @@ fn parse_config(
 
     // Track whether any of the configs is modified
     let mut any_partial_order_options = false;
-    let mut any_total_order_options = false;
+    let any_total_order_options = false;
 
     // No fields are shared between them
 
@@ -1150,26 +1486,22 @@ fn parse_config(
         partial_order_config.osqp_settings = settings;
     }
 
-    // Total order config fields
-    if let Some(epsilon) = config.remove("epsilon") {
-        any_total_order_options = true;
-        let as_f64 = epsilon
-            .extract::<f64>(py)
-            .map_err(|_| {
-                Error::ConfigParseError("could not convert provided epsilon to a positive float")
-            })
-            .and_then(|e| {
-                if e > 0.0 {
-                    Ok(e)
-                } else {
-                    Err(Error::ConfigParseError(
-                        "epsilon should be strictly positive",
-                    ))
-                }
-            })?;
-        total_order_config.epsilon = as_f64;
+    // Reject any leftover top-level keys. Anything still in `config` here is unrecognized.
+    // `epsilon` is called out by name because older versions accepted it for the total-order
+    // path; silently ignoring it on upgrade would be a backwards-compatibility trap.
+    if let Some(key) = config.keys().next() {
+        if key == "epsilon" {
+            return Err(Error::ConfigParseError(
+                "unknown settings key: 'epsilon' was removed (total-order Config no longer has tunable parameters); known keys: 'osqp_settings'",
+            ));
+        }
+        return Err(Error::ConfigParseError(
+            "unknown settings key, known keys: 'osqp_settings'",
+        ));
     }
 
+    // Total-order Config has no tunable knobs at present, so `any_total_order_options` is always
+    // false. Keep the dispatch shape in case future total-order options are added.
     match (any_partial_order_options, any_total_order_options) {
         (false, false) => Ok(Both(partial_order_config, total_order_config)),
         (true, false) => Ok(Left(partial_order_config)),
@@ -1360,7 +1692,7 @@ fn isotonic_indexed<'py>(
             .for_each(|o, r, w| {
                 write_lane(
                     o,
-                    total_order::tonic_regression_pre_sorted::<D>(
+                    total_order::tonic_regression_pre_sorted::<D, f64, _>(
                         r.iter().copied().zip(w.iter().copied()),
                     ),
                 );
@@ -1469,7 +1801,7 @@ fn isotonic_1d_covariate<'py>(
                 if err.is_some() {
                     return;
                 }
-                let iter = total_order::tonic_regression::<D>(izip!(
+                let iter = total_order::tonic_regression::<D, f64, _>(izip!(
                     c.iter().copied(),
                     r.iter().copied(),
                     w.iter().copied(),
@@ -1659,24 +1991,24 @@ fn reconcile_length(output_length: &mut Option<usize>, this: usize) -> PyResult<
     }
 }
 
-fn assert_safe_view_f64<I>(array: &Bound<PyArray<f64, I>>) -> PyResult<()> {
+fn assert_safe_view<T: Element, I>(array: &Bound<PyArray<T, I>>) -> PyResult<()> {
     // 1) Endianness
     match array.as_untyped().dtype().is_native_byteorder() {
         Some(true) | None => {} // '=' or not applicable
         Some(false) => {
             return Err(PyValueError::new_err(
-                "float64 array is not native-endian (byte-swapped)",
+                "float array is not native-endian (byte-swapped)",
             ));
         }
     }
 
-    let align = align_of::<f64>(); // 8 on all modern platforms
+    let align = align_of::<T>();
 
     // 2) Data pointer alignment
     let data_ptr = array.data() as usize; // PyArrayMethods::data()
     if !data_ptr.is_multiple_of(align) {
         return Err(PyValueError::new_err(format!(
-            "unaligned data pointer for f64: ptr={:#x}, align={}",
+            "unaligned data pointer: ptr={:#x}, align={}",
             data_ptr, align
         )));
     }

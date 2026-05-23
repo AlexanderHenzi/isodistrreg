@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -60,57 +60,59 @@ class IDR:
         n_jobs: int = 1,
         progress: bool = False,
     ) -> None: ...
-    def predict(self, X: npt.ArrayLike) -> npt.NDArray[np.float64]: ...
+    def predict(
+        self, X: npt.ArrayLike
+    ) -> Union[npt.NDArray[np.float64], npt.NDArray[np.float32]]: ...
 
     """
     Predict the conditional mean (or point prediction) for each row in covariates.
 
     X: Array-like of any shape if fit argument had shape (n,), or array-like of shape (..., d) if fit argument had
         shape (n, d).
-    Returns: float64 ndarray.
+    Returns: ndarray whose dtype matches the model's response dtype (float64 if y was f64, float32 if y was f32).
     """
 
-    def cdf(self, X: npt.ArrayLike) -> npt.NDArray[np.float64]: ...
+    def cdf(self, X: npt.ArrayLike) -> npt.NDArray[np.float32]: ...
 
     """
     Predict conditional CDF values over the model’s internal grid for each row.
-    
+
     The thresholds to which the CDF values correspond can be accessed via the "thresholds" field.
 
     X: Array-like of any shape if fit argument had shape (n,), or array-like of shape (..., d) if fit argument had
         shape (n, d).
-    Returns: float64 ndarray of shape (..., t).
+    Returns: float32 ndarray of shape (..., t).
     """
 
     def cdf_at(
         self,
         X: npt.ArrayLike,
         y: npt.ArrayLike,
-    ) -> npt.NDArray[np.float64]: ...
+    ) -> npt.NDArray[np.float32]: ...
 
     """
     Predict the CDF at the specified covariates and thresholds.
-    
+
     X: Array-like of any shape if fit argument had shape (n,), or array-like of shape (..., d) if fit argument had
         shape (n, d).
-    y: Array-like of any shape broadcastable with X if fit argument had shape (n,), or broadcastable with all but the 
+    y: Array-like of any shape broadcastable with X if fit argument had shape (n,), or broadcastable with all but the
         last dimension of X if fit argument had shape (n, d).
-    Returns: float64 ndarray.
+    Returns: float32 ndarray.
     """
 
     def cdf_grid(
         self,
         X: npt.ArrayLike,
         y: npt.ArrayLike,
-    ) -> npt.NDArray[np.float64]: ...
+    ) -> npt.NDArray[np.float32]: ...
 
     """
     Predict the CDF at a grid of **sorted** covariate and **sorted** response values.
-    
+
     X: 1D array-like of shape (m,) if fit argument had shape (n,), or array-like of shape (m, d) if fit argument had
         shape (n, d).
     y: 1D array-like of shape (t,).
-    Returns: float64 ndarray of shape (m, t).
+    Returns: float32 ndarray of shape (m, t).
     """
 
     def quantile(
@@ -125,15 +127,47 @@ class IDR:
 
     X: Array-like of any shape if fit argument had shape (n,), or array-like of shape (..., d) if fit argument had
         shape (n, d).
-    q: Array-like of any shape broadcastable with X if fit argument had shape (n,), or broadcastable with all but the 
+    q: Array-like of any shape broadcastable with X if fit argument had shape (n,), or broadcastable with all but the
         last dimension of X if fit argument had shape (n, d).
     Returns: float64 ndarray.
     """
 
-    def X(self) -> npt.NDArray[np.float64]: ...
-    def thresholds(self) -> npt.NDArray[np.float64]: ...
+    @property
+    def X(self) -> Union[npt.NDArray[np.float64], npt.NDArray[np.float32]]: ...
+    @property
+    def thresholds(
+        self,
+    ) -> Union[npt.NDArray[np.float64], npt.NDArray[np.float32]]: ...
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
+    @classmethod
+    def from_cdfs(
+        cls,
+        cdfs: npt.ArrayLike,
+        X: npt.ArrayLike,
+        y: npt.ArrayLike,
+        global_cdf: npt.ArrayLike | None = ...,
+    ) -> "IDR": ...
+
+    """
+    Create an IDR model from pre-computed CDFs, covariates, and thresholds.
+
+    cdfs: 2D array-like of shape (n_covariates, n_thresholds). Interpreted as ``np.float32``
+        internally — the algorithm always stores CDFs in f32, regardless of how the fit was
+        produced. Passing an ``np.float64`` array is allowed but is silently narrowed to
+        ``np.float32`` with no warning. The narrowed values are bit-identical to what a
+        fresh ``IDR(...)`` fit would store (so there is no precision loss relative to a
+        normal fit), but precision is lost relative to the caller's f64 input. Prefer
+        ``np.float32`` to make the storage precision explicit at the call site.
+    X: 1D or 2D array-like of unique covariates in strictly increasing lexicographic order.
+        The storage dtype tracks the input dtype (``np.float32`` or ``np.float64``).
+    y: 1D array-like of unique thresholds in strictly increasing order. The storage dtype
+        tracks the input dtype (``np.float32`` or ``np.float64``).
+    global_cdf: Optional 1D array-like used for incomparable covariates in the
+        multivariate case. Same dtype convention as ``cdfs``: ``np.float32`` is preferred,
+        ``np.float64`` is silently narrowed.
+    Returns: A fitted IDR model.
+    """
 
 def isotonic_regression(
     y: npt.ArrayLike,

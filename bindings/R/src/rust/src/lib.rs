@@ -36,8 +36,8 @@ extendr_module! {
 #[allow(clippy::upper_case_acronyms)]
 #[extendr]
 enum IDR {
-    Partial(subagging::Fit<partial_order::Fit>),
-    Total(subagging::Fit<total_order::Fit>),
+    Partial(subagging::Fit<partial_order::Fit<f64, f64>>),
+    Total(subagging::Fit<total_order::Fit<f64, f64>>),
 }
 
 #[allow(non_snake_case)]
@@ -140,7 +140,7 @@ impl IDR {
             match x_dimension {
                 0 => panic!("Covariate of empty dimension"),
                 1 => {
-                    let fit = subagging::Fit::<total_order::Fit>::fit(
+                    let fit = subagging::Fit::<total_order::Fit<f64, f64>>::fit(
                         X,
                         y,
                         maybe_observed.as_deref(),
@@ -155,7 +155,7 @@ impl IDR {
                     IDR::Total(fit)
                 }
                 _ => {
-                    let fit = subagging::Fit::<partial_order::Fit>::fit(
+                    let fit = subagging::Fit::<partial_order::Fit<f64, f64>>::fit(
                         X,
                         y,
                         maybe_observed.as_deref(),
@@ -209,6 +209,9 @@ impl IDR {
     /// @param data Covariate array (flattened) for which to predict CDFs, (covariate-major) layout
     ///   is inferred using this fit's covariate dimension.
     fn cdf(&self, X: &[f64]) -> RMatrix<f64> {
+        // R's REALSXP is always 64-bit double — there is no float32 in R. We promote element-wise
+        // at the binding boundary. This copy was already mandatory because of how
+        // `RMatrix::new_matrix` works, so there's no extra cost.
         match self {
             IDR::Partial(fit) => {
                 let flat: Vec<_> = X
@@ -217,13 +220,13 @@ impl IDR {
                     .collect();
                 let n = X.len() / fit.covariate_groups.dimension;
                 RMatrix::new_matrix(n, fit.thresholds.len(), |r, c| {
-                    flat[r * fit.thresholds.len() + c]
+                    flat[r * fit.thresholds.len() + c] as f64
                 })
             }
             IDR::Total(fit) => {
                 let flat: Vec<_> = X.iter().flat_map(|&c| fit.cdf(c)).collect();
                 RMatrix::new_matrix(X.len(), fit.thresholds.len(), |r, c| {
-                    flat[r * fit.thresholds.len() + c]
+                    flat[r * fit.thresholds.len() + c] as f64
                 })
             }
         }
@@ -242,7 +245,8 @@ impl IDR {
 
                 let n_covariate = interpolations.len();
                 RMatrix::new_matrix(n_covariate, y.len(), |r, c| {
-                    interpolations[r].interpolate(coordinates[c])
+                    // f32 → f64 promotion at the R boundary; see `cdf`.
+                    interpolations[r].interpolate(coordinates[c]) as f64
                 })
             }
             IDR::Total(fit) => {
@@ -252,7 +256,7 @@ impl IDR {
                     y.iter().map(|&t| fit.get_response_coordinate(t)).collect();
                 let n_covariate = interpolations.len();
                 RMatrix::new_matrix(n_covariate, y.len(), |r, c| {
-                    interpolations[r].interpolate(coordinates[c])
+                    interpolations[r].interpolate(coordinates[c]) as f64
                 })
             }
         }
@@ -268,7 +272,12 @@ impl IDR {
                     .collect();
                 let n_covariate = interpolations.len();
                 RMatrix::new_matrix(n_covariate, probability.len(), |r, c| {
-                    quantile(&interpolations[r], probability[c], false, &fit.thresholds)
+                    quantile(
+                        &interpolations[r],
+                        probability[c] as f32,
+                        false,
+                        &fit.thresholds,
+                    )
                 })
             }
             IDR::Total(fit) => {
@@ -276,7 +285,12 @@ impl IDR {
                     X.iter().map(|&c| fit.interpolate_covariate(c)).collect();
                 let n_covariate = interpolations.len();
                 RMatrix::new_matrix(n_covariate, probability.len(), |r, c| {
-                    quantile(&interpolations[r], probability[c], false, &fit.thresholds)
+                    quantile(
+                        &interpolations[r],
+                        probability[c] as f32,
+                        false,
+                        &fit.thresholds,
+                    )
                 })
             }
         }
@@ -385,8 +399,8 @@ fn isotonic_regression(
     macro_rules! tonic {
         ($func:ident, $data:expr) => {
             match decreasing {
-                false => total_order::$func::<Increasing>($data),
-                true => total_order::$func::<Decreasing>($data),
+                false => total_order::$func::<Increasing, f64, _>($data),
+                true => total_order::$func::<Decreasing, f64, _>($data),
             }
         };
     }
@@ -456,7 +470,9 @@ fn survival_isotonic_distributional_regression_threshold(
         total_order::functionals::algorithm::<Increasing, _, _>(data, &functional)
     };
 
-    RColumn::new_column(result.len(), |i| result[i])
+    // KM/PAVA now returns f32 (matching the rest of the censored stack); widen to f64 for
+    // the R column constructor.
+    RColumn::new_column(result.len(), |i| f64::from(result[i]))
 }
 
 /// Compute the plain survival IDR for totally ordered co-variates under the hazard rate order

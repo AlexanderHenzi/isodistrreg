@@ -1,55 +1,47 @@
-use crate::error::Error;
 use crate::progress::ProgressTracker;
 use crate::routines::kaplan_meier;
 use crate::structures::{Decreasing, Direction, Increasing};
-use crate::total_order::hazard_rate_order::preprocessing::preprocess_censored;
 use crate::total_order::routines::{pool_partitions_from_right, single_response};
-use crate::total_order::structures::{AlgorithmContext, AlgorithmOutput, WeightedPartition};
+use crate::total_order::structures::{AlgorithmContext, WeightedPartition};
+use crate::total_order::weight_noise_floor;
 use std::iter::{repeat, repeat_n};
 use std::mem;
 
-pub fn algorithm<D: Direction>(
-    x: &[f64],
-    y: &[f64],
-    observed: &[bool],
-    weight: &[f64],
-    epsilon: f64,
+pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
+    context: &AlgorithmContext<X, Y, bool>,
     progress: &dyn ProgressTracker,
-) -> Result<AlgorithmOutput, Error> {
+) -> Vec<f32> {
     if !D::IS_INCREASING {
         unimplemented!();
     }
 
-    let AlgorithmContext {
-        observations,
-        mut covariate_statistics,
-        unique_responses,
-        unique_covariates,
-    } = preprocess_censored(x, y, observed, weight);
+    let observations = &context.observations;
+    // The algorithm mutates `covariate_statistics` (decrementing weights as observations are
+    // consumed). Clone once at entry so the caller's context stays immutable.
+    let mut covariate_statistics = context.covariate_statistics.clone();
+    let unique_responses = &context.unique_responses;
     progress.set_total(unique_responses.len());
     let n_covariate = covariate_statistics.len();
+    // Dynamic f32-noise floor for the running weight subtractions and survival/CDF saturation
+    // checks below. The hazard-rate kernel's "noise source" is slightly different from the
+    // SD-censored case (here we sum/subtract `covariate_statistics[i].weight` and compare
+    // `survival[i]` against 0/1) but the Wilkinson-style bound in `weight_noise_floor` is
+    // conservative enough to cover both.
+    let epsilon = weight_noise_floor(observations.len());
 
     if unique_responses.len() == 1 {
         // Single threshold -> simple binary isotonic regression with censoring amount
-        return Ok(AlgorithmOutput {
-            cdfs: single_response::<D, _>(observations, covariate_statistics),
-            unique_covariates,
-            thresholds: unique_responses,
-        });
+        return single_response::<D, _>(observations.clone(), covariate_statistics);
     }
     if covariate_statistics.len() == 1 {
         // Single covariate -> a single empirical cdf
         // Observations have been deduplicated so responses are unique
-        return Ok(AlgorithmOutput {
-            cdfs: kaplan_meier(observations.iter().copied(), covariate_statistics[0].weight),
-            unique_covariates,
-            thresholds: unique_responses,
-        });
+        return kaplan_meier(observations.iter().copied(), covariate_statistics[0].weight);
     }
 
     // At least two thresholds
     let mut cdfs = Vec::with_capacity(unique_responses.len() * n_covariate);
-    let mut partitions = Vec::with_capacity(n_covariate);
+    let mut partitions: Vec<WeightedPartition> = Vec::with_capacity(n_covariate);
 
     let mut data_index = 0;
     let mut threshold = observations[data_index].y;
@@ -64,11 +56,7 @@ pub fn algorithm<D: Direction>(
     }
     if data_index == observations.len() {
         cdfs.extend(repeat_n(0.0, n_covariate));
-        return Ok(AlgorithmOutput {
-            cdfs,
-            unique_covariates,
-            thresholds: unique_responses,
-        });
+        return cdfs;
     }
 
     let mut estimators = vec![1.0; n_covariate];
@@ -101,7 +89,7 @@ pub fn algorithm<D: Direction>(
                 weight: total_at_risk,
                 value: observation.weight / total_at_risk,
             });
-            pool_partitions_from_right::<Decreasing>(&mut partitions);
+            pool_partitions_from_right::<Decreasing, _>(&mut partitions);
 
             covariate_statistics[observation.x].weight -= observation.weight;
             data_index += 1;
@@ -122,7 +110,7 @@ pub fn algorithm<D: Direction>(
             .take(n_covariate);
         cdfs.extend(values);
         progress.increment();
-        cdfs.iter().map(|v| 1.0 - v).collect()
+        cdfs.iter().map(|v| 1.0 - v.clamp(0.0, 1.0)).collect()
     };
     for i in 0..n_covariate {
         at_risk[i] *= survival[i];
@@ -192,7 +180,7 @@ pub fn algorithm<D: Direction>(
                     weight: at_risk[i],
                     value: estimators[i] / survival[i],
                 });
-                pool_partitions_from_right::<Increasing>(&mut partitions);
+                pool_partitions_from_right::<Increasing, _>(&mut partitions);
                 i += 1;
             }
             partitions.push(WeightedPartition {
@@ -200,7 +188,7 @@ pub fn algorithm<D: Direction>(
                 weight: at_risk[observation.x],
                 value: estimators[observation.x] / survival[observation.x],
             });
-            pool_partitions_from_right::<Increasing>(&mut partitions);
+            pool_partitions_from_right::<Increasing, _>(&mut partitions);
             i += 1;
 
             data_index += 1;
@@ -211,7 +199,7 @@ pub fn algorithm<D: Direction>(
                 weight: at_risk[i],
                 value: estimators[i] / survival[i],
             });
-            pool_partitions_from_right::<Increasing>(&mut partitions);
+            pool_partitions_from_right::<Increasing, _>(&mut partitions);
             i += 1;
         }
         while data_index < observations.len() && observations[data_index].y == threshold {
@@ -241,11 +229,7 @@ pub fn algorithm<D: Direction>(
         progress.increment();
     }
 
-    Ok(AlgorithmOutput {
-        cdfs,
-        unique_covariates,
-        thresholds: unique_responses,
-    })
+    cdfs
 }
 
 #[cfg(test)]
@@ -253,7 +237,7 @@ mod test {
     use crate::structures::Increasing;
     use crate::test::is_relative_eq_vec;
     use crate::total_order::hazard_rate_order::censored::algorithm;
-    use crate::total_order::structures::AlgorithmOutput;
+    use crate::total_order::hazard_rate_order::preprocessing::preprocess_censored;
 
     fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usize>(
         x: [f64; N],
@@ -262,18 +246,15 @@ mod test {
         weight: [f64; N],
         expected: [[f64; N_COVARIATE]; N_THRESHOLD],
     ) {
-        let AlgorithmOutput {
-            cdfs,
-            unique_covariates,
-            thresholds,
-        } = algorithm::<Increasing>(&x, &y, &observed, &weight, 1e-10, &crate::NoProgress)
-            .ok()
-            .unwrap();
-        assert_eq!(unique_covariates.len(), N_COVARIATE);
-        assert_eq!(thresholds.len(), N_THRESHOLD);
+        let context = preprocess_censored(&x, &y, &observed, &weight);
+        let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        assert_eq!(context.unique_covariates.len(), N_COVARIATE);
+        assert_eq!(context.unique_responses.len(), N_THRESHOLD);
         let expected_flat: Vec<_> = expected.iter().flatten().copied().collect();
+        // The hazard-rate algorithm now runs in f32; narrow the test's f64 expected.
+        let expected_f32: Vec<_> = expected_flat.iter().map(|&v| v as f32).collect();
         assert!(
-            is_relative_eq_vec(&cdfs, &expected_flat),
+            is_relative_eq_vec(&cdfs, &expected_f32),
             "Result:   {:?}\nExpected: {:?}\n",
             cdfs,
             expected_flat,

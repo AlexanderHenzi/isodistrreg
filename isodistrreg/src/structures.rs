@@ -83,8 +83,11 @@ impl ExecutionMode for Parallel {
 }
 
 /// The data for which we compute the algorithm, closely related to the data provided by the caller
+///
+/// `W` is the floating-point precision of the weight. Defaults to `f64` so existing callers are
+/// unchanged; the censored algorithm instantiates `W = f32` for its f32 hot path.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Observation<X, Y, S> {
+pub struct Observation<X, Y, S, W = f64> {
     /// Index in `0..n_covariate` or original data value
     pub x: X,
     /// Index in `0..n_threshold` or original data value
@@ -95,7 +98,7 @@ pub struct Observation<X, Y, S> {
     /// `true` indicates observed and `false` indicates right-censored.
     pub observed: S,
     /// Non-negative and finite weight
-    pub weight: f64,
+    pub weight: W,
 }
 
 impl<T: Into<f64>> From<T> for Observation<(), f64, ()> {

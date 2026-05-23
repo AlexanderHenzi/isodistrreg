@@ -1,10 +1,11 @@
+use crate::Float;
 use crate::error::Error;
 
-pub fn validate<'a>(
-    covariates: impl Iterator<Item = &'a [f64]>,
-    responses: &[f64],
+pub fn validate<'a, X: Float, Y: Float, W: Float>(
+    covariates: impl Iterator<Item = &'a [X]>,
+    responses: &[Y],
     censoring: Option<&[bool]>,
-    weights: Option<&[f64]>,
+    weights: Option<&[W]>,
 ) -> Result<usize, Error> {
     let n = {
         let mut i = 0;
@@ -35,7 +36,7 @@ pub fn validate<'a>(
         | weights.is_some_and(|slice| slice.iter().any(|f| !f.is_finite()))
     {
         Err(Error::NonFiniteFloats)
-    } else if weights.is_some_and(|slice| slice.iter().any(|&w| w < 0.0)) {
+    } else if weights.is_some_and(|slice| slice.iter().any(|w| *w < W::zero())) {
         Err(Error::NegativeWeights)
     } else {
         Ok(n)

@@ -2,6 +2,7 @@ use crate::functionals::{CauchyMeanValueFunctional, Functional};
 #[cfg(feature = "partial-order")]
 use crate::partial_order::BitSet;
 use crate::structures::Observation;
+use num_traits::Float as NumFloat;
 #[cfg(feature = "partial-order")]
 use std::collections::HashMap;
 use std::ops::Range;
@@ -22,15 +23,16 @@ impl<F: Functional> ClippingWrapper<F> {
 impl<F: Functional> CauchyMeanValueFunctional for ClippingWrapper<F> {
     type Censoring = F::Censoring;
     type Response = F::Response;
+    type Value = F::Value;
 
     /// The clipped value for this block's range.
-    type Block = f64;
+    type Block = F::Value;
     /// Packed lower triangle indexed by absolute group indices: cell `(r, s)` (with `r <= s`)
     /// is at `s * (s + 1) / 2 + r`. Cells live for the duration of one algorithm run.
-    type Shared = Vec<f64>;
+    type Shared = Vec<F::Value>;
 
     fn init_shared(&self, n_groups: usize) -> Self::Shared {
-        vec![f64::NAN; n_groups * (n_groups + 1) / 2]
+        vec![F::Value::nan(); n_groups * (n_groups + 1) / 2]
     }
 
     fn singleton_block<G, I>(
@@ -75,7 +77,7 @@ impl<F: Functional> CauchyMeanValueFunctional for ClippingWrapper<F> {
 
                 let raw = self.0.evaluate((r..=s).flat_map(get_data));
 
-                let (mut lower, mut upper) = (f64::NEG_INFINITY, f64::INFINITY);
+                let (mut lower, mut upper) = (F::Value::neg_infinity(), F::Value::infinity());
                 for k in r..s {
                     let l = shared[index(r, k)];
                     let r = shared[index(k + 1, s)];
@@ -90,7 +92,7 @@ impl<F: Functional> CauchyMeanValueFunctional for ClippingWrapper<F> {
         *left = shared[index(left_range.start, right_range.end - 1)];
     }
 
-    fn block_value(&self, block: &Self::Block) -> f64 {
+    fn block_value(&self, block: &Self::Block) -> Self::Value {
         *block
     }
 
@@ -105,15 +107,15 @@ impl<F: Functional> CauchyMeanValueFunctional for ClippingWrapper<F> {
         successors_inclusive: &[BitSet<B>],
         predecessors: &[BitSet<B>],
         get_data: &G,
-        cache: &mut HashMap<BitSet<B>, f64>,
-    ) -> f64 {
+        cache: &mut HashMap<BitSet<B>, F::Value>,
+    ) -> F::Value {
         if let Some(result) = cache.get(elements) {
             return *result;
         }
 
         let unclipped_value = self.0.evaluate(elements.iter().flat_map(get_data));
 
-        let (mut lower_bound, mut upper_bound) = (f64::NEG_INFINITY, f64::INFINITY);
+        let (mut lower_bound, mut upper_bound) = (F::Value::neg_infinity(), F::Value::infinity());
         dfs(
             BitSet::new(),
             &BitSet::new(),
@@ -146,13 +148,13 @@ fn dfs<
     in_set: BitSet<B>,
     forbidden: &BitSet<B>,
     universe: &BitSet<B>,
-    lower_bound: &mut f64,
-    upper_bound: &mut f64,
+    lower_bound: &mut F::Value,
+    upper_bound: &mut F::Value,
     successors_inclusive: &[BitSet<B>],
     predecessors: &[BitSet<B>],
     get_data: &G,
     recursive_functional: &ClippingWrapper<F>,
-    cache: &mut HashMap<BitSet<B>, f64>,
+    cache: &mut HashMap<BitSet<B>, F::Value>,
 ) {
     let decided = in_set.union(forbidden);
     let undecided = universe.difference(&decided);
@@ -192,8 +194,8 @@ fn dfs<
                 return;
             }
 
-            let lowest = f64::min(lower_set_value, upper_set_value);
-            let highest = f64::max(lower_set_value, upper_set_value);
+            let lowest = lower_set_value.min(upper_set_value);
+            let highest = lower_set_value.max(upper_set_value);
 
             *lower_bound = lower_bound.max(lowest);
             *upper_bound = upper_bound.min(highest);

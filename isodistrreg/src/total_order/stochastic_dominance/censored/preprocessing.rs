@@ -1,29 +1,22 @@
+use crate::Float;
 use crate::error::Error;
 use crate::preprocessing::validate;
 use crate::routines::argsort_unstable_by;
 use crate::structures::{Increasing, Observation};
-use crate::total_order::stochastic_dominance::censored::structures::ExtendedAlgorithmContext;
+use crate::total_order::stochastic_dominance::censored::structures::CensoredSdContext;
 use crate::total_order::structures::CovariateStatistic;
 use itertools::Itertools;
-
-/// A problem instance
-pub struct PreProcessingResult {
-    pub context: ExtendedAlgorithmContext,
-    pub unique_covariates: Vec<f64>,
-    /// Only thresholds that have at least one uncensored observation
-    pub thresholds: Vec<f64>,
-}
 
 /// Preprocess data such that the algorithm can be run.
 ///
 /// Thresholds contain all unique response values, discarding thresholds containing only censored
 /// observations.
-pub fn preprocess(
-    x: &[f64],
-    y: &[f64],
+pub fn preprocess<X: Float, Y: Float, W: Float>(
+    x: &[X],
+    y: &[Y],
     observed: &[bool],
-    weights: &[f64],
-) -> Result<PreProcessingResult, Error> {
+    weights: &[W],
+) -> Result<CensoredSdContext<X, Y>, Error> {
     let n = validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
 
     let (observations_response_sorted, thresholds) = {
@@ -42,11 +35,9 @@ pub fn preprocess(
             .find_position(|&&i| observed[i])
             .map(|(index, _)| index);
         let Some(first_uncensored_index) = first_uncensored else {
-            return Ok(PreProcessingResult {
-                context: ExtendedAlgorithmContext {
-                    observations: Vec::with_capacity(0),
-                    covariate_statistics: Vec::with_capacity(0),
-                },
+            return Ok(CensoredSdContext {
+                observations: Vec::with_capacity(0),
+                covariate_statistics: Vec::with_capacity(0),
                 unique_covariates: Vec::with_capacity(0),
                 thresholds: Vec::with_capacity(0),
             });
@@ -64,9 +55,15 @@ pub fn preprocess(
             x: x[data_index],
             y: 0,
             observed: true,
-            weight: weights[data_index],
+            weight: 0.0, // placeholder; finalized from `last_w_accum`
         });
         debug_assert!(observed[data_index]);
+        // Accumulator for the in-progress observation's weight in the caller's W precision.
+        // Invariant: while the loop is running, `last_w_accum` holds the running W-precision
+        // sum for `obs.last()`. Its `weight` field carries a 0.0 placeholder that is replaced
+        // by the narrowed accumulator when the observation is finalized — either when a new
+        // observation is pushed, or after the loop ends.
+        let mut last_w_accum: W = weights[data_index];
         // Remaining items
         for &data_index in &response_order[first_uncensored_index + 1..] {
             let response_equal = y[data_index] == *thresholds.last().unwrap();
@@ -78,8 +75,10 @@ pub fn preprocess(
             let is_following_censored =
                 observed[data_index] && !last_observation.observed && covariate_equal;
             if is_duplicate || is_following_censored {
-                obs.last_mut().unwrap().weight += weights[data_index];
+                last_w_accum = last_w_accum + weights[data_index];
             } else {
+                // Finalize the previous in-progress observation: narrow once.
+                obs.last_mut().unwrap().weight = last_w_accum.to_f32().unwrap();
                 if !response_equal && observed[data_index] {
                     thresholds.push(y[data_index]);
                 }
@@ -88,10 +87,13 @@ pub fn preprocess(
                     // If an observation is censored, we point to the previous (lower) threshold value here
                     y: thresholds.len() - 1,
                     observed: observed[data_index],
-                    weight: weights[data_index],
+                    weight: 0.0, // placeholder; finalized from `last_w_accum`
                 });
+                last_w_accum = weights[data_index];
             }
         }
+        // Finalize the last in-progress observation.
+        obs.last_mut().unwrap().weight = last_w_accum.to_f32().unwrap();
 
         (obs, thresholds)
     };
@@ -106,12 +108,12 @@ pub fn preprocess(
         observations_response_sorted.len(),
     );
 
-    let mut observations = vec![
+    let mut observations: Vec<Observation<usize, usize, bool, f32>> = vec![
         Observation {
             x: usize::MAX,
             y: usize::MAX,
             observed: false,
-            weight: f64::NAN,
+            weight: f32::NAN,
         };
         observations_response_sorted.len()
     ];
@@ -157,11 +159,9 @@ pub fn preprocess(
     last_statistic.cumulative_weight += last_statistic.weight;
     debug_assert!(observations.iter().all(|o| !o.weight.is_nan()));
 
-    Ok(PreProcessingResult {
-        context: ExtendedAlgorithmContext {
-            observations,
-            covariate_statistics,
-        },
+    Ok(CensoredSdContext {
+        observations,
+        covariate_statistics,
         unique_covariates,
         thresholds,
     })
@@ -170,22 +170,16 @@ pub fn preprocess(
 #[cfg(test)]
 mod test {
     use crate::structures::Observation;
-    use crate::total_order::stochastic_dominance::censored::preprocessing::{
-        PreProcessingResult, preprocess,
-    };
-    use crate::total_order::stochastic_dominance::censored::structures::ExtendedAlgorithmContext;
+    use crate::total_order::stochastic_dominance::censored::preprocessing::preprocess;
+    use crate::total_order::stochastic_dominance::censored::structures::CensoredSdContext;
     use crate::total_order::structures::CovariateStatistic;
 
     #[test]
     fn test_trivial_single_observation() {
-        let PreProcessingResult {
-            context,
-            unique_covariates,
-            thresholds,
-        } = preprocess(&[5.0], &[6.0], &[true], &[2.0]).ok().unwrap();
+        let context = preprocess(&[5.0], &[6.0], &[true], &[2.0]).ok().unwrap();
         assert_eq!(
             context,
-            ExtendedAlgorithmContext {
+            CensoredSdContext {
                 observations: vec![Observation {
                     x: 0,
                     y: 0,
@@ -196,24 +190,20 @@ mod test {
                     weight: 2.0,
                     cumulative_weight: 2.0,
                 },],
+                unique_covariates: vec![5.0],
+                thresholds: vec![6.0],
             }
         );
-        assert_eq!(unique_covariates, vec![5.0]);
-        assert_eq!(thresholds, vec![6.0]);
     }
 
     #[test]
     fn test_trivial_single_covariate() {
-        let PreProcessingResult {
-            context,
-            unique_covariates,
-            thresholds,
-        } = preprocess(&[5.0, 5.0], &[6.5, 6.0], &[true, true], &[1.0, 2.0])
+        let context = preprocess(&[5.0, 5.0], &[6.5, 6.0], &[true, true], &[1.0, 2.0])
             .ok()
             .unwrap();
         assert_eq!(
             context,
-            ExtendedAlgorithmContext {
+            CensoredSdContext {
                 observations: vec![
                     Observation {
                         x: 0,
@@ -232,24 +222,20 @@ mod test {
                     weight: 3.0,
                     cumulative_weight: 3.0,
                 },],
+                unique_covariates: vec![5.0],
+                thresholds: vec![6.0, 6.5],
             }
         );
-        assert_eq!(unique_covariates, vec![5.0]);
-        assert_eq!(thresholds, vec![6.0, 6.5]);
     }
 
     #[test]
     fn test_trivial_single_response() {
-        let PreProcessingResult {
-            context,
-            unique_covariates,
-            thresholds,
-        } = preprocess(&[5.0, 7.0], &[6.0, 6.0], &[true, true], &[1.0, 3.0])
+        let context = preprocess(&[5.0, 7.0], &[6.0, 6.0], &[true, true], &[1.0, 3.0])
             .ok()
             .unwrap();
         assert_eq!(
             context,
-            ExtendedAlgorithmContext {
+            CensoredSdContext {
                 observations: vec![
                     Observation {
                         x: 0,
@@ -274,19 +260,15 @@ mod test {
                         cumulative_weight: 4.0,
                     },
                 ],
+                unique_covariates: vec![5.0, 7.0],
+                thresholds: vec![6.0],
             }
         );
-        assert_eq!(unique_covariates, vec![5.0, 7.0]);
-        assert_eq!(thresholds, vec![6.0]);
     }
 
     #[test]
     fn test_monotone() {
-        let PreProcessingResult {
-            context,
-            unique_covariates,
-            thresholds,
-        } = preprocess(
+        let context = preprocess(
             &[2.0, 1.0, 3.0],
             &[2.0, 1.0, 3.0],
             &[false, true, true],
@@ -296,7 +278,7 @@ mod test {
         .unwrap();
         assert_eq!(
             context,
-            ExtendedAlgorithmContext {
+            CensoredSdContext {
                 observations: vec![
                     Observation {
                         x: 0,
@@ -331,19 +313,19 @@ mod test {
                         cumulative_weight: 11.0,
                     },
                 ],
+                unique_covariates: vec![1.0, 2.0, 3.0],
+                thresholds: vec![1.0, 3.0],
             }
         );
-        assert_eq!(unique_covariates, vec![1.0, 2.0, 3.0]);
-        assert_eq!(thresholds, vec![1.0, 3.0]);
     }
 
     #[test]
     fn test_duplicate_response() {
-        let PreProcessingResult { context, .. } =
+        let context =
             preprocess(&[1.0, 3.0, 2.0], &[3.0, 3.0, 5.0], &[true; 3], &[1.0; 3]).unwrap();
         assert_eq!(
             context,
-            ExtendedAlgorithmContext {
+            CensoredSdContext {
                 observations: vec![
                     Observation {
                         x: 0,
@@ -378,20 +360,18 @@ mod test {
                         cumulative_weight: 3.0,
                     },
                 ],
+                unique_covariates: vec![1.0, 2.0, 3.0],
+                thresholds: vec![3.0, 5.0],
             },
         );
     }
 
     #[test]
     fn test_not_monotone_censored_2() {
-        let PreProcessingResult {
-            context,
-            unique_covariates,
-            thresholds,
-        } = preprocess(&[1.0, 2.0], &[4.0, 3.0], &[true, false], &[1.0, 1.0]).unwrap();
+        let context = preprocess(&[1.0, 2.0], &[4.0, 3.0], &[true, false], &[1.0, 1.0]).unwrap();
         assert_eq!(
             context,
-            ExtendedAlgorithmContext {
+            CensoredSdContext {
                 observations: vec![Observation {
                     x: 0,
                     y: 0,
@@ -402,19 +382,15 @@ mod test {
                     weight: 1.0,
                     cumulative_weight: 1.0,
                 },],
+                unique_covariates: vec![1.0],
+                thresholds: vec![4.0],
             }
         );
-        assert_eq!(unique_covariates, vec![1.0]);
-        assert_eq!(thresholds, vec![4.0]);
     }
 
     #[test]
     fn test_not_monotone_3() {
-        let PreProcessingResult {
-            context,
-            unique_covariates,
-            thresholds,
-        } = preprocess(
+        let context = preprocess(
             &[2.0, 1.0, 3.0],
             &[3.0, 1.0, 2.0],
             &[false, true, true],
@@ -423,7 +399,7 @@ mod test {
         .unwrap();
         assert_eq!(
             context,
-            ExtendedAlgorithmContext {
+            CensoredSdContext {
                 observations: vec![
                     Observation {
                         x: 0,
@@ -458,9 +434,9 @@ mod test {
                         cumulative_weight: 11.0,
                     },
                 ],
+                unique_covariates: vec![1.0, 2.0, 3.0],
+                thresholds: vec![1.0, 2.0],
             }
         );
-        assert_eq!(unique_covariates, vec![1.0, 2.0, 3.0]);
-        assert_eq!(thresholds, vec![1.0, 2.0]);
     }
 }
