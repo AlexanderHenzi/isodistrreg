@@ -3,7 +3,17 @@ use std::cmp::Ordering;
 use std::iter::once;
 use std::mem;
 
-/// Transposes a row-major `m × n` matrix stored in `slice`.
+/// Tile size for the blocked transposes. Chosen so a `BLOCK × BLOCK` `f32` tile
+/// (and the two windows the off-diagonal swap touches) sits comfortably in L1d.
+const BLOCK: usize = 32;
+
+/// Transposes a row-major `m × n` matrix stored in `matrix`.
+///
+/// The square (`m == n`) case is done in place with no extra allocation — at the
+/// sizes that dominate the IDR fit (uncensored uniform, where `m == n` and the
+/// matrix is multiple GB), allocating a second buffer would double peak RSS.
+/// Rectangular matrices need a copy; we still walk in tiles so the strided read
+/// stays in L1.
 pub fn transpose<T: Copy>(matrix: &mut Vec<T>, m: usize, n: usize) {
     assert_eq!(matrix.len(), m * n);
     if m == 0 || n == 0 {
@@ -11,21 +21,44 @@ pub fn transpose<T: Copy>(matrix: &mut Vec<T>, m: usize, n: usize) {
     }
 
     if m == n {
-        // In-place symmetric swap across the diagonal
-        for i in 0..m {
-            for j in (i + 1)..n {
-                matrix.swap(i * n + j, j * n + i);
+        let mut ii = 0;
+        while ii < m {
+            let i_end = (ii + BLOCK).min(m);
+            for i in ii..i_end {
+                for j in (i + 1)..i_end {
+                    matrix.swap(i * n + j, j * n + i);
+                }
             }
+            let mut jj = ii + BLOCK;
+            while jj < m {
+                let j_end = (jj + BLOCK).min(m);
+                for i in ii..i_end {
+                    for j in jj..j_end {
+                        matrix.swap(i * n + j, j * n + i);
+                    }
+                }
+                jj += BLOCK;
+            }
+            ii += BLOCK;
         }
         return;
     }
 
-    let mut out = Vec::with_capacity(matrix.len());
-    // Iterate by the new index
-    for i in 0..n {
-        for j in 0..m {
-            out.push(matrix[j * n + i]);
+    let mut out: Vec<T> = matrix.clone();
+    let mut ii = 0;
+    while ii < n {
+        let i_end = (ii + BLOCK).min(n);
+        let mut jj = 0;
+        while jj < m {
+            let j_end = (jj + BLOCK).min(m);
+            for i in ii..i_end {
+                for j in jj..j_end {
+                    out[i * m + j] = matrix[j * n + i];
+                }
+            }
+            jj += BLOCK;
         }
+        ii += BLOCK;
     }
     *matrix = out;
 }
