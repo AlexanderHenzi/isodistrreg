@@ -1,25 +1,26 @@
+use crate::Float;
 use crate::prediction::CdfInterpolation;
 use crate::prediction::CovariateInterpolator;
 
 /// Interpolates at a given covariate value.
 pub enum Interpolation<'a> {
     /// Covariate lands exactly on an index: read directly from one CDF.
-    Exact { cdf: &'a [f64] },
+    Exact { cdf: &'a [f32] },
     /// Covariate falls between two indices: linearly blend two CDFs.
     Between {
-        left_cdf: &'a [f64],
-        right_cdf: &'a [f64],
-        share: f64,
+        left_cdf: &'a [f32],
+        right_cdf: &'a [f32],
+        share: f32,
     },
 }
 
 impl<'a> Interpolation<'a> {
     #[must_use]
-    pub fn new(target: f64, covariates: &[f64], cdfs: (&'a [f64], usize)) -> Self {
+    pub fn new<X: Float>(target: X, covariates: &[X], cdfs: (&'a [f32], usize)) -> Self {
         Self::from_coordinate(search_covariate(target, covariates), cdfs)
     }
     #[must_use]
-    pub fn from_coordinate(target: CovariateCoordinate, cdfs: (&'a [f64], usize)) -> Self {
+    pub fn from_coordinate(target: CovariateCoordinate, cdfs: (&'a [f32], usize)) -> Self {
         match target {
             CovariateCoordinate::Exact(index) => Self::Exact {
                 cdf: Self::get_cdf(index, cdfs),
@@ -31,7 +32,7 @@ impl<'a> Interpolation<'a> {
             },
         }
     }
-    fn get_cdf(i: usize, (cdfs, n_threshold): (&[f64], usize)) -> &[f64] {
+    fn get_cdf(i: usize, (cdfs, n_threshold): (&[f32], usize)) -> &[f32] {
         debug_assert!(!cdfs.is_empty());
         debug_assert_ne!(n_threshold, 0);
         debug_assert_eq!(cdfs.len() % n_threshold, 0);
@@ -41,7 +42,7 @@ impl<'a> Interpolation<'a> {
 }
 
 impl CovariateInterpolator for Interpolation<'_> {
-    fn interpolate_index(&self, index: usize) -> f64 {
+    fn interpolate_index(&self, index: usize) -> f32 {
         match self {
             Interpolation::Exact { cdf } => cdf[index],
             Interpolation::Between {
@@ -86,7 +87,7 @@ impl CovariateInterpolator for Interpolation<'_> {
 }
 
 impl IntoIterator for Interpolation<'_> {
-    type Item = f64;
+    type Item = f32;
     type IntoIter = CdfInterpolation<Self>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -99,7 +100,7 @@ impl IntoIterator for Interpolation<'_> {
 ///
 /// This helper wraps a binary search over `slice` and interprets the insertion point as a
 /// coordinate for interpolation. It is intended for slices of monotonically increasing (strictly
-/// ascending) finite `f64` values.
+/// ascending) finite floating-point values.
 ///
 /// # Returns
 ///
@@ -110,8 +111,11 @@ impl IntoIterator for Interpolation<'_> {
 /// - `Err((i, share))` if `target` lies strictly between `slice[i]` and
 ///   `slice[i + 1]`, where
 ///   `share = (target - slice[i]) / (slice[i + 1] - slice[i])` and thus
-///   `0.0 < share < 1.0`. This makes `target` recoverable as
-///   `(1.0 - share) * slice[i] + share * slice[i + 1]`.
+///   `0.0 < share < 1.0`. The `share` is computed in `X` arithmetic to avoid catastrophic
+///   cancellation when `X = f64` (two f64-distinct neighbors can collapse to a single f32),
+///   then narrowed to f32 for the CDF blend. If the `X`-precision share lands outside the open
+///   interval `(0, 1)` (or the endpoints would otherwise be degenerate), the function falls
+///   back to an exact endpoint instead.
 ///
 /// # Requirements
 ///
@@ -127,22 +131,15 @@ impl IntoIterator for Interpolation<'_> {
 /// See the module tests.
 #[inline]
 #[must_use]
-pub fn search_covariate(target: f64, slice: &[f64]) -> CovariateCoordinate {
+pub fn search_covariate<X: Float>(target: X, slice: &[X]) -> CovariateCoordinate {
     debug_assert!(!slice.is_empty());
-    debug_assert!(slice.array_windows().all(|&[l, r]| l < r));
+    debug_assert!(slice.array_windows().all(|[l, r]| l < r));
 
     match slice.binary_search_by(|c| c.partial_cmp(&target).unwrap()) {
         Ok(index) => CovariateCoordinate::Exact(index),
         Err(index) => match index {
             0 => CovariateCoordinate::Exact(0),
-            in_range if in_range < slice.len() => {
-                let range = slice[index] - slice[index - 1];
-                let share = (target - slice[index - 1]) / range;
-                CovariateCoordinate::Between {
-                    left: index - 1,
-                    share,
-                }
-            }
+            in_range if in_range < slice.len() => between_or_snap(target, slice, index - 1),
             after_last => {
                 debug_assert_eq!(after_last, slice.len());
                 CovariateCoordinate::Exact(slice.len() - 1)
@@ -151,32 +148,67 @@ pub fn search_covariate(target: f64, slice: &[f64]) -> CovariateCoordinate {
     }
 }
 
-pub struct GridPredictorState<'a> {
-    pub search: CovariateSearch<'a>,
-    pub interpolation: Interpolation<'a>,
-    pub cdfs: (&'a [f64], usize),
+/// Place `target` between `slice[left]` and `slice[left + 1]`, returning a `Between` with the
+/// linear interpolation share or snapping to an exact endpoint when the share is degenerate.
+///
+/// The share is computed in `X` precision and narrowed to f32 only at the end. This avoids
+/// catastrophic cancellation that would occur if we narrowed `target` / `lo` / `hi` to f32
+/// first — at large magnitudes two f64-distinct neighbors can round to the same f32, leaving
+/// `hi - lo == 0` and producing ±∞ or NaN. The share is used downstream to blend f32 CDF
+/// endpoints, so f32 storage of the share itself is sufficient.
+///
+/// Classification (happy path first):
+/// - `0 < share < 1`: blend → `Between { left, share }`.
+/// - `share >= 1` (incl. `+∞`): snap to `Exact(left + 1)`.
+/// - `share <= 0`, `NaN`, or `-∞`: snap to `Exact(left)`. NaN lands here because every
+///   comparison with NaN is `false`, so it fails both `share > 0` (no happy path) and
+///   `share >= 1` (no right snap), and falls through to the final arm.
+///
+/// Callers must ensure `left + 1 < slice.len()`.
+#[inline]
+fn between_or_snap<X: Float>(target: X, slice: &[X], left: usize) -> CovariateCoordinate {
+    let lo = slice[left];
+    let hi = slice[left + 1];
+    let share_x = (target - lo) / (hi - lo);
+
+    if share_x > X::zero() && share_x < X::one() {
+        CovariateCoordinate::Between {
+            left,
+            share: share_x.to_f32().unwrap(),
+        }
+    } else if share_x >= X::one() {
+        CovariateCoordinate::Exact(left + 1)
+    } else {
+        CovariateCoordinate::Exact(left)
+    }
 }
-impl GridPredictorState<'_> {
-    pub fn update(&mut self, query: f64) {
+
+pub struct GridPredictorState<'a, X> {
+    pub search: CovariateSearch<'a, X>,
+    pub interpolation: Interpolation<'a>,
+    pub cdfs: (&'a [f32], usize),
+}
+impl<X: Float> GridPredictorState<'_, X> {
+    pub fn update(&mut self, query: X) {
         let coordinate = self.search.advance(query);
         self.interpolation = Interpolation::from_coordinate(coordinate, self.cdfs);
     }
 }
 
-pub struct CovariateSearch<'a> {
-    references: &'a [f64],
+pub struct CovariateSearch<'a, X> {
+    references: &'a [X],
     idx: usize,
 }
 
-impl<'a> CovariateSearch<'a> {
+impl<'a, X: Float> CovariateSearch<'a, X> {
     #[must_use]
-    pub fn new(references: &'a [f64]) -> Self {
+    pub fn new(references: &'a [X]) -> Self {
         assert!(!references.is_empty());
         Self { references, idx: 0 }
     }
 
     /// Advance the search with the next query value (must be provided in-order).
-    pub fn advance(&mut self, q: f64) -> CovariateCoordinate {
+    pub fn advance(&mut self, q: X) -> CovariateCoordinate {
         let last = self.references.len() - 1;
 
         if q <= self.references[0] {
@@ -191,11 +223,7 @@ impl<'a> CovariateSearch<'a> {
             if q == self.references[self.idx] {
                 CovariateCoordinate::Exact(self.idx)
             } else {
-                let left = self.idx - 1;
-                let right = self.idx;
-                let range = self.references[right] - self.references[left];
-                let share = (q - self.references[left]) / range;
-                CovariateCoordinate::Between { left, share }
+                between_or_snap(q, self.references, self.idx - 1)
             }
         }
     }
@@ -206,7 +234,7 @@ pub enum CovariateCoordinate {
     /// At this exact index
     Exact(usize),
     /// Between left and left+1, 0.0 < share < 1.0
-    Between { left: usize, share: f64 },
+    Between { left: usize, share: f32 },
 }
 
 #[cfg(test)]
@@ -233,6 +261,7 @@ mod test {
         if let CovariateCoordinate::Between { left, share } = result {
             assert_eq!(left, 1);
             assert_eq!(share, 0.5);
+            let share = f64::from(share);
             let reconstructed = (1.0 - share) * xs[left] + share * xs[left + 1];
             assert!((reconstructed - target).abs() < 1e-12);
         } else {

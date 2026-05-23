@@ -6,6 +6,7 @@ use crate::routines::median;
 use crate::structures::Direction;
 use crate::structures::Observation;
 use crate::total_order::structures;
+use num_traits::Float as NumFloat;
 use std::cmp::Ordering;
 use std::iter::{once, repeat_n};
 
@@ -16,7 +17,7 @@ pub fn algorithm<
 >(
     data: impl Iterator<Item = I>,
     functional: &F,
-) -> Vec<f64> {
+) -> Vec<F::Value> {
     let allocated = structures::allocate_and_sort(data);
     algorithm_pre_sorted::<D, _, _, _>(allocated.into_iter(), functional)
 }
@@ -33,7 +34,7 @@ pub fn algorithm_pre_sorted<
 >(
     iter: impl Iterator<Item = I>,
     functional: &F,
-) -> Vec<f64> {
+) -> Vec<F::Value> {
     // Pass 1: collect observations, compress by equal-covariate groups (covariates discarded).
     let mut data: Vec<Observation<(), F::Response, F::Censoring>> = Vec::new();
     let mut group_ends: Vec<usize> = Vec::new();
@@ -127,7 +128,7 @@ pub fn algorithm_definition<
 >(
     data: impl Iterator<Item = I>,
     functional: &F,
-) -> Vec<f64> {
+) -> Vec<F::Value> {
     let allocated = structures::allocate_and_sort(data);
     algorithm_pre_sorted_definition::<D, _, _>(allocated, functional)
 }
@@ -140,7 +141,7 @@ pub fn algorithm_pre_sorted_definition<
 >(
     data: Vec<Observation<Cov, F::Response, F::Censoring>>,
     functional: &F,
-) -> Vec<f64> {
+) -> Vec<F::Value> {
     assert!(!data.is_empty());
 
     let start_indices: Vec<_> = data
@@ -185,12 +186,13 @@ pub fn algorithm_pre_sorted_definition<
         }
     }
 
-    type MinOrMax = fn(f64, f64) -> f64;
-    let (outer_direction, inner_direction): (MinOrMax, MinOrMax) = match D::FORBIDDEN_ORDERING {
-        Ordering::Less => (f64::min, f64::max),
-        Ordering::Equal => panic!(),
-        Ordering::Greater => (f64::max, f64::min),
-    };
+    type MinOrMax<V> = fn(V, V) -> V;
+    let (outer_direction, inner_direction): (MinOrMax<F::Value>, MinOrMax<F::Value>) =
+        match D::FORBIDDEN_ORDERING {
+            Ordering::Less => (<F::Value as NumFloat>::min, <F::Value as NumFloat>::max),
+            Ordering::Equal => panic!(),
+            Ordering::Greater => (<F::Value as NumFloat>::max, <F::Value as NumFloat>::min),
+        };
 
     let extremes = (0..start_indices.len())
         .map(|i| {

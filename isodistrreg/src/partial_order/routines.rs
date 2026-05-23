@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::collections::hash_set::Drain;
 
 #[must_use]
-pub fn derive_transitive_reduction(
-    covariates: &[f64], // point-major: x_i is covariates[i*covariate_dimension .. (i+1)*covariate_dimension]
+pub fn derive_transitive_reduction<X: PartialOrd>(
+    covariates: &[X], // point-major: x_i is covariates[i*covariate_dimension .. (i+1)*covariate_dimension]
     n_covariate: usize,
     covariate_dimension: usize,
 ) -> Vec<(usize, usize)> {
@@ -34,7 +34,7 @@ pub fn derive_transitive_reduction(
 
     // Helper to view the i-th point as a slice.
     #[inline]
-    fn row(covariates: &[f64], i: usize, dim: usize) -> &[f64] {
+    fn row<X>(covariates: &[X], i: usize, dim: usize) -> &[X] {
         &covariates[i * dim..(i + 1) * dim]
     }
 
@@ -45,7 +45,7 @@ pub fn derive_transitive_reduction(
             row(covariates, v, covariate_dimension),
         );
         let mut strictly_less = false;
-        for (&a, &b) in xu.iter().zip(xv.iter()) {
+        for (a, b) in xu.iter().zip(xv.iter()) {
             if a > b {
                 return false; // violates dominance in this coordinate
             }
@@ -118,9 +118,9 @@ pub fn derive_transitive_reduction(
 /// Compute the lower or upper neighbors of a new target.
 ///
 /// The comments are written for when computing the lower neighbors.
-pub fn find_neighbors<'a>(
-    target: &[f64],
-    covariates: &[f64],
+pub fn find_neighbors<'a, X: PartialOrd>(
+    target: &[X],
+    covariates: &[X],
     ordering_info: &OrderingInfo,
     workspace: &'a mut PredictionWorkspace,
     lower: bool,
@@ -133,16 +133,16 @@ pub fn find_neighbors<'a>(
     let get_covariate =
         |i: NodeID| &covariates[i * covariate_dimension..(i + 1) * covariate_dimension];
 
-    type Comparison = fn(&[f64], &[f64]) -> bool;
+    type Comparison<X> = fn(&[X], &[X]) -> bool;
     let (comparison, start_set, next) = if lower {
         (
-            point_ge_point as Comparison,
+            point_ge_point as Comparison<X>,
             &ordering_info.max,
             &ordering_info.smaller,
         )
     } else {
         (
-            point_le_point as Comparison,
+            point_le_point as Comparison<X>,
             &ordering_info.min,
             &ordering_info.larger,
         )
@@ -181,13 +181,13 @@ pub fn find_neighbors<'a>(
 }
 
 #[inline]
-fn point_ge_point(a: &[f64], b: &[f64]) -> bool {
+fn point_ge_point<X: PartialOrd>(a: &[X], b: &[X]) -> bool {
     // a >= b component-wise (non-strict)
     a.iter().zip(b.iter()).all(|(x, y)| x >= y)
 }
 
 #[inline]
-fn point_le_point(a: &[f64], b: &[f64]) -> bool {
+fn point_le_point<X: PartialOrd>(a: &[X], b: &[X]) -> bool {
     // a <= b component-wise (non-strict)
     a.iter().zip(b.iter()).all(|(x, y)| x <= y)
 }

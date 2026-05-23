@@ -1,3 +1,4 @@
+use crate::Float;
 use crate::error::Error;
 use crate::partial_order::prediction::Interpolation;
 use crate::partial_order::preprocessing::{
@@ -19,8 +20,10 @@ use std::mem;
 use std::str::FromStr;
 
 /// A computed IDR solution that can be used to make distributional predictions.
+///
+/// `X` and `Y` are the precision of covariate and response/threshold values respectively.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Fit {
+pub struct Fit<X: Float, Y: Float> {
     /// Whether the fit is increasing (i.e., nondecreasing) w.r.t. the covariate ordering.
     pub increasing: bool,
 
@@ -29,12 +32,13 @@ pub struct Fit {
     /// These values will be interpolated when predicting a CDF for an unseen value.
     ///
     /// Represents a covariate-major matrix with in each minor index a CDF value for the
-    /// corresponding threshold.
-    pub cdfs: Vec<f64>,
+    /// corresponding threshold. CDF values are **f32** — matching the total-order convention.
+    /// The OSQP solver runs in f64 internally; we downcast at the algorithm output boundary.
+    pub cdfs: Vec<f32>,
     /// Global average CDF, disregarding completely the covariates.
     ///
     /// Used as a prediction for covariates that are incomparable to any of the others.
-    pub global_cdf: Vec<f64>,
+    pub global_cdf: Vec<f32>,
 
     /// Which dimensions of the covariate are equivalent?
     ///
@@ -49,7 +53,7 @@ pub struct Fit {
     /// which other covariates need to be converted by also before prediction.
     ///
     /// Represents a covariate-major matrix.
-    pub covariates: Vec<f64>,
+    pub covariates: Vec<X>,
     /// Indices of which covariates are below which others.
     ///
     /// Together with the raw covariates, these are used to place unseen covariates in the partial
@@ -57,7 +61,7 @@ pub struct Fit {
     pub ordering_info: OrderingInfo,
 
     /// Unique thresholds sorted from low to high.
-    pub thresholds: Vec<f64>,
+    pub thresholds: Vec<Y>,
     /// How well the numerical solve worked.
     pub quality_indicators: QualityIndicators,
 }
@@ -103,8 +107,10 @@ impl Default for PredictionWorkspace {
     }
 }
 
-impl IsotonicDistributionalRegressionFit for Fit {
-    type Covariate<'a> = &'a [f64];
+impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
+    type X = X;
+    type Y = Y;
+    type XInput<'a> = &'a [X];
     type CovariateOrder = CovariateGroups;
     type Config = Config;
 
@@ -189,11 +195,11 @@ impl IsotonicDistributionalRegressionFit for Fit {
     ///     assert!((realized - expected).abs() < 1e-3);
     /// }
     /// ```
-    fn fit(
-        x: &[f64],
-        y: &[f64],
+    fn fit<W: Float>(
+        x: &[X],
+        y: &[Y],
         y_observed: Option<&[bool]>,
-        sample_weight: Option<&[f64]>,
+        sample_weight: Option<&[W]>,
         covariate_order: Self::CovariateOrder,
         response_order: StochasticOrder,
         decreasing: bool,
@@ -204,21 +210,31 @@ impl IsotonicDistributionalRegressionFit for Fit {
 
         let mut weight_allocation = None;
         let weight_to_use = sample_weight.unwrap_or_else(|| {
-            weight_allocation = Some(vec![1.0; n]);
+            weight_allocation = Some(vec![W::one(); n]);
             weight_allocation.as_deref().unwrap()
         });
 
         let uncensored_case = |covariate_order| -> Self {
             let mut algorithm_context =
                 preprocess_uncensored(x, y, weight_to_use, &covariate_order);
+            // Upcast once at the algorithm boundary — OSQP runs in f64.
+            let algorithm_context_f64 = algorithm_context.to_f64();
             let algo_result = match response_order {
                 StochasticOrder::StochasticDominance => match decreasing {
-                    false => uncensored::<Increasing, false>(&algorithm_context, config, progress),
-                    true => uncensored::<Decreasing, false>(&algorithm_context, config, progress),
+                    false => {
+                        uncensored::<Increasing, false>(&algorithm_context_f64, config, progress)
+                    }
+                    true => {
+                        uncensored::<Decreasing, false>(&algorithm_context_f64, config, progress)
+                    }
                 },
                 StochasticOrder::HazardRateOrder => match decreasing {
-                    false => uncensored::<Increasing, true>(&algorithm_context, config, progress),
-                    true => uncensored::<Decreasing, true>(&algorithm_context, config, progress),
+                    false => {
+                        uncensored::<Increasing, true>(&algorithm_context_f64, config, progress)
+                    }
+                    true => {
+                        uncensored::<Decreasing, true>(&algorithm_context_f64, config, progress)
+                    }
                 },
             };
             let covariates = mem::take(&mut algorithm_context.x);
@@ -229,13 +245,15 @@ impl IsotonicDistributionalRegressionFit for Fit {
                     .zip(algorithm_context.weight.iter())
                     .chunk_by(|&(&response, _)| response)
                     .into_iter()
-                    .map(|(response, group)| Observation {
+                    .map(|(response, group)| Observation::<(), Y, (), f32> {
                         x: (),
                         y: response,
                         observed: (),
-                        weight: group.into_iter().map(|(_, w)| w).sum::<f64>(),
+                        // Sum in f64, narrow once at the end — keeps Wilkinson sum error in
+                        // f64 instead of accumulating per-term f32 roundoff.
+                        weight: group.into_iter().map(|(_, w)| *w).sum::<f64>() as f32,
                     }),
-                algorithm_context.weight.iter().sum(),
+                algorithm_context.weight.iter().copied().sum::<f64>() as f32,
             );
             let output = Self {
                 increasing: !decreasing,
@@ -283,9 +301,11 @@ impl IsotonicDistributionalRegressionFit for Fit {
                         };
                         Ok(empty)
                     } else {
+                        // Censored solver is OSQP-free (Kaplan-Meier with clipping) — runs
+                        // directly in the caller's X/Y precision, no f64 widening needed.
                         let mut result = match decreasing {
-                            false => censored::<Increasing>(&algorithm_context, progress),
-                            true => censored::<Decreasing>(&algorithm_context, progress),
+                            false => censored::<Increasing, _, _>(&algorithm_context, progress),
+                            true => censored::<Decreasing, _, _>(&algorithm_context, progress),
                         };
                         transpose(
                             &mut result.cdfs,
@@ -297,9 +317,9 @@ impl IsotonicDistributionalRegressionFit for Fit {
                                 x: (),
                                 y: algorithm_context.y[i],
                                 observed: algorithm_context.y_observed[i],
-                                weight: algorithm_context.weight[i],
+                                weight: algorithm_context.weight[i] as f32,
                             }),
-                            algorithm_context.weight.iter().sum(),
+                            algorithm_context.weight.iter().copied().sum::<f64>() as f32,
                         );
 
                         let output = Fit {
@@ -330,7 +350,7 @@ impl IsotonicDistributionalRegressionFit for Fit {
 
     fn interpolate_covariate<'a>(
         &'a self,
-        covariate: Self::Covariate<'_>,
+        covariate: Self::XInput<'_>,
     ) -> impl CovariateInterpolator + IntoCdfIterator + 'a {
         let target: Vec<_> = unify_group_orders(covariate, &self.covariate_groups).collect();
         Interpolation::new(
@@ -343,7 +363,7 @@ impl IsotonicDistributionalRegressionFit for Fit {
         )
     }
 
-    fn thresholds(&self) -> &[f64] {
+    fn thresholds(&self) -> &[Y] {
         &self.thresholds
     }
 
@@ -369,10 +389,10 @@ impl IsotonicDistributionalRegressionFit for Fit {
     }
 }
 
-impl Fit {
+impl<X: Float, Y: Float> Fit<X, Y> {
     pub fn interpolate_covariate_with_workspace(
         &self,
-        covariate: <Self as IsotonicDistributionalRegressionFit>::Covariate<'_>,
+        covariate: <Self as IsotonicDistributionalRegressionFit>::XInput<'_>,
         workspace: &mut PredictionWorkspace,
     ) -> Interpolation<'_> {
         let target: Vec<_> = unify_group_orders(covariate, &self.covariate_groups).collect();
@@ -526,25 +546,29 @@ impl FromStr for PartialOrder {
     }
 }
 
-/// Pre-processing results that the algorithm needs
-pub struct AlgorithmContext {
+/// Pre-processing results that the algorithm needs for the uncensored partial-order solver.
+///
+/// Weights are stored as `f64` because the partial-order solver runs in `f64` end-to-end
+/// (OSQP requires `f64`). Preprocessing converts the caller's `W: Float` weights into `f64`
+/// here so the algorithm doesn't have to.
+pub struct UncensoredContext<X, Y> {
     /// Unique covariates in a flattened covariate-major matrix
-    pub x: Vec<f64>,
+    pub x: Vec<X>,
     /// Total weight of all observations at the covariate, same length as `covariates` field
     pub x_weight: Vec<f64>,
 
     /// Responses sorted increasing, not deduplicated
-    pub y: Vec<f64>,
+    pub y: Vec<Y>,
     /// Weights in the same order as the responses
     pub weight: Vec<f64>,
     /// Covariate index of this observation
     pub x_indices: Vec<usize>,
 
     /// Unique response values (must have an uncensored observation)
-    pub thresholds: Vec<f64>,
+    pub thresholds: Vec<Y>,
 }
 
-impl AlgorithmContext {
+impl<X, Y> UncensoredContext<X, Y> {
     #[must_use]
     pub fn n(&self) -> usize {
         self.y.len()
@@ -563,6 +587,30 @@ impl AlgorithmContext {
 
         self.x.len() / self.n_covariate()
     }
+}
+
+impl<X: Float, Y: Float> UncensoredContext<X, Y> {
+    /// Convert to an f64/f64 context for the OSQP-backed algorithm. Used at the partial-order
+    /// algorithm boundary where OSQP requires f64 inputs regardless of the user's `X`/`Y`.
+    /// Weights are already `f64` (see field docs), so this only widens covariates and responses.
+    #[must_use]
+    pub fn to_f64(&self) -> UncensoredContext<f64, f64> {
+        UncensoredContext {
+            x: self.x.iter().map(|v| v.to_f64().unwrap()).collect(),
+            x_weight: self.x_weight.clone(),
+            y: self.y.iter().map(|v| v.to_f64().unwrap()).collect(),
+            weight: self.weight.clone(),
+            x_indices: self.x_indices.clone(),
+            thresholds: self
+                .thresholds
+                .iter()
+                .map(|v| v.to_f64().unwrap())
+                .collect(),
+        }
+    }
+}
+
+impl<X: PartialOrd, Y: PartialOrd> UncensoredContext<X, Y> {
     pub fn validate(&self) {
         assert_eq!(self.x.len(), self.n_covariate());
         let covariate_dimension = self.x.len() / self.y.len();
@@ -584,7 +632,13 @@ impl AlgorithmContext {
     }
 }
 
-pub struct ExtendedAlgorithmContext {
+/// Pre-processing results for the censored partial-order solver.
+///
+/// The censored solver is OSQP-free (Kaplan-Meier with clipping), so `X` and `Y` flow through
+/// at the caller's precision. Weights are still stored as `f64` because `KaplanMeier` and the
+/// pooling accumulators run in `f64`; preprocessing converts the caller's `W: Float` weights
+/// into `f64` here.
+pub struct CensoredContext<X, Y> {
     // Covariate index of this observation
     pub x: Vec<usize>,
     // Responses sorted increasing, deduplicated
@@ -596,15 +650,15 @@ pub struct ExtendedAlgorithmContext {
     pub weight: Vec<f64>,
 
     // Unique covariates in a flattened covariate-major matrix
-    pub x_unique: Vec<f64>,
+    pub x_unique: Vec<X>,
     // Total weight of all observations at the covariate, one for each unique covariate
     pub x_weight: Vec<f64>,
 
     /// Only thresholds that have at least one uncensored observation
-    pub thresholds: Vec<f64>,
+    pub thresholds: Vec<Y>,
 }
 
-impl ExtendedAlgorithmContext {
+impl<X, Y> CensoredContext<X, Y> {
     #[must_use]
     pub fn n(&self) -> usize {
         self.y.len()
@@ -623,6 +677,9 @@ impl ExtendedAlgorithmContext {
 
         self.x_unique.len() / self.x_weight.len()
     }
+}
+
+impl<X, Y> CensoredContext<X, Y> {
     pub fn validate(&self) {
         assert_eq!(self.y.len(), self.n());
         assert_eq!(self.weight.len(), self.n());
@@ -640,7 +697,9 @@ impl ExtendedAlgorithmContext {
 }
 
 pub struct AlgorithmOutput {
-    pub cdfs: Vec<f64>,
+    /// Algorithm output CDF values, in f32. OSQP and downstream PAVA run in f64 internally;
+    /// each algorithm narrows once at its return boundary to match `Fit::cdfs`.
+    pub cdfs: Vec<f32>,
     pub ordering_info: OrderingInfo,
     pub quality_indicators: QualityIndicators,
 }

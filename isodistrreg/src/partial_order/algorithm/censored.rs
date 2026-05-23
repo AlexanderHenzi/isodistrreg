@@ -1,14 +1,18 @@
-use crate::functionals::{ClippingWrapper, KaplanMeier};
+use crate::functionals::{ClippingWrapper, KaplanMeier, TotalCmp};
 use crate::partial_order::routines::{compute_transitive_closure, derive_transitive_reduction};
 use crate::partial_order::{
-    AlgorithmOutput, BitSet, ExtendedAlgorithmContext, OrderingInfo, QualityIndicators, functionals,
+    AlgorithmOutput, BitSet, CensoredContext, OrderingInfo, QualityIndicators, functionals,
 };
 use crate::progress::ProgressTracker;
 use crate::structures::{Direction, Observation};
 
+/// Censored partial-order solver. Unlike the uncensored sibling this is OSQP-free — it solves
+/// each threshold via Kaplan-Meier with clipping, so `X`/`Y` flow through at the caller's
+/// precision (no f64 widening). `X: PartialOrd` is consumed by the transitive-reduction step
+/// and `Y` carries through to `KaplanMeier<Y>: Functional` (whose bounds we propagate here).
 #[must_use]
-pub fn algorithm<D: Direction>(
-    context: &ExtendedAlgorithmContext,
+pub fn algorithm<D: Direction, X: PartialOrd, Y: Default + Sync + Send + TotalCmp>(
+    context: &CensoredContext<X, Y>,
     progress: &dyn ProgressTracker,
 ) -> AlgorithmOutput {
     if context.n() == 0 {
@@ -23,14 +27,14 @@ pub fn algorithm<D: Direction>(
     }
 
     match (context.n() - 1) / BitSet::<1>::capacity() {
-        0..1 => algorithm_inner::<D, 1>(context, progress),
-        1..2 => algorithm_inner::<D, 2>(context, progress),
-        2..4 => algorithm_inner::<D, 4>(context, progress),
-        4..8 => algorithm_inner::<D, 8>(context, progress),
-        8..16 => algorithm_inner::<D, 16>(context, progress),
-        16..32 => algorithm_inner::<D, 32>(context, progress),
-        32..64 => algorithm_inner::<D, 64>(context, progress),
-        64..128 => algorithm_inner::<D, 128>(context, progress),
+        0..1 => algorithm_inner::<D, 1, X, Y>(context, progress),
+        1..2 => algorithm_inner::<D, 2, X, Y>(context, progress),
+        2..4 => algorithm_inner::<D, 4, X, Y>(context, progress),
+        4..8 => algorithm_inner::<D, 8, X, Y>(context, progress),
+        8..16 => algorithm_inner::<D, 16, X, Y>(context, progress),
+        16..32 => algorithm_inner::<D, 32, X, Y>(context, progress),
+        32..64 => algorithm_inner::<D, 64, X, Y>(context, progress),
+        64..128 => algorithm_inner::<D, 128, X, Y>(context, progress),
         _ => unimplemented!(
             "data set is too large, largest supported is n = {}",
             BitSet::<128>::capacity(),
@@ -38,8 +42,13 @@ pub fn algorithm<D: Direction>(
     }
 }
 
-fn algorithm_inner<D: Direction, const B: usize>(
-    context: &ExtendedAlgorithmContext,
+fn algorithm_inner<
+    D: Direction,
+    const B: usize,
+    X: PartialOrd,
+    Y: Default + Sync + Send + TotalCmp,
+>(
+    context: &CensoredContext<X, Y>,
     progress: &dyn ProgressTracker,
 ) -> AlgorithmOutput {
     // Build comparable pairs and reduce to cover edges
@@ -118,6 +127,9 @@ fn algorithm_inner<D: Direction, const B: usize>(
             &functional,
         );
 
+        // OSQP-free per-threshold solution. `KaplanMeier` already produces `f32` (narrowed
+        // inside `Functional::evaluate`), so the algorithm body's clipping triangle, PAV
+        // accumulators and per-threshold output are all f32 — no widening boundary here.
         cdfs.extend(solution);
         progress.increment();
 

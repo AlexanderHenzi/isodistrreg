@@ -37,13 +37,17 @@ test_that("idr() single-dimensional not isotone 2", {
 test_that("idr() single-dimensional single covariate", {
   fit <- idr(c(3, 5), data.frame(x = rep(7, 2)), weights = c(1, 2))
   preds <- predict(fit, data.frame(x = 7))
+  # CDF values are computed in f32 internally and widened to f64 at the R
+  # boundary, so non-f32-exact fractions like 1/3 land within ~6e-8 of their
+  # f64 value. The default testthat tolerance (~1.5e-8) is tighter than that.
   expect_equal(
     preds$cdf,
     matrix(
       c(1 / 3, 1),
       nrow = 1,
       ncol = 2
-    )
+    ),
+    tolerance = 1e-6
   )
 })
 

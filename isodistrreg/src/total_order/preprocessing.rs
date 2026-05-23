@@ -1,9 +1,14 @@
+use crate::Float;
 use crate::routines::argsort_unstable_by;
 use crate::structures::{Increasing, Observation};
 use crate::total_order::structures::AlgorithmContext;
 use crate::total_order::structures::CovariateStatistic;
 
-pub fn preprocess_uncensored(x: &[f64], y: &[f64], weight: &[f64]) -> AlgorithmContext<()> {
+pub fn preprocess_uncensored<X: Float, Y: Float, W: Float>(
+    x: &[X],
+    y: &[Y],
+    weight: &[W],
+) -> AlgorithmContext<X, Y, ()> {
     let mut context = preprocess(x, y, |_| (), weight);
     context.unique_responses = context
         .observations
@@ -20,12 +25,12 @@ pub fn preprocess_uncensored(x: &[f64], y: &[f64], weight: &[f64]) -> AlgorithmC
     context
 }
 
-pub fn preprocess<S: Ord, F: Fn(usize) -> S>(
-    x: &[f64],
-    y: &[f64],
+pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
+    x: &[X],
+    y: &[Y],
     observed: F,
-    weight: &[f64],
-) -> AlgorithmContext<S> {
+    weight: &[W],
+) -> AlgorithmContext<X, Y, S> {
     let n = x.len();
 
     // Determine the order by covariate and response
@@ -40,9 +45,17 @@ pub fn preprocess<S: Ord, F: Fn(usize) -> S>(
 
     // While copying the data in the sorted order and aggregating identical observations by weight,
     // we track the unique covariates we encounter.
-    let mut observations = Vec::with_capacity(n);
+    let mut observations: Vec<Observation<usize, Y, S, f32>> = Vec::with_capacity(n);
     let mut unique_covariates = Vec::with_capacity(n);
-    let mut covariate_statistics = Vec::with_capacity(n);
+    let mut covariate_statistics: Vec<CovariateStatistic> = Vec::with_capacity(n);
+
+    // Accumulator for the in-progress observation's weight in the caller's W precision.
+    // Invariant: `last_w_accum` holds the running W-precision sum that will be committed
+    // into `observations.last().weight` (narrowed to f32) when the in-progress observation
+    // is finalized (i.e., when a new observation is pushed or at the end of the loop).
+    // While the in-progress observation is current, its `weight: f32` field holds an
+    // uninitialized placeholder (0.0) and must not be read.
+    let mut last_w_accum: W;
 
     let mut covariate_sorted_indices = order.into_iter();
     {
@@ -51,8 +64,9 @@ pub fn preprocess<S: Ord, F: Fn(usize) -> S>(
             x: 0,
             y: y[index],
             observed: observed(index),
-            weight: weight[index],
+            weight: 0.0, // placeholder; finalized from `last_w_accum`
         });
+        last_w_accum = weight[index];
         covariate_statistics.push(CovariateStatistic {
             weight: 0.0,
             cumulative_weight: 0.0, // We update the cumulative weight once duplicates are handled
@@ -68,23 +82,30 @@ pub fn preprocess<S: Ord, F: Fn(usize) -> S>(
         let censoring_equal = observed(index) == last_observation.observed;
 
         if covariate_equal && response_equal && censoring_equal {
-            // At the same observation -> just accumulate observation weight
-            last_observation.weight += weight[index];
+            // At the same observation -> just accumulate observation weight in W precision
+            last_w_accum = last_w_accum + weight[index];
         } else if covariate_equal {
-            // New observation but same covariate -> accumulate covariate weight from observation
-            // and add new observation
-            current_statistic.weight += last_observation.weight;
+            // New observation but same covariate -> finalize the previous observation's
+            // weight (narrow to f32), accumulate covariate weight from it, and start a new
+            // observation with a fresh W accumulator.
+            let finalized = last_w_accum.to_f32().unwrap();
+            last_observation.weight = finalized;
+            current_statistic.weight += finalized;
             observations.push(Observation {
                 x: unique_covariates.len() - 1, // we stay with the same covariate
                 y: y[index],
                 observed: observed(index),
-                weight: weight[index],
+                weight: 0.0, // placeholder; finalized from `last_w_accum`
             });
+            last_w_accum = weight[index];
         } else {
-            // New observation and new covariate -> accumulate covariate weight from observation,
-            // add a new observation and collect the cumulative covariate weight and add a new
-            // covariate statistic
-            current_statistic.weight += last_observation.weight;
+            // New observation and new covariate -> finalize the previous observation's
+            // weight, accumulate covariate weight from it, collect the cumulative covariate
+            // weight, push a new covariate statistic, push a new observation, and seed a
+            // fresh W accumulator.
+            let finalized = last_w_accum.to_f32().unwrap();
+            last_observation.weight = finalized;
+            current_statistic.weight += finalized;
             current_statistic.cumulative_weight += current_statistic.weight;
             let new_statistic = CovariateStatistic {
                 weight: 0.0,
@@ -95,14 +116,18 @@ pub fn preprocess<S: Ord, F: Fn(usize) -> S>(
                 x: unique_covariates.len(),
                 y: y[index],
                 observed: observed(index),
-                weight: weight[index],
+                weight: 0.0, // placeholder; finalized from `last_w_accum`
             });
+            last_w_accum = weight[index];
             unique_covariates.push(x[index]);
 
             current_statistic = covariate_statistics.last_mut().unwrap();
         }
     }
-    current_statistic.weight += observations.last().unwrap().weight;
+    // Finalize the last in-progress observation.
+    let finalized = last_w_accum.to_f32().unwrap();
+    observations.last_mut().unwrap().weight = finalized;
+    current_statistic.weight += finalized;
     current_statistic.cumulative_weight += current_statistic.weight;
     // Could shrink to fit `observations`, `unique_covariates` and `covariate_statistics` here if
     // duplicates are common, and we care about memory usage

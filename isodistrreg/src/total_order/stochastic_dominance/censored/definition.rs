@@ -1,22 +1,10 @@
-use crate::error::Error;
 use crate::structures::Direction;
-use crate::total_order::stochastic_dominance::censored::preprocess;
-use crate::total_order::stochastic_dominance::censored::preprocessing::PreProcessingResult;
-use crate::total_order::structures::AlgorithmOutput;
+use crate::total_order::stochastic_dominance::censored::structures::CensoredSdContext;
 
-pub(crate) fn algorithm<D: Direction>(
-    x: &[f64],
-    y: &[f64],
-    observed: &[bool],
-    weight: &[f64],
-) -> Result<AlgorithmOutput, Error> {
-    let PreProcessingResult {
-        context,
-        unique_covariates,
-        thresholds,
-    } = preprocess(x, y, observed, weight)?;
-
-    let cdfs: Vec<_> = (0..thresholds.len())
+pub(crate) fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
+    context: &CensoredSdContext<X, Y>,
+) -> Vec<f32> {
+    (0..context.thresholds.len())
         .map(|threshold| {
             let mut survivals = (0..context.n_covariate())
                 .map(|r| {
@@ -27,16 +15,21 @@ pub(crate) fn algorithm<D: Direction>(
                                 .iter()
                                 .filter(|o| r <= o.x && o.x <= s)
                                 .collect::<Vec<_>>();
-                            let mut survival = 1.0;
+                            // Reference algorithm — accumulate in f64 for maximum precision;
+                            // we downcast to f32 at the output to match the production cdfs.
+                            let mut survival: f64 = 1.0;
                             for (i_rs, observation) in data.iter().enumerate() {
-                                if threshold.lt(&observation.y) {
+                                if threshold < observation.y {
                                     break;
                                 }
 
                                 if observation.observed {
                                     survival *= 1.0
-                                        - observation.weight
-                                            / data[i_rs..].iter().map(|o| o.weight).sum::<f64>();
+                                        - observation.weight as f64
+                                            / data[i_rs..]
+                                                .iter()
+                                                .map(|o| o.weight as f64)
+                                                .sum::<f64>();
                                 }
                             }
 
@@ -108,12 +101,6 @@ pub(crate) fn algorithm<D: Direction>(
             maximums
         })
         .flatten()
-        .map(|s| 1.0 - s)
-        .collect();
-
-    Ok(AlgorithmOutput {
-        cdfs,
-        unique_covariates,
-        thresholds,
-    })
+        .map(|s| (1.0 - s) as f32)
+        .collect()
 }

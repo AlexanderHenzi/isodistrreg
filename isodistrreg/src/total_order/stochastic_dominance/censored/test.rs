@@ -7,8 +7,8 @@ use crate::preprocessing::validate;
 use crate::structures::{Decreasing, Increasing};
 use crate::test::is_relative_eq_vec;
 use crate::total_order::functionals::algorithm;
+use crate::total_order::stochastic_dominance::censored::preprocess;
 use crate::total_order::stochastic_dominance::censored::{definition, fast};
-use crate::total_order::structures::AlgorithmOutput;
 use itertools::izip;
 
 fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usize>(
@@ -18,7 +18,11 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
     observed: [bool; N],
     expected: [[f64; N_COVARIATE]; N_THRESHOLD],
 ) {
-    let expected_flat: Vec<_> = expected.iter().flatten().copied().collect();
+    let expected_flat: Vec<f64> = expected.iter().flatten().copied().collect();
+    // f32-narrowed view for comparisons against algorithms that compute in f32 (definition,
+    // fast). Done once, then reused. The narrow happens through the literal value's f64
+    // representation, so it matches what `as f32` produces from the algorithm's f64 inputs.
+    let expected_flat_f32: Vec<f32> = expected_flat.iter().map(|&v| v as f32).collect();
     validate(x.chunks_exact(1), &y, Some(&observed), Some(&weight)).unwrap();
 
     fn unique_with_filter_sort<const N: usize>(vs: &[f64; N], filter: &[bool; N]) -> Vec<f64> {
@@ -35,34 +39,27 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
 
     // Definition
     {
-        let AlgorithmOutput {
-            cdfs,
-            unique_covariates,
-            thresholds,
-        } = definition::algorithm::<Increasing>(&x, &y, &observed, &weight).unwrap();
-        assert_eq!(unique_covariates.len(), N_COVARIATE);
-        assert_eq!(thresholds.len(), N_THRESHOLD);
-        assert_eq!(thresholds, unique_with_filter_sort(&y, &observed));
+        let context = preprocess(&x, &y, &observed, &weight).unwrap();
+        let cdfs = definition::algorithm::<Increasing, _, _>(&context);
+        assert_eq!(context.unique_covariates.len(), N_COVARIATE);
+        assert_eq!(context.thresholds.len(), N_THRESHOLD);
+        assert_eq!(context.thresholds, unique_with_filter_sort(&y, &observed));
         assert!(
-            is_relative_eq_vec(&cdfs, &expected_flat),
+            is_relative_eq_vec(&cdfs, &expected_flat_f32),
             "Result:   {:?}\nExpected: {:?}\n",
             cdfs,
-            expected_flat,
+            expected_flat_f32,
         );
     }
 
     // Definition, reversed
     {
         let reversed_covariates = x.iter().map(|v| -v).collect::<Vec<_>>();
-        let AlgorithmOutput {
-            cdfs: reversed_cdfs,
-            unique_covariates,
-            thresholds,
-        } = definition::algorithm::<Decreasing>(&reversed_covariates, &y, &observed, &weight)
-            .unwrap();
-        assert_eq!(unique_covariates.len(), N_COVARIATE);
-        assert_eq!(thresholds.len(), N_THRESHOLD);
-        assert_eq!(thresholds, unique_with_filter_sort(&y, &observed));
+        let context = preprocess(&reversed_covariates, &y, &observed, &weight).unwrap();
+        let reversed_cdfs = definition::algorithm::<Decreasing, _, _>(&context);
+        assert_eq!(context.unique_covariates.len(), N_COVARIATE);
+        assert_eq!(context.thresholds.len(), N_THRESHOLD);
+        assert_eq!(context.thresholds, unique_with_filter_sort(&y, &observed));
         if N_COVARIATE > 0 {
             let cdfs = reversed_cdfs
                 .chunks_exact(N_COVARIATE)
@@ -71,35 +68,32 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
                 .copied()
                 .collect::<Vec<_>>();
             assert!(
-                is_relative_eq_vec(&cdfs, &expected_flat),
+                is_relative_eq_vec(&cdfs, &expected_flat_f32),
                 "Result:   {:?}\nExpected: {:?}\n",
                 cdfs,
-                expected_flat,
+                expected_flat_f32,
             );
         }
     }
 
     // Fast
     {
-        let AlgorithmOutput {
-            cdfs,
-            unique_covariates,
-            thresholds,
-        } = fast::algorithm::<Increasing>(&x, &y, &observed, &weight, &crate::NoProgress).unwrap();
-        assert_eq!(unique_covariates.len(), N_COVARIATE);
-        assert_eq!(thresholds, unique_with_filter_sort(&y, &observed));
+        let context = preprocess(&x, &y, &observed, &weight).unwrap();
+        let cdfs = fast::algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        assert_eq!(context.unique_covariates.len(), N_COVARIATE);
+        assert_eq!(context.thresholds, unique_with_filter_sort(&y, &observed));
         assert!(
-            is_relative_eq_vec(&cdfs, &expected_flat),
+            is_relative_eq_vec(&cdfs, &expected_flat_f32),
             "Result:   {:?}\nExpected: {:?}\n",
             cdfs,
-            expected_flat,
+            expected_flat_f32,
         );
     }
 
     // TODO: Fast, reversed
     // {
     //     let reversed_covariates = covariate.iter().map(|v| -v).collect::<Vec<_>>();
-    //     let (reversed_cdfs, unique_covariates, thresholds) = fast::algorithm::<Decreasing>(&reversed_covariates, &response, &censoring, &weights);
+    //     let (reversed_cdfs, unique_covariates, thresholds) = fast::algorithm::<Decreasing, _, _>(&reversed_covariates, &response, &censoring, &weights);
     //     assert_eq!(unique_covariates.len(), N_COVARIATE);
     //     assert_eq!(thresholds.len(), N_THRESHOLD);
     //     let cdfs = reversed_cdfs
@@ -132,8 +126,12 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
 
                 let result =
                     algorithm::<Decreasing, _, _>(izip!(x, y, observed, weight,), &functional);
+                // `KaplanMeier` now produces `f32`, so the functional-PAVA output is `Vec<f32>` —
+                // same precision as the user-visible `fast` algorithm output. Narrow the f64
+                // reference array to f32 to compare like-with-like.
+                let expected_f32: Vec<f32> = expected.iter().map(|&v| v as f32).collect();
                 assert!(
-                    is_relative_eq_vec(&result, &expected),
+                    is_relative_eq_vec(&result, &expected_f32),
                     "Result:   {:?}\nExpected: {:?}\n",
                     result,
                     expected,
@@ -162,9 +160,12 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
                 &CovariateGroups::empty(dimensions),
             );
             let output =
-                partial_order::censored::<Increasing>(&algorithm_context, &crate::NoProgress);
+                partial_order::censored::<Increasing, _, _>(&algorithm_context, &crate::NoProgress);
+            // The partial-order censored algorithm narrows its f64 accumulators to f32 at the
+            // return boundary; the test compares against f32-narrowed expectations.
+            let expected_f32: Vec<f32> = expected_flat.iter().map(|&v| v as f32).collect();
             assert!(
-                is_relative_eq_vec(&output.cdfs, &expected_flat),
+                is_relative_eq_vec(&output.cdfs, &expected_f32),
                 "Result:   {:?}\nExpected: {:?}\n",
                 output.cdfs,
                 expected_flat,

@@ -43,11 +43,12 @@ where
 }
 
 // Compute the empirical CDF. Assumes that observations have been deduplicated so responses are
-// unique.
-pub fn empirical_cdf<C, I: Into<Observation<C, f64, ()>>>(
+// unique. The response slot type `Y` is not used arithmetically here (the cumulative share is
+// f32), so any type fits — typically the caller's `Y: Float` threshold type.
+pub fn empirical_cdf<C, Y, I: Into<Observation<C, Y, (), f32>>>(
     observations: impl Iterator<Item = I>,
-    total_weight: f64,
-) -> Vec<f64> {
+    total_weight: f32,
+) -> Vec<f32> {
     observations
         .map(Into::into)
         .scan(0.0, |acc, o| {
@@ -61,9 +62,9 @@ pub fn empirical_cdf<C, I: Into<Observation<C, f64, ()>>>(
 
 /// Compute the Kaplan-Meier estimator on unique responses.
 pub fn kaplan_meier<C, R: Copy + PartialEq>(
-    observations: impl Iterator<Item = Observation<C, R, bool>>,
-    total_weight: f64,
-) -> Vec<f64> {
+    observations: impl Iterator<Item = Observation<C, R, bool, f32>>,
+    total_weight: f32,
+) -> Vec<f32> {
     // Observations have been deduplicated so responses are unique
     observations
         .scan(
@@ -400,7 +401,7 @@ where
 }
 
 #[must_use]
-pub fn lexicographic_order(covariates: &[f64], n: usize, d: usize) -> Vec<usize> {
+pub fn lexicographic_order<T: PartialOrd>(covariates: &[T], n: usize, d: usize) -> Vec<usize> {
     assert_eq!(covariates.len(), n * d);
 
     let get_cdf = |i| &covariates[i * d..(i + 1) * d];
@@ -410,10 +411,10 @@ pub fn lexicographic_order(covariates: &[f64], n: usize, d: usize) -> Vec<usize>
 /// Compares two vectors of equal dimension in lexicographical order.
 ///
 /// Element-wise comparison of the two vectors from low indices to high, with -0.0 and 0.0 treated
-/// as equal.
+/// as equal (when called on floats — `PartialOrd` semantics apply).
 #[must_use]
 #[inline]
-pub fn lexicographic_cmp(left: &[f64], right: &[f64]) -> Ordering {
+pub fn lexicographic_cmp<T: PartialOrd>(left: &[T], right: &[T]) -> Ordering {
     for (v_l, v_r) in left.iter().zip(right) {
         if v_l < v_r {
             return Ordering::Less;

@@ -1,17 +1,18 @@
+use crate::Float;
 use crate::error::Error;
-use crate::partial_order::ExtendedAlgorithmContext;
-use crate::partial_order::structures::{AlgorithmContext, CovariateGroups, PartialOrder};
+use crate::partial_order::CensoredContext;
+use crate::partial_order::structures::{CovariateGroups, PartialOrder, UncensoredContext};
 use crate::routines::{argsort_unstable_by, lexicographic_cmp};
 use crate::structures::Increasing;
 use itertools::Itertools;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-pub fn validate(
-    covariates: &[f64],
-    responses: &[f64],
+pub fn validate<X: Float, Y: Float, W: Float>(
+    covariates: &[X],
+    responses: &[Y],
     censoring: Option<&[bool]>,
-    weights: Option<&[f64]>,
+    weights: Option<&[W]>,
     covariate_order: &CovariateGroups,
 ) -> Result<usize, Error> {
     if !covariate_order.is_consistent() {
@@ -38,12 +39,12 @@ pub fn validate(
 }
 
 #[must_use]
-pub fn preprocess_uncensored(
-    covariates: &[f64],
-    responses: &[f64],
-    weights: &[f64],
+pub fn preprocess_uncensored<X: Float, Y: Float, W: Float>(
+    covariates: &[X],
+    responses: &[Y],
+    weights: &[W],
     covariate_groups: &CovariateGroups,
-) -> AlgorithmContext {
+) -> UncensoredContext<X, Y> {
     // Convert the covariates such that they become comparable component-wise
     let covariates: Vec<_> = covariates
         .chunks_exact(covariate_groups.dimension)
@@ -54,13 +55,13 @@ pub fn preprocess_uncensored(
 }
 
 #[must_use]
-pub fn preprocess_censored(
-    x: &[f64],
-    y: &[f64],
+pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
+    x: &[X],
+    y: &[Y],
     observed: &[bool],
-    weight: &[f64],
+    weight: &[W],
     covariate_groups: &CovariateGroups,
-) -> ExtendedAlgorithmContext {
+) -> CensoredContext<X, Y> {
     // Convert the covariates such that they become comparable component-wise
     let x_converted: Vec<_> = x
         .chunks_exact(covariate_groups.dimension)
@@ -81,10 +82,10 @@ pub fn preprocess_censored(
 /// Groups of covariates should be treated together if their values are interchangeable. We simplify
 /// downstream logic by converting the covariate groups such that their ordering can be determined
 /// by a component-wise comparison.
-pub fn unify_group_orders(
-    covariate: &[f64],
+pub fn unify_group_orders<X: Float>(
+    covariate: &[X],
     covariate_groups: &CovariateGroups,
-) -> impl Iterator<Item = f64> {
+) -> impl Iterator<Item = X> {
     let mut result = Vec::with_capacity(covariate.len());
 
     // Re-organize (within each group) the values such that we can compare them component-wise
@@ -109,7 +110,7 @@ pub fn unify_group_orders(
                 result[previous_len..].sort_unstable_by(|l, r| r.total_cmp(l));
                 // ... and compute their cumulative sum
                 for k in previous_len + 1..result.len() {
-                    result[k] += result[k - 1];
+                    result[k] = result[k] + result[k - 1];
                 }
             }
         }
@@ -121,12 +122,12 @@ pub fn unify_group_orders(
 }
 
 /// Group rows of X; for each unique covariate row keep all responses and sum of weights.
-fn group_by_covariate_uncensored(
-    covariates: &[f64],
-    responses: &[f64],
-    weights: &[f64],
+fn group_by_covariate_uncensored<X: Float, Y: Float, W: Float>(
+    covariates: &[X],
+    responses: &[Y],
+    weights: &[W],
     covariate_dimension: usize,
-) -> AlgorithmContext {
+) -> UncensoredContext<X, Y> {
     let n_max = responses.len();
     debug_assert_eq!(covariates.len(), n_max * covariate_dimension);
 
@@ -140,15 +141,19 @@ fn group_by_covariate_uncensored(
         n_max,
     );
 
+    // Caller-supplied weights live in `W`. The partial-order solver runs in `f64`, so we
+    // narrow each weight once on read and accumulate in `f64` from here on.
+    let weight_f64 = |i: usize| weights[i].to_f64().unwrap();
+
     let n_initial_covariates = covariates.len() / covariate_dimension;
     // Unique, sorted covariates
     let mut sorted_covariates = Vec::with_capacity(n_initial_covariates);
     // Observation weight aggregated by covariate
-    let mut total_weight_per_covariate = Vec::with_capacity(n_initial_covariates);
+    let mut total_weight_per_covariate: Vec<f64> = Vec::with_capacity(n_initial_covariates);
     // Response value sorted by covariate (first) and response (second), their combination is unique
     let mut sorted_responses = Vec::with_capacity(covariates.len());
     // Weight values aggregated by sorted covariate (first) and response (second)
-    let mut sorted_weights = Vec::with_capacity(covariates.len());
+    let mut sorted_weights: Vec<f64> = Vec::with_capacity(covariates.len());
     // For each observation, the index in which the covariate is stored, by the same order
     let mut covariate_indices = Vec::with_capacity(n_max);
 
@@ -157,7 +162,7 @@ fn group_by_covariate_uncensored(
     sorted_covariates.extend_from_slice(get_cdf(read_index));
     total_weight_per_covariate.push(0.0);
     sorted_responses.push(responses[read_index]);
-    sorted_weights.push(weights[read_index]);
+    sorted_weights.push(weight_f64(read_index));
     covariate_indices.push(0);
 
     // Remaining items
@@ -168,27 +173,29 @@ fn group_by_covariate_uncensored(
             // a new covariate
 
             // from last iteration, collect weight
-            *total_weight_per_covariate.last_mut().unwrap() += sorted_weights.last().unwrap();
+            let last_w = *sorted_weights.last().unwrap();
+            *total_weight_per_covariate.last_mut().unwrap() += last_w;
 
             // this iteration, add the new data
             sorted_covariates.extend_from_slice(get_cdf(read_index));
             total_weight_per_covariate.push(0.0);
             sorted_responses.push(responses[read_index]);
-            sorted_weights.push(weights[read_index]);
+            sorted_weights.push(weight_f64(read_index));
             covariate_indices.push(nr_unique);
         } else if responses[read_index] != *sorted_responses.last().unwrap() {
             // same covariate, but new response
 
             // from last iteration, collect weight
-            *total_weight_per_covariate.last_mut().unwrap() += sorted_weights.last().unwrap();
+            let last_w = *sorted_weights.last().unwrap();
+            *total_weight_per_covariate.last_mut().unwrap() += last_w;
 
             // this iteration, add the new data
             sorted_responses.push(responses[read_index]);
-            sorted_weights.push(weights[read_index]);
+            sorted_weights.push(weight_f64(read_index));
             covariate_indices.push(nr_unique - 1); // still the old index
         } else {
             // same covariate and response, just increment the weight
-            *sorted_weights.last_mut().unwrap() += weights[read_index];
+            *sorted_weights.last_mut().unwrap() += weight_f64(read_index);
         }
 
         let nr_covariates = total_weight_per_covariate.len();
@@ -199,7 +206,10 @@ fn group_by_covariate_uncensored(
         assert_eq!(sorted_weights.len(), nr_observations);
         assert_eq!(covariate_indices.len(), nr_observations);
     }
-    *total_weight_per_covariate.last_mut().unwrap() += sorted_weights.last().unwrap();
+    {
+        let last_w = *sorted_weights.last().unwrap();
+        *total_weight_per_covariate.last_mut().unwrap() += last_w;
+    }
     debug_assert!(
         (total_weight_per_covariate.iter().sum::<f64>() - sorted_weights.iter().sum::<f64>()).abs()
             < 1e-6
@@ -224,7 +234,7 @@ fn group_by_covariate_uncensored(
     let (responses, weights, covariate_indices) = order
         .into_iter()
         .map(|i| (sorted_responses[i], sorted_weights[i], covariate_indices[i]))
-        .collect::<(Vec<_>, Vec<_>, Vec<_>)>();
+        .collect::<(Vec<_>, Vec<f64>, Vec<_>)>();
     let thresholds = responses.iter().copied().dedup().collect();
 
     for (c, tw) in total_weight_per_covariate.iter().enumerate() {
@@ -240,7 +250,7 @@ fn group_by_covariate_uncensored(
     // Gets stored in the final Fit struct, so let's not waste space
     sorted_covariates.shrink_to_fit();
 
-    AlgorithmContext {
+    UncensoredContext {
         x: sorted_covariates,
         x_weight: total_weight_per_covariate,
         y: responses,
@@ -257,6 +267,7 @@ struct ObsTmp {
     /// index into `thresholds` (a.k.a. \( \tau \))
     threshold: usize,
     observed: bool,
+    /// Weight in `f64` — converted on read from the caller's `W`.
     weight: f64,
 }
 
@@ -264,13 +275,13 @@ struct ObsTmp {
 ///    builds unique response thresholds and stores threshold indices;
 /// 2) deduplicates covariates (multi-dim) by value (lexicographic);
 /// 3) re-sorts by (threshold/response, censoring) and deduplicates again.
-fn group_by_covariate_censored(
-    x: &[f64],
-    y: &[f64],
+fn group_by_covariate_censored<X: Float, Y: Float, W: Float>(
+    x: &[X],
+    y: &[Y],
     observed: &[bool],
-    weight: &[f64],
+    weight: &[W],
     dimension: usize,
-) -> ExtendedAlgorithmContext {
+) -> CensoredContext<X, Y> {
     let n = y.len();
     debug_assert_eq!(observed.len(), n);
     debug_assert_eq!(weight.len(), n);
@@ -303,7 +314,7 @@ fn group_by_covariate_censored(
 
     // If everything is censored, all thresholds are empty and we discard everything.
     let Some(start) = first_uncensored_pos else {
-        return ExtendedAlgorithmContext {
+        return CensoredContext {
             x: Vec::with_capacity(0),
             y: Vec::with_capacity(0),
             y_observed: Vec::with_capacity(0),
@@ -314,8 +325,8 @@ fn group_by_covariate_censored(
         };
     };
 
-    let mut thresholds: Vec<f64> = Vec::with_capacity(n - start);
-    let mut obs: Vec<ObsTmp> = Vec::with_capacity(n - start);
+    let mut thresholds = Vec::with_capacity(n - start);
+    let mut obs = Vec::with_capacity(n - start);
 
     // Helper: push (or merge) an observation in the current sorted stream.
     let push_or_merge = |o: ObsTmp, obs: &mut Vec<ObsTmp>| {
@@ -348,7 +359,8 @@ fn group_by_covariate_censored(
                 x_row: data_idx,
                 threshold: threshold_index,
                 observed: observed[data_idx],
-                weight: weight[data_idx],
+                // Narrow once on read; the solver downstream is `f64`.
+                weight: weight[data_idx].to_f64().unwrap(),
             },
             &mut obs,
         );
@@ -366,7 +378,7 @@ fn group_by_covariate_censored(
 
     cov_rows.sort_unstable_by(|&i, &j| lexicographic_cmp(get_cdf(i), get_cdf(j)));
 
-    let mut unique_covariates: Vec<f64> = Vec::with_capacity(cov_rows.len() * dimension);
+    let mut unique_covariates = Vec::with_capacity(cov_rows.len() * dimension);
     let mut cov_row_to_unique: HashMap<usize, usize> = HashMap::with_capacity(cov_rows.len());
 
     let mut last_row: Option<usize> = None;
@@ -424,14 +436,14 @@ fn group_by_covariate_censored(
     }
 
     let nr_unique_cov = unique_covariates.len() / dimension;
-    let mut covariate_weight = vec![0.0; nr_unique_cov];
+    let mut covariate_weight = vec![0.0_f64; nr_unique_cov];
     for (&c, &w) in out_cov_idx.iter().zip(out_weight.iter()) {
         covariate_weight[c] += w;
     }
 
     unique_covariates.shrink_to_fit();
 
-    ExtendedAlgorithmContext {
+    CensoredContext {
         x: out_cov_idx,
         y: out_threshold_idx,
         y_observed: out_observed,

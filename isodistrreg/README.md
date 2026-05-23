@@ -24,3 +24,11 @@ Enable optional features as needed:
 [dependencies]
 isodistrreg = { version = "0.4", features = ["partial-order"] }
 ```
+
+## Precision
+
+`IsotonicDistributionalRegressionFit` is generic over its covariate and response
+scalar types via the associated types `X` and `Y` (`f32` or `f64`), which are
+deduced from the slices passed to `fit`. Sample weights have their own
+independent `Float` parameter `W`. CDF outputs are always `f32` — that is the
+precision the algorithm body computes and stores.

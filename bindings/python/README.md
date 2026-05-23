@@ -15,6 +15,14 @@ references.
 
 We use numpy to set up a toy problem, but plain python lists can also be used.
 
+### Precision
+
+CDF outputs (`cdf`, `cdf_at`, `cdf_grid`) are always `np.float32`. Covariates and
+thresholds are stored at the dtype of the input arrays passed to `IDR(...)`:
+`float32` inputs stay `float32`, `float64` inputs stay `float64`, and `.X` /
+`.thresholds` return zero-copy views at the storage dtype. See the docstring on
+`IDR.cdf` and `IDR.from_cdfs` in `_core.pyi` for the full rules.
+
 ### Example 1: Covariate 1-dimensional, outcome censored
 
 ```python

@@ -1,72 +1,47 @@
-use crate::error::Error;
 use crate::progress::ProgressTracker;
 use crate::routines::kaplan_meier;
 use crate::structures::{Direction, Observation};
 use crate::total_order;
-use crate::total_order::stochastic_dominance::censored::preprocessing::{
-    PreProcessingResult, preprocess,
-};
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use crate::total_order::stochastic_dominance::censored::propagate_bounds::{
     Avx2Kernel, Avx512Kernel,
 };
 use crate::total_order::stochastic_dominance::censored::propagate_bounds::{Kernel, ScalarKernel};
-use crate::total_order::stochastic_dominance::censored::structures::ExtendedAlgorithmContext;
-use crate::total_order::stochastic_dominance::censored::structures::{Estimates, Partition};
+use crate::total_order::stochastic_dominance::censored::structures::{
+    CensoredSdContext, Estimates, Partition,
+};
 use crate::total_order::stochastic_dominance::routines;
 use crate::total_order::structures;
-use crate::total_order::structures::{AlgorithmOutput, WeightedPartition};
+use crate::total_order::structures::WeightedPartition;
+use crate::total_order::weight_noise_floor;
 use bitree::BITree;
 use std::cmp::Ordering;
 use std::iter::repeat_n;
 
-pub fn algorithm<D: Direction>(
-    x: &[f64],
-    y: &[f64],
-    observed: &[bool],
-    weight: &[f64],
+pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
+    context: &CensoredSdContext<X, Y>,
     progress: &dyn ProgressTracker,
-) -> Result<AlgorithmOutput, Error> {
-    let PreProcessingResult {
-        context,
-        unique_covariates,
-        thresholds,
-    } = preprocess(x, y, observed, weight)?;
+) -> Vec<f32> {
     progress.set_total(context.n_threshold());
 
     if context.n_threshold() == 0 {
-        debug_assert!(unique_covariates.is_empty());
-        debug_assert!(thresholds.is_empty());
-        return Ok(AlgorithmOutput {
-            cdfs: Vec::with_capacity(0),
-            unique_covariates,
-            thresholds,
-        });
+        debug_assert!(context.unique_covariates.is_empty());
+        debug_assert!(context.thresholds.is_empty());
+        return Vec::with_capacity(0);
     } else if context.n_threshold() == 1 {
         // Single threshold -> simple binary isotonic regression with censoring amount
-        return Ok(AlgorithmOutput {
-            cdfs: total_order::routines::single_response::<D, _>(
-                context.observations,
-                context.covariate_statistics,
-            ),
-            unique_covariates,
-            thresholds,
-        });
+        return total_order::routines::single_response::<D, _>(
+            context.observations.clone(),
+            context.covariate_statistics.clone(),
+        );
     }
     if context.n_covariate() == 1 {
         // Single covariate -> a single empirical cdf
-        return Ok(AlgorithmOutput {
-            cdfs: kaplan_meier(
-                context.observations.iter().copied(),
-                context.covariate_statistics[0].weight,
-            ),
-            unique_covariates,
-            thresholds,
-        });
+        return kaplan_meier(
+            context.observations.iter().copied(),
+            context.covariate_statistics[0].weight,
+        );
     }
-
-    // TODO: Try asserting all we know is true about the input to allow the compiler to make more
-    //  assumptions
 
     // Collects final estimate
     let mut cdfs = Vec::with_capacity(context.n_threshold() * context.n_covariate());
@@ -76,11 +51,7 @@ pub fn algorithm<D: Direction>(
 
     if data_index == context.n() {
         // No uncensored observations, we're done
-        return Ok(AlgorithmOutput {
-            cdfs,
-            unique_covariates,
-            thresholds,
-        });
+        return cdfs;
     }
 
     // The next observation is uncensored
@@ -89,19 +60,19 @@ pub fn algorithm<D: Direction>(
     let just_one_more = data_index + 1 == context.n();
     if just_one_more {
         // Ends with a single uncensored observation, we're done
-        finalize_for_single_uncensored::<D::REVERSE>(data_index, context, &mut cdfs);
-        return Ok(AlgorithmOutput {
-            cdfs,
-            unique_covariates,
-            thresholds,
-        });
+        finalize_for_single_uncensored::<D::REVERSE, _, _>(data_index, context, &mut cdfs);
+        return cdfs;
     }
 
     let at_least_two_more = data_index + 1 < context.n();
     let at_least_two_uncensored = context.observations[data_index + 1].observed;
     let (start_threshold, estimates, partitions) = if at_least_two_more && at_least_two_uncensored {
         // Run the classical PAV algorithm first if we can save at least one of the more expensive
-        // update steps of the censored algorithm
+        // update steps of the censored algorithm.
+        //
+        // The uncensored prefix runs in f32 (classical PAVA — well-conditioned and shares helpers
+        // with other algorithms). The bridge into the generalized-PAVA hot path happens at
+        // `Estimates::from_partial_uncensored_solution`.
 
         // Buffer to temporarily store partitions right of the covariate index being changed
         let mut partitions_to_store = Vec::with_capacity(context.n_covariate());
@@ -128,7 +99,7 @@ pub fn algorithm<D: Direction>(
                 cdfs.extend(repeat_n(1.0, context.n_covariate()));
             } else {
                 // Some censoring in final threshold only
-                finalize_for_censoring_only_in_final_threshold::<D>(
+                finalize_for_censoring_only_in_final_threshold::<D, _, _>(
                     data_index,
                     consumed_share,
                     consumed_weight,
@@ -139,11 +110,7 @@ pub fn algorithm<D: Direction>(
                 );
             }
             progress.increment();
-            return Ok(AlgorithmOutput {
-                cdfs,
-                unique_covariates,
-                thresholds,
-            });
+            return cdfs;
         }
 
         // Initialize for the general algorithm
@@ -165,9 +132,9 @@ pub fn algorithm<D: Direction>(
         let mut estimates = Estimates::new(context.n_covariate(), data_index);
         let mut partitions = Vec::with_capacity(context.n_covariate());
 
-        // First threshold uncensored threshold (fast initialization only)
+        // First uncensored threshold (fast initialization only)
         debug_assert!(context.observations[data_index].observed);
-        initialize::<D::REVERSE>(data_index, &mut estimates, &mut partitions, &context);
+        initialize::<D::REVERSE, _, _>(data_index, &mut estimates, &mut partitions, context);
         let start_threshold = context.observations[data_index].y;
         data_index += 1;
 
@@ -179,7 +146,7 @@ pub fn algorithm<D: Direction>(
     // (`generalized_pava → update_uncensored → pool → propagate_bounds*`) over the kernel's
     // zero-sized `Kernel` impl, so `K::apply` inlines into every callsite — no indirection in
     // the hot loop.
-    dispatch_generalized_pava::<D>(
+    dispatch_generalized_pava::<D, _, _>(
         data_index,
         start_threshold,
         estimates,
@@ -189,17 +156,13 @@ pub fn algorithm<D: Direction>(
         progress,
     );
 
-    Ok(AlgorithmOutput {
-        cdfs,
-        unique_covariates,
-        thresholds,
-    })
+    cdfs
 }
 
-fn finalize_for_single_uncensored<D: Direction>(
+fn finalize_for_single_uncensored<D: Direction, X: crate::Float, Y: crate::Float>(
     data_index: usize,
-    input: ExtendedAlgorithmContext,
-    cdf: &mut Vec<f64>,
+    input: &CensoredSdContext<X, Y>,
+    cdf: &mut Vec<f32>,
 ) {
     match D::IS_INCREASING {
         true => {
@@ -215,13 +178,17 @@ fn finalize_for_single_uncensored<D: Direction>(
     }
 }
 
-fn finalize_for_censoring_only_in_final_threshold<D: Direction>(
+fn finalize_for_censoring_only_in_final_threshold<
+    D: Direction,
+    X: crate::Float,
+    Y: crate::Float,
+>(
     data_index: usize,
-    mut consumed_share: Vec<f64>,
-    mut consumed_weight: BITree<f64>,
+    mut consumed_share: Vec<f32>,
+    mut consumed_weight: BITree<f32>,
     mut partitions: Vec<WeightedPartition>,
-    input: ExtendedAlgorithmContext,
-    cdf: &mut Vec<f64>,
+    input: &CensoredSdContext<X, Y>,
+    cdf: &mut Vec<f32>,
     mut partitions_to_store: Vec<WeightedPartition>,
 ) {
     for observation in &input.observations[data_index..] {
@@ -240,34 +207,36 @@ fn finalize_for_censoring_only_in_final_threshold<D: Direction>(
     routines::store_in_cdf::<_, D>(&partitions, cdf);
 }
 
-fn initialize<D: Direction>(
+fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimators: &mut Estimates,
     partitions: &mut Vec<Partition>,
-    input: &ExtendedAlgorithmContext,
+    input: &CensoredSdContext<X, Y>,
 ) {
     let observation = &input.observations[data_index];
+    let obs_x = observation.x;
+    let obs_weight = observation.weight;
 
     // Initialize estimators
-    for r in 0..=observation.x {
+    for r in 0..=obs_x {
         let total_weight = if r > 0 {
-            input.covariate_statistics[observation.x].cumulative_weight
+            input.covariate_statistics[obs_x].cumulative_weight
                 - input.covariate_statistics[r - 1].cumulative_weight
         } else {
-            input.covariate_statistics[observation.x].cumulative_weight
+            input.covariate_statistics[obs_x].cumulative_weight
         };
-        let raw_value = 1.0 - observation.weight / total_weight;
+        let raw_value = 1.0 - obs_weight / total_weight;
 
-        let (value, cold) = estimators.entry_mut(r, observation.x);
+        let (value, cold) = estimators.entry_mut(r, obs_x);
         cold.raw_value = raw_value;
-        cold.weight = observation.weight;
+        cold.weight = obs_weight;
         // The estimators (r, cov_index) are decreasing in r, so the lower bound is below the value
         *value = raw_value;
         cold.count = data_index + 1;
 
         // Propagate bound
         if r > 0 {
-            estimators.cold_mut(r - 1, observation.x).lower_bound = raw_value;
+            estimators.cold_mut(r - 1, obs_x).lower_bound = raw_value;
         }
     }
 
@@ -275,17 +244,17 @@ fn initialize<D: Direction>(
     match D::FORBIDDEN_ORDERING {
         Ordering::Less => {
             // The first antitonic regression has at least one partition
-            partitions.push(Partition::new(observation.x + 1)); // Partition indices are exclusive
+            partitions.push(Partition::new(obs_x + 1)); // Partition indices are exclusive
             // The first antitonic regression may have a second partition, if the value isn't the last
-            if observation.x < input.n_covariate() - 1 {
+            if obs_x < input.n_covariate() - 1 {
                 partitions.push(Partition::new(input.n_covariate()));
             }
         }
         Ordering::Greater => {
-            if observation.x == 0 {
+            if obs_x == 0 {
                 partitions.push(Partition::new(input.n_covariate()));
             } else {
-                partitions.push(Partition::new(observation.x));
+                partitions.push(Partition::new(obs_x));
                 partitions.push(Partition::new(input.n_covariate()));
             }
         }
@@ -293,25 +262,20 @@ fn initialize<D: Direction>(
     }
 }
 
-/// Pick the kernel monomorphization based on runtime CPU features and env-var override.
-///
-/// `FORCE_KERNEL=scalar|avx2|avx512` picks a specific path (used for benchmarking and forcing
-/// fallback paths to be exercised). When unset or the requested feature is unavailable, we
-/// pick the widest available: AVX-512F → AVX2 → scalar. The choice is cached process-wide so
-/// the env lookup happens at most once per process.
-fn dispatch_generalized_pava<D: Direction>(
+/// Pick the kernel monomorphization based on runtime CPU features. AVX-512F → AVX2 → scalar.
+fn dispatch_generalized_pava<D: Direction, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     start_threshold: usize,
     estimates: Estimates,
     partitions: Vec<Partition>,
-    input: ExtendedAlgorithmContext,
-    cdf: &mut Vec<f64>,
+    input: &CensoredSdContext<X, Y>,
+    cdf: &mut Vec<f32>,
     progress: &dyn ProgressTracker,
 ) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if is_x86_feature_detected!("avx512f") {
-            return generalized_pava::<D, Avx512Kernel>(
+            return generalized_pava::<D, Avx512Kernel, _, _>(
                 data_index,
                 start_threshold,
                 estimates,
@@ -321,7 +285,7 @@ fn dispatch_generalized_pava<D: Direction>(
                 progress,
             );
         } else if is_x86_feature_detected!("avx2") {
-            return generalized_pava::<D, Avx2Kernel>(
+            return generalized_pava::<D, Avx2Kernel, _, _>(
                 data_index,
                 start_threshold,
                 estimates,
@@ -333,7 +297,7 @@ fn dispatch_generalized_pava<D: Direction>(
         }
     }
 
-    generalized_pava::<D, ScalarKernel>(
+    generalized_pava::<D, ScalarKernel, _, _>(
         data_index,
         start_threshold,
         estimates,
@@ -344,20 +308,28 @@ fn dispatch_generalized_pava<D: Direction>(
     );
 }
 
-fn generalized_pava<D: Direction, K: Kernel>(
+fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     mut data_index: usize,
     start_threshold: usize,
     mut estimates: Estimates,
     mut partitions: Vec<Partition>,
-    input: ExtendedAlgorithmContext,
-    cdf: &mut Vec<f64>,
+    input: &CensoredSdContext<X, Y>,
+    cdf: &mut Vec<f32>,
     progress: &dyn ProgressTracker,
 ) {
     let mut tmp_partition_store = Vec::with_capacity(input.n_covariate());
     // Scratch buffer reused across all `pool` calls: holds `values[(r, k)]` for the current
     // outer-`r` iteration so the inner `s` sweep reads a contiguous slice instead of striding
     // into the triangle.
-    let mut row_buf: Vec<f64> = Vec::with_capacity(input.n_covariate());
+    let mut row_buf: Vec<f32> = Vec::with_capacity(input.n_covariate());
+    // Precompute the dynamic K-M safety threshold. In `update_value`, the K-M numerator
+    // divides `obs.weight` by `remaining_weight = total_weight − cold.weight`. Both
+    // `total_weight` and `cold.weight` are sums of f32 weights and pick up O(n · u_32)
+    // absolute round-off, so `remaining_weight` can be non-zero by O(n · u_32) even when
+    // every observation in the cell has already been applied. Without a guard the K-M
+    // step would then divide by a sub-noise-floor value and blow up — see
+    // `weight_noise_floor` for the bound's derivation.
+    let epsilon = weight_noise_floor(input.n());
     for threshold in start_threshold..input.n_threshold() {
         while data_index < input.n() {
             let observation = &input.observations[data_index];
@@ -366,20 +338,19 @@ fn generalized_pava<D: Direction, K: Kernel>(
             }
 
             if observation.observed {
-                update_uncensored::<D, K>(
+                update_uncensored::<D, K, _, _>(
                     data_index,
                     &mut estimates,
                     &mut partitions,
-                    &input,
+                    input,
+                    epsilon,
                     &mut tmp_partition_store,
                     &mut row_buf,
                 );
             } else {
                 // Censored observations are deferred. They affect the K-M estimate only at the
                 // next uncensored arrival, which `update_value` picks up by walking forward
-                // through `observations` from `self.count`. Applying them eagerly here would
-                // defeat the bounds-equality short-circuit at the start of `update_value`, so
-                // we leave them in place and skip past them in the walk.
+                // through `observations` from `self.count`.
             }
 
             data_index += 1;
@@ -390,15 +361,16 @@ fn generalized_pava<D: Direction, K: Kernel>(
     }
 }
 
-fn update_uncensored<D: Direction, K: Kernel>(
+fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimates: &mut Estimates,
     partitions: &mut Vec<Partition>,
-    input: &ExtendedAlgorithmContext,
+    input: &CensoredSdContext<X, Y>,
+    epsilon: f32,
     tmp_partition_store: &mut Vec<Partition>,
-    row_buf: &mut Vec<f64>,
+    row_buf: &mut Vec<f32>,
 ) {
-    let observation = &input.observations[data_index];
+    let observation = input.observations[data_index];
     let (partition_index, (lower, upper)) =
         routines::find_partition_bounds::<_, _, D::REVERSE>(observation.x, partitions);
     debug_assert!(lower <= observation.x && observation.x < upper);
@@ -414,33 +386,35 @@ fn update_uncensored<D: Direction, K: Kernel>(
     // Split the triangle and update computation of left sub-triangle
     partitions[partition_index].index = observation.x + 1; // partition indices are exclusive
     // Update the triangle of the range of the new partition
-    estimates.update_partial_row_with_single_observation::<K, _>(
+    estimates.update_partial_row_with_single_observation::<K, _, _>(
         data_index,
         lower,
-        observation,
+        &observation,
         input,
+        epsilon,
     );
     // Pooling left part of partitions (direction is the same, because we're working with survival
     // quantities, not the CDF)
-    pool::<_, _, D, K>(data_index, estimates, partitions, input, row_buf);
+    pool::<_, _, D, K, _, _>(data_index, estimates, partitions, input, epsilon, row_buf);
 
     // Accelerated extension and pooling
     for i in observation.x + 1..upper {
         partitions.push(Partition::new(i + 1));
         // Direction is the same, because we're working with survival quantities, not the CDF)
-        pool::<_, _, D, K>(data_index, estimates, partitions, input, row_buf);
+        pool::<_, _, D, K, _, _>(data_index, estimates, partitions, input, epsilon, row_buf);
     }
 
     // Restore right-most partitions
     partitions.append(tmp_partition_store);
 }
 
-fn pool<W, V, D: Direction, K: Kernel>(
+fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimates: &mut Estimates,
     partitions: &mut Vec<structures::Partition<W, V>>,
-    input: &ExtendedAlgorithmContext,
-    row_buf: &mut Vec<f64>,
+    input: &CensoredSdContext<X, Y>,
+    epsilon: f32,
+    row_buf: &mut Vec<f32>,
 ) {
     loop {
         // Start inclusive, end exclusive
@@ -460,7 +434,6 @@ fn pool<W, V, D: Direction, K: Kernel>(
         let penultimate_value = estimates.value(penultimate_start, penultimate_end - 1);
         let ultimate_value = estimates.value(ultimate_start, ultimate_end - 1);
 
-        // TODO: Numerical issues?
         if penultimate_value.partial_cmp(&ultimate_value).unwrap() != D::FORBIDDEN_ORDERING {
             break;
         }
@@ -487,7 +460,7 @@ fn pool<W, V, D: Direction, K: Kernel>(
 
             for s in ultimate_start..ultimate_end {
                 estimates.propagate_bounds_with_row::<K>(r, s, row_buf);
-                estimates.update_value(data_index, r, s, input);
+                estimates.update_value(data_index, r, s, input, epsilon);
                 // Reflect the freshly written `values[(r, s)]` back into the row buffer so
                 // subsequent iterations (with larger `s`) see the updated value.
                 let idx = Estimates::compute_index((r, s), estimates.len());
@@ -498,12 +471,13 @@ fn pool<W, V, D: Direction, K: Kernel>(
 }
 
 impl Estimates {
-    fn update_value(
+    fn update_value<X: crate::Float, Y: crate::Float>(
         &mut self,
         data_index: usize,
         covariate_start_index: usize, // inclusive
         covariate_end_index: usize,   // inclusive
-        input: &ExtendedAlgorithmContext,
+        input: &CensoredSdContext<X, Y>,
+        epsilon: f32,
     ) {
         let (value, cold) = self.entry_mut(covariate_start_index, covariate_end_index);
 
@@ -518,7 +492,7 @@ impl Estimates {
             "Bounds should only be NAN if this is a diagonal value",
         );
         if cold.lower_bound >= cold.upper_bound {
-            *value = (cold.lower_bound + cold.upper_bound) / 2.0;
+            *value = f32::midpoint(cold.lower_bound, cold.upper_bound);
             return;
         }
 
@@ -529,9 +503,7 @@ impl Estimates {
             input.covariate_statistics[covariate_end_index].cumulative_weight
         };
         let mut remaining_weight = total_weight - cold.weight;
-        // TODO: Test whether this numerical safety measure is actually necessary
-        const EPSILON: f64 = 1.0e-8;
-        if remaining_weight < EPSILON {
+        if remaining_weight < epsilon {
             // There are no more values to process
             return;
         }
@@ -571,39 +543,39 @@ impl Estimates {
     /// We need to update only a row (and not the entire triangle) because the items in the triangle
     /// not part of this row are assumed to be up to date because they were part of the previous
     /// partition and not affected by the new single observation.
-    fn update_partial_row_with_single_observation<K: Kernel, S>(
+    fn update_partial_row_with_single_observation<K: Kernel, X: crate::Float, Y: crate::Float>(
         &mut self,
         data_index: usize,
         partition_start_index: usize,
-        observation: &Observation<usize, usize, S>,
-        input: &ExtendedAlgorithmContext,
+        observation: &Observation<usize, usize, bool, f32>,
+        input: &CensoredSdContext<X, Y>,
+        epsilon: f32,
     ) {
         for r in (partition_start_index..=observation.x).rev() {
             // TODO: Try eliminating this branch
             if r < observation.x {
                 self.propagate_bounds::<K>(r, observation.x);
             }
-            self.update_value(data_index, r, observation.x, input);
+            self.update_value(data_index, r, observation.x, input, epsilon);
         }
     }
-    /// Propagate bounds - `r` and `s` are inclusive.
-    ///
-    /// Reads row `r` directly from the strided triangle. Used by the one-shot non-pool
-    /// callsite (`update_partial_row_with_single_observation`) where there is no row reuse.
+
+    /// Propagate bounds — reads row r directly from the strided triangle. Used by the one-shot
+    /// non-pool callsite (`update_partial_row_with_single_observation`) where there is no row
+    /// reuse. Uses a stack array for small rows; heap fallback for large ones.
     fn propagate_bounds<K: Kernel>(&mut self, r: usize, s: usize) {
         assert!(r < s);
         assert!(s < self.len());
 
         let col_s_base = s * (s + 1) / 2;
-        let col_s = &self.values[col_s_base..=col_s_base + s];
-        let col = &col_s[r + 1..=s];
+        let col = &self.values[col_s_base + r + 1..=col_s_base + s];
 
         // Gather the row r entries (r, r), (r, r+1), ..., (r, s-1) into a small stack-bounded
         // local. The triangle is strided in the row direction, so we read scalars one at a
         // time; the kernel then sees two contiguous slices and can auto-vectorize.
         let len = s - r;
-        let mut row_buf = [0.0f64; 64];
-        let row_slice: &[f64] = if len <= 64 {
+        let mut row_buf = [0.0f32; 128];
+        let row_slice = if len <= 128 {
             let mut col_i_base = r * (r + 1) / 2;
             row_buf[0] = self.values[col_i_base + r];
             #[allow(clippy::needless_range_loop)]
@@ -629,7 +601,6 @@ impl Estimates {
         };
 
         let (lower, upper) = K::apply(row_slice, col);
-
         let cold = &mut self.cold[col_s_base + r];
         cold.lower_bound = lower;
         cold.upper_bound = upper;
@@ -639,7 +610,7 @@ impl Estimates {
     ///
     /// `row_buf[k - r]` must equal `values[(r, k)]` for `k = r..s` (entries beyond `s` are
     /// ignored). Used in `pool` where the same row r is reused across an entire inner s sweep.
-    fn propagate_bounds_with_row<K: Kernel>(&mut self, r: usize, s: usize, row_buf: &[f64]) {
+    fn propagate_bounds_with_row<K: Kernel>(&mut self, r: usize, s: usize, row_buf: &[f32]) {
         assert!(r < s);
         assert!(s < self.len());
         debug_assert!(row_buf.len() >= s - r);
@@ -663,7 +634,7 @@ impl Estimates {
 fn store_in_cdf<W, V>(
     estimates: &Estimates,
     partitions: &[structures::Partition<W, V>],
-    cdf: &mut Vec<f64>,
+    cdf: &mut Vec<f32>,
 ) {
     let partition_len = partitions[0].index;
     let value = estimates.value(0, partitions[0].index - 1);
@@ -679,24 +650,20 @@ fn store_in_cdf<W, V>(
 mod test {
     use crate::structures::Increasing;
     use crate::total_order::stochastic_dominance::censored::algorithm;
-    use crate::total_order::structures::AlgorithmOutput;
+    use crate::total_order::stochastic_dominance::censored::preprocess;
 
     #[test]
     fn small() {
-        assert_eq!(
-            algorithm::<Increasing>(
-                &[-29., -19., -18., -33., -23.],
-                &[3., 23., 165., 5., 57.],
-                &[false, false, true, false, true],
-                &[1.0; 5],
-                &crate::NoProgress,
-            )
-            .unwrap(),
-            AlgorithmOutput {
-                cdfs: vec![1., 0., 1., 1.,],
-                unique_covariates: vec![-23., -18.],
-                thresholds: vec![57., 165.],
-            },
-        );
+        let context = preprocess(
+            &[-29., -19., -18., -33., -23.],
+            &[3., 23., 165., 5., 57.],
+            &[false, false, true, false, true],
+            &[1.0; 5],
+        )
+        .unwrap();
+        let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        assert_eq!(cdfs, vec![1., 0., 1., 1.]);
+        assert_eq!(context.unique_covariates, vec![-23., -18.]);
+        assert_eq!(context.thresholds, vec![57., 165.]);
     }
 }

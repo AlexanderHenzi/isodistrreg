@@ -1,42 +1,31 @@
-use crate::error::Error;
+use crate::Float;
 use crate::progress::ProgressTracker;
 use crate::routines::empirical_cdf;
 use crate::structures::Direction;
-use crate::total_order::preprocessing::preprocess_uncensored;
 use crate::total_order::stochastic_dominance::routines;
-use crate::total_order::structures::{AlgorithmContext, AlgorithmOutput};
+use crate::total_order::structures::AlgorithmContext;
 use std::iter::repeat_n;
 
-pub fn algorithm<D: Direction>(
-    x: &[f64],
-    y: &[f64],
-    weight: &[f64],
+pub fn algorithm<D: Direction, X: Float, Y: Float>(
+    context: &AlgorithmContext<X, Y, ()>,
     progress: &dyn ProgressTracker,
-) -> Result<AlgorithmOutput, Error> {
+) -> Vec<f32> {
     let AlgorithmContext {
         observations,
         covariate_statistics,
         unique_responses,
         unique_covariates,
-    } = preprocess_uncensored(x, y, weight);
+    } = context;
     progress.set_total(unique_responses.len());
 
     if unique_responses.len() == 1 {
         // Single threshold -> all one's
-        return Ok(AlgorithmOutput {
-            cdfs: vec![1.0; unique_covariates.len()],
-            unique_covariates,
-            thresholds: unique_responses,
-        });
+        return vec![1.0; unique_covariates.len()];
     }
     if covariate_statistics.len() == 1 {
         // Single covariate -> a single empirical cdf
         // Observations have been deduplicated so responses are unique
-        return Ok(AlgorithmOutput {
-            cdfs: empirical_cdf(observations.iter().copied(), covariate_statistics[0].weight),
-            unique_covariates,
-            thresholds: unique_responses,
-        });
+        return empirical_cdf(observations.iter().copied(), covariate_statistics[0].weight);
     }
 
     // TODO: Try asserting all we know is true about the input to allow the compiler to make more
@@ -52,8 +41,8 @@ pub fn algorithm<D: Direction>(
 
     routines::accelerated_pava::<_, _, _, D>(
         &mut data_index,
-        &observations,
-        &covariate_statistics,
+        observations,
+        covariate_statistics,
         |()| false,
         &mut partitions_to_store,
         &mut cdfs,
@@ -66,9 +55,5 @@ pub fn algorithm<D: Direction>(
 
     cdfs.shrink_to_fit();
 
-    Ok(AlgorithmOutput {
-        cdfs,
-        unique_covariates,
-        thresholds: unique_responses,
-    })
+    cdfs
 }
