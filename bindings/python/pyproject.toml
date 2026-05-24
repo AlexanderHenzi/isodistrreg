@@ -1,6 +1,6 @@
 [project]
 name = "isodistrreg"
-version = "0.4.2"
+version = "0.5.0"
 description = "Isotonic Distributional Regression (IDR)"
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
@@ -39,20 +39,20 @@ Issues = "https://github.com/AlexanderHenzi/isodistrreg/issues"
 
 [project.optional-dependencies]
 scikit-learn = [
-    "scikit-learn>=1.7.2",
+    "scikit-learn>=1.8.0",
     "numpy>=1",
 ]
 
 [dependency-groups]
 dev = [
-    "black>=25.9.0",
-    "mypy>=1.18.2",
-    "pre-commit>=4.3.0",
+    "black>=26.5.1",
+    "mypy>=2.1.0",
+    "pre-commit>=4.6.0",
 ]
 test = [
-    "pytest>=8.4.2",
-    "pytest-cov>=7.0.0",
-    "pandas>=2.3.3",  # to test the scikit learn interface
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "pandas>=3.0.3",  # to test the scikit learn interface
 ]
 
 [tool.maturin]
