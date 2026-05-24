@@ -1174,10 +1174,10 @@ impl IDR {
     }
 
     // Pickle: return (callable, args). The variant of `FitImpl` is the dtype combo, so
-    // bincode round-trips it directly via serde's variant tag.
+    // postcard round-trips it directly via serde's variant tag.
     fn __reduce_ex__<'py>(&self, py: Python<'py>, _protocol: u8) -> PyResult<Bound<'py, PyTuple>> {
-        let buf = bincode::serde::encode_to_vec(&self.inner, bincode::config::standard())
-            .map_err(|e| PyException::new_err(e.to_string()))?;
+        let buf =
+            postcard::to_allocvec(&self.inner).map_err(|e| PyException::new_err(e.to_string()))?;
         let bytes = PyBytes::new(py, &buf);
         let ctor = py.get_type::<Self>().getattr("_from_bytes")?;
         let args = PyTuple::new(py, [bytes])?;
@@ -1187,9 +1187,8 @@ impl IDR {
 
     #[classmethod]
     fn _from_bytes(_cls: &Bound<'_, PyType>, b: &[u8]) -> PyResult<Self> {
-        let (inner, _): (FitImpl, _) =
-            bincode::serde::decode_from_slice(b, bincode::config::standard())
-                .map_err(|e| PyException::new_err(e.to_string()))?;
+        let inner: FitImpl =
+            postcard::from_bytes(b).map_err(|e| PyException::new_err(e.to_string()))?;
         Ok(IDR { inner })
     }
 
