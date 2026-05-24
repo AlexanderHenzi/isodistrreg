@@ -1,3 +1,7 @@
+# isodistrreg 0.5.0
+
+* switched core computations to f32 for performance
+
 # isodistrreg 0.4.2
 
 * improve performance for the partial order case under censoring

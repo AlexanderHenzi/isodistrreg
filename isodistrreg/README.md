@@ -15,14 +15,14 @@ for background and references.
 
 ```toml
 [dependencies]
-isodistrreg = "0.4"
+isodistrreg = "0.5"
 ```
 
 Enable optional features as needed:
 
 ```toml
 [dependencies]
-isodistrreg = { version = "0.4", features = ["partial-order"] }
+isodistrreg = { version = "0.5", features = ["partial-order"] }
 ```
 
 ## Precision
