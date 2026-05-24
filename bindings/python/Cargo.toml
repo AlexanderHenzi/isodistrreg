@@ -24,7 +24,7 @@ isodistrreg = { workspace = true, features = ["parallel", "serde", "subagging"] 
 num-traits = "0.2"
 itertools = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-bincode = { version = "2.0.1", features = ["serde"] }
+postcard = { version = "1", features = ["use-std"] }
 rayon = { workspace = true }
 kdam = { version = "0.6", features = ["notebook", "template"] }
 
