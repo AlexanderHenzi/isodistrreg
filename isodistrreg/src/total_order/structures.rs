@@ -244,7 +244,12 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
             covariates: unique_covariates,
             thresholds,
             quality_indicators: QualityIndicators {
-                epsilon: weight_noise_floor(n) as f64,
+                epsilon: weight_noise_floor(
+                    weights_to_use
+                        .iter()
+                        .map(|w| w.to_f32().unwrap())
+                        .sum::<f32>(),
+                ) as f64,
             },
         })
     }
