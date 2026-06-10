@@ -101,29 +101,50 @@ pub fn empirical_cdf<C, Y, I: Into<Observation<C, Y, (), f32>>>(
 }
 
 /// Compute the Kaplan-Meier estimator on unique responses.
+///
+/// Responses may repeat (tied observations, or the same threshold seen for several
+/// covariates); one CDF value is emitted per unique response, reflecting every
+/// observation in the tied group. Within a tied group the stream must order deaths
+/// before censorings, matching the standard at-risk convention — which is the order
+/// all in-tree callers produce.
 pub fn kaplan_meier<C, R: Copy + PartialEq>(
     observations: impl Iterator<Item = Observation<C, R, bool, f32>>,
     total_weight: f32,
 ) -> Vec<f32> {
-    // Observations have been deduplicated so responses are unique
-    observations
-        .scan(
-            (1.0, total_weight, None),
-            |(s, total_weight, previous), o| {
-                if o.observed {
-                    *s *= 1.0 - o.weight / *total_weight;
-                }
-                *total_weight -= o.weight;
-
-                match previous.replace(o.y) {
-                    Some(value) if value == o.y => None,
-                    _ => Some(*s),
-                }
-            },
-        )
-        // Clamping for numerics
-        .map(|v| 1.0 - v.clamp(0.0, 1.0))
-        .collect()
+    let mut cdfs = Vec::new();
+    let mut survival: f32 = 1.0;
+    let mut remaining_weight = total_weight;
+    let mut previous = None;
+    // Survival reaches exactly 0 iff the last positive-weight observation is observed
+    // (its factor is then exactly `1 - w/w`) — a purely combinatorial condition. Track
+    // it so the final value can be pinned: the f32 running weight subtraction drifts,
+    // leaving the product a few ulps off where mathematics says exactly 0.
+    let mut last_positive_observed = false;
+    for o in observations {
+        // A response's value is final only once its tied group is complete.
+        match previous.replace(o.y) {
+            Some(value) if value != o.y => cdfs.push(survival),
+            _ => {}
+        }
+        if o.observed {
+            survival *= 1.0 - o.weight / remaining_weight;
+        }
+        remaining_weight -= o.weight;
+        if o.weight > 0.0 {
+            last_positive_observed = o.observed;
+        }
+    }
+    if previous.is_some() {
+        if last_positive_observed {
+            survival = 0.0;
+        }
+        cdfs.push(survival);
+    }
+    // Clamping for numerics
+    for v in &mut cdfs {
+        *v = 1.0 - v.clamp(0.0, 1.0);
+    }
+    cdfs
 }
 
 pub fn median(elements: impl IntoIterator<Item = f64>) -> f64 {
