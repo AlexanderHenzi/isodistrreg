@@ -26,3 +26,4 @@ subagging = ["rand"]
 
 [dev-dependencies]
 approx = "0.5.1"
+rand = "0.10.1"
