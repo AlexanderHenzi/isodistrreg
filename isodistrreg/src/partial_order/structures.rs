@@ -276,14 +276,16 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
 
         match y_observed {
             None => Ok(uncensored_case(covariate_order)),
-            Some(indicators) if indicators.iter().all(|&b| !b) => {
+            Some(indicators) if indicators.iter().all(|&b| b) => {
                 Ok(uncensored_case(covariate_order))
             }
             Some(indicators) => match response_order {
                 StochasticOrder::StochasticDominance => {
                     let algorithm_context =
                         preprocess_censored(x, y, indicators, weight_to_use, &covariate_order);
-                    if indicators.iter().all(|&b| b) {
+                    // All observations censored: zero events, so the Kaplan-Meier sub-CDF
+                    // has no jump points anywhere — the empty fit (sub-CDF ≡ 0).
+                    if indicators.iter().all(|&b| !b) {
                         let empty = Fit {
                             increasing: !decreasing,
                             cdfs: Vec::with_capacity(0),
