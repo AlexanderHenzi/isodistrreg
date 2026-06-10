@@ -20,6 +20,15 @@ def test_isotonic_distributional_regression(X, y, y_observed, expected):
     assert np.allclose(fit.thresholds, np.unique(np.array(y)[np.array(y_observed)]))
 
 
+def test_quantile_levels_outside_range_raise():
+    fit = IDR([1.0, 2.0, 3.0], [[1], [2], [3]])
+    # Valid levels (boundaries included) pass.
+    fit.quantile([[2]], [0.0, 0.5, 1.0])
+    for bad in (-0.1, 1.5, np.nan):
+        with pytest.raises(ValueError, match=r"\[0, 1\]"):
+            fit.quantile([[2]], [0.5, bad])
+
+
 def test_outside_range():
     fit = IDR(np.arange(10, 30)[::-1], np.arange(20), [True] * 19 + [False])
     result = fit.cdf_at([5.0, 15.0], [0.0, 40.0])

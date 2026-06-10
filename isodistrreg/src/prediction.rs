@@ -262,13 +262,33 @@ pub fn search_responses_sorted<Y: Float, I: IntoIterator<Item = Y>>(
 /// assert_eq!(quantile(&[0.0, 0.2, 0.8, 1.0], 0.0, false, &thresholds), 10.0);
 /// assert_eq!(quantile(&[0.0, 0.2, 0.8, 1.0], 0.0, true, &thresholds), 10.0);
 /// ```
+///
+/// # Panics
+///
+/// Panics if `probability` is not in `[0, 1]` (NaN included). The flat-CDF and
+/// sub-CDF arms below rely on this range to tell "all mass on the grid" apart from
+/// "mass beyond the grid", and a NaN would otherwise fail deep inside the binary
+/// search with an unhelpful message.
+///
+/// ```rust,should_panic
+/// isodistrreg::quantile(&[0.5, 1.0], 1.5, false, &[10.0, 20.0]);
+/// ```
 pub fn quantile<Y: Float, I: CovariateInterpolator>(
     interpolator: &I,
     probability: f32,
     upper: bool,
     thresholds: &[Y],
 ) -> Y {
+    assert!(
+        (0.0..=1.0).contains(&probability),
+        "probability must be in [0, 1], got {probability}",
+    );
     let n = thresholds.len();
+    // An empty grid (the empty fit: a sub-CDF that stays at 0) has all its mass beyond
+    // every threshold; any quantile of it is +∞.
+    if n == 0 {
+        return Y::infinity();
+    }
     let response_index = binary_search_by_index(0, n, upper, |idx| {
         let coordinate = ResponseCoordinate::AboveOrAtIndex(idx);
         let compare_with = interpolator.interpolate(coordinate);
@@ -276,9 +296,26 @@ pub fn quantile<Y: Float, I: CovariateInterpolator>(
     });
     let index = if upper {
         match response_index {
-            // A mathematically precise upper quantile would always return Y::INFINITY here,
-            // but we follow the scipy convention and return the supremum of the support
-            Ok(index) if index == n - 1 => Some(n - 1),
+            // The CDF is flat at exactly `probability` through the last grid index. A
+            // mathematically precise upper quantile would always return Y::INFINITY here;
+            // we follow the scipy convention and return the supremum of the support
+            // instead — the first index attaining the terminal value — but only when
+            // that value is 1 (all mass on the grid). For a flat terminal value below 1
+            // the missing mass lies beyond the grid, so the support supremum is +∞.
+            Ok(index) if index == n - 1 => {
+                if probability < 1.0 {
+                    None
+                } else {
+                    // F(n-1) == probability, so an Equal index exists and the
+                    // lower-bound search finds the first one — the support supremum.
+                    binary_search_by_index(0, n, false, |idx| {
+                        let coordinate = ResponseCoordinate::AboveOrAtIndex(idx);
+                        let compare_with = interpolator.interpolate(coordinate);
+                        compare_with.partial_cmp(&probability).unwrap()
+                    })
+                    .ok()
+                }
+            }
             // Value found exactly
             Ok(index) => {
                 // By the definition of `binary_search_by_index` this is already the highest

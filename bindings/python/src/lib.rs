@@ -1036,6 +1036,11 @@ impl IDR {
     /// numpy.ndarray
     ///     Quantile values with shape determined by broadcasting the
     ///     covariate and quantile-level arrays.
+    ///
+    /// Raises
+    /// ------
+    /// ValueError
+    ///     If any quantile level in ``q`` is outside ``[0, 1]`` or NaN.
     #[pyo3(
         signature = (
             X,
@@ -1052,6 +1057,13 @@ impl IDR {
     ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
         let cov = X.as_array();
         let prb = q.as_array();
+        // The core `quantile` asserts this range; raise a proper ValueError instead of
+        // surfacing a Rust panic.
+        if let Some(&bad) = prb.iter().find(|p| !(0.0..=1.0).contains(*p)) {
+            return Err(PyValueError::new_err(format!(
+                "quantile levels q must be in [0, 1], got {bad}"
+            )));
+        }
         let output = py.detach(
             || dispatch_dtype!(&self.inner, fit => quantile_of(fit, cov.view(), prb.view(), upper)),
         );
