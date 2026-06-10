@@ -435,12 +435,12 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     let mut row_buf: Vec<f32> = Vec::with_capacity(input.n_covariate());
     // Precompute the dynamic K-M safety threshold. In `update_value`, the K-M numerator
     // divides `obs.weight` by `remaining_weight = total_weight − cold.weight`. Both
-    // `total_weight` and `cold.weight` are sums of f32 weights and pick up O(n · u_32)
-    // absolute round-off, so `remaining_weight` can be non-zero by O(n · u_32) even when
+    // `total_weight` and `cold.weight` are sums of f32 weights and pick up O(Σw · u_32)
+    // absolute round-off, so `remaining_weight` can be non-zero by O(Σw · u_32) even when
     // every observation in the cell has already been applied. Without a guard the K-M
     // step would then divide by a sub-noise-floor value and blow up — see
     // `weight_noise_floor` for the bound's derivation.
-    let epsilon = weight_noise_floor(input.n());
+    let epsilon = weight_noise_floor(input.observations.iter().map(|o| o.weight).sum());
     for threshold in start_threshold..input.n_threshold() {
         while data_index < input.n() {
             let observation = &input.observations[data_index];

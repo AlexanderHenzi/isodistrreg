@@ -5,28 +5,27 @@
 //! up to f32 round-off" from "this weight is genuinely zero". The conservative bound
 //! below works for all of them; per-call-site interpretation lives next to each call.
 
-/// Dynamic f32-noise floor for sums of `n_total` weighted observations.
+/// Dynamic f32-noise floor for running sums and differences of observation weights
+/// totalling `total_weight`.
 ///
 /// The algorithms maintain running sums and differences of f32 weights. A Wilkinson-style
-/// worst-case error bound for a length-`n` sum (or for a cum-diff plus a running
-/// subtraction) is `3·n·u_32` where `u_32 = 2^-24` is the formal unit roundoff. We
-/// double it for the "sum minus a running subtraction" pattern (≈ `6·n·u_32`) and pick
-/// 8× the unit roundoff for headroom:
+/// worst-case error bound for such accumulations is proportional to `u_32 · Σ|w_i|`
+/// where `u_32 = 2^-24` is the formal unit roundoff — the error scales with the
+/// magnitude of the weights, not with their count alone. We pick 8× the unit roundoff
+/// for headroom:
 ///
-///   `epsilon = 8 · n · u_32 ≈ n · 10⁻⁶`
+///   `epsilon = 8 · Σw · u_32`
 ///
-/// In code we multiply by `f32::EPSILON` (= `2^-23` = `2 · u_32`), so the literal here is
-/// `8 · n · f32::EPSILON`; the 8× margin absorbs the factor-of-2 between `f32::EPSILON`
-/// and `u_32` either way.
+/// For unit weights this equals the count-based form `8 · n · u_32 ≈ n · 10⁻⁶`,
+/// staying well below 1 (the weight of a single observation) for `n ≤ 10⁵`. Unlike the
+/// count-based form it is invariant under rescaling all weights by a positive constant,
+/// matching the scale invariance of the Kaplan-Meier and least-squares estimators the
+/// kernels compute: externally normalized weights (e.g. summing to 1) no longer trip
+/// the exhausted-weight shortcuts on cells that still hold real observations.
 ///
-/// At `n ≤ 10⁵` this stays well below 1 (the weight of a single unit-weight observation),
-/// so no real cell is mistakenly skipped. At `n ≥ 10⁷` in f32 the algorithm has lost
-/// useful precision regardless; this threshold clamps it to keep it numerically alive,
-/// but the output is no longer accurate at any threshold.
+/// In code we multiply by `f32::EPSILON` (= `2^-23` = `2 · u_32`); the 8× margin absorbs
+/// the factor-of-2 between `f32::EPSILON` and `u_32` either way.
 #[inline]
-pub fn weight_noise_floor(n_total: usize) -> f32 {
-    // `f32::EPSILON` is the gap from 1.0 to the next f32 (2^-23), i.e. 2× the formal
-    // numerical-analysis "unit roundoff" u_32 = 2^-24. The 8× margin above absorbs that
-    // factor-of-2 either way.
-    8.0 * (n_total as f32) * f32::EPSILON
+pub fn weight_noise_floor(total_weight: f32) -> f32 {
+    8.0 * total_weight * f32::EPSILON
 }

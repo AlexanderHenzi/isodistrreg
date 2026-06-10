@@ -62,7 +62,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     // from the SD-censored case (here we sum `survival[i] * survival[i] *
     // covariate_statistics[i].weight` and compare `estimators[i]` against 0/1) but the
     // Wilkinson-style bound in `weight_noise_floor` is conservative enough to cover both.
-    let epsilon = weight_noise_floor(observations.len());
+    let epsilon = weight_noise_floor(covariate_statistics.iter().map(|s| s.weight).sum());
 
     if unique_responses.len() == 1 {
         // Single threshold -> all one's
