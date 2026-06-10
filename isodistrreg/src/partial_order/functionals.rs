@@ -51,7 +51,7 @@ where
     let n = observations.len();
     assert!(n <= BitSet::<B>::capacity());
 
-    let (successors, predecessors, topological_order, _) =
+    let (successors, predecessors, topological_order, reverse_topological_order) =
         routines::compute_transitive_closure::<B>(n, edges);
     let mut topological_observations = vec![
         Observation {
@@ -63,7 +63,7 @@ where
         n
     ];
     for (i, observation) in observations.into_iter().enumerate() {
-        topological_observations[topological_order[i]] = observation.into();
+        topological_observations[reverse_topological_order[i]] = observation.into();
     }
     debug_assert!(topological_observations.iter().all(|o| !o.weight.is_nan()));
 
