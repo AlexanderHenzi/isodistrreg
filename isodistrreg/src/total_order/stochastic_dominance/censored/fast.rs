@@ -481,7 +481,9 @@ impl Estimates {
     ) {
         let (value, cold) = self.entry_mut(covariate_start_index, covariate_end_index);
 
-        debug_assert!(data_index >= cold.count);
+        // `cold.count` may already be `data_index + 1` when the cell was touched earlier in the
+        // same run of tied uncensored observations (the walk consumes the whole run at once).
+        debug_assert!(data_index + 1 >= cold.count);
         debug_assert!(covariate_start_index <= covariate_end_index);
         debug_assert!(covariate_end_index < input.n_covariate());
 
@@ -504,22 +506,25 @@ impl Estimates {
         };
         let mut remaining_weight = total_weight - cold.weight;
         if remaining_weight < epsilon {
-            // There are no more values to process
+            // There is no more weight to process, so the raw Kaplan-Meier value is final — but
+            // the bounds may have just been re-propagated from fresh neighbor values, so the
+            // clip still has to be reapplied. Skipping it would leave a value clipped against
+            // bounds that no longer exist.
+            *value = cold.raw_value.max(cold.lower_bound).min(cold.upper_bound);
             return;
         }
 
-        let current_response = input.observations[data_index].y;
         let mut raw_value = cold.raw_value;
 
-        // Walk the response-sorted `observations` slice forward from `cold.count`. Since
-        // `observations` is sorted by (response asc, censored asc, covariate asc), we stop as
-        // soon as response exceeds the current threshold, or we hit a censored item at the
-        // current threshold (those are deferred to the next uncensored arrival).
+        // Walk the response-sorted `observations` slice forward from `cold.count`, up to and
+        // including the observation currently being processed — and no further. Observations
+        // are sorted by (response asc, uncensored first, covariate asc), so everything in this
+        // range is at or below the current threshold and must be folded in. Reading *ahead* of
+        // `data_index` (e.g. absorbing the rest of a run of tied uncensored responses) is not
+        // allowed: `cold.count` could then no longer describe what was consumed, and the cell's
+        // raw value would run ahead of the neighbor cells its bounds are computed from.
         // No sort or temp buffer is needed: items are already in K-M apply order.
-        for obs in &input.observations[cold.count..] {
-            if obs.y > current_response || (obs.y == current_response && !obs.observed) {
-                break;
-            }
+        for obs in &input.observations[cold.count..=data_index] {
             if obs.x < covariate_start_index || obs.x > covariate_end_index {
                 continue;
             }

@@ -557,6 +557,26 @@ fn test_fully_censored() {
     )
 }
 
+/// Regression test for double-applied Kaplan-Meier factors on tied uncensored responses.
+///
+/// The two uncensored observations tied at y=3 (covariates 2 and 4) form one run. While the
+/// first of them is processed, `update_value`'s catch-up walk reads ahead and absorbs the
+/// *entire* run into every cell it touches; the bug was recording `cold.count = data_index + 1`
+/// (an index *inside* the run) instead of the run's end, so cells touched again while
+/// processing the second tied observation re-applied its tail factors. On this instance the
+/// broken bookkeeping yielded `[1.0, 0.5, 0.5]` instead of `[1.0, 1.0, 1.0]` at the second
+/// threshold.
+#[test]
+fn test_tied_uncensored_responses() {
+    execute_test(
+        [4.0, 2.0, 4.0, 3.0],
+        [1.0, 3.0, 3.0, 1.0],
+        [1.0; 4],
+        [true, true, true, false],
+        [[0.25, 0.25, 0.25], [1.0, 1.0, 1.0]],
+    )
+}
+
 #[test]
 fn test_6x6() {
     execute_test(
@@ -574,4 +594,234 @@ fn test_6x6() {
             [1.0, 1.0, 1.0, 0.0],
         ],
     )
+}
+
+/// Differential tests: `fast` must agree with `definition` (the executable specification)
+/// on generated instances. Comparison uses a small absolute tolerance — the two
+/// implementations evaluate the same quantities with different operation orderings (and
+/// `definition` accumulates in f64), so agreement is only expected up to f32 rounding. The
+/// observed maximum deviation over hundreds of thousands of generated instances is ~1.5e-6
+/// (about a dozen f32 ulps, on the largest continuous-data cases); the historical bugs these
+/// tests guard against produced errors of 1e-2 and larger.
+mod differential {
+    use crate::structures::Increasing;
+    use crate::total_order::stochastic_dominance::censored::{definition, fast, preprocess};
+    use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
+
+    const TOLERANCE: f32 = 1e-5;
+
+    /// Observation weights away from both 0 and uniformity.
+    fn random_weight(rng: &mut StdRng) -> f64 {
+        rng.random_range(0.5..2.0)
+    }
+
+    struct Instance {
+        x: Vec<f64>,
+        y: Vec<f64>,
+        observed: Vec<bool>,
+        weights: Vec<f64>,
+    }
+
+    impl Instance {
+        /// Covariates and responses drawn from small integer grids: tiny level counts
+        /// maximize tied responses, duplicate covariates, and censoring interactions per
+        /// instance.
+        fn integer_grid(
+            rng: &mut StdRng,
+            n: usize,
+            covariate_levels: u32,
+            response_levels: u32,
+            censored_percent: u32,
+            random_weights: bool,
+        ) -> Self {
+            Self {
+                x: (0..n)
+                    .map(|_| rng.random_range(1..=covariate_levels) as f64)
+                    .collect(),
+                y: (0..n)
+                    .map(|_| rng.random_range(1..=response_levels) as f64)
+                    .collect(),
+                observed: (0..n)
+                    .map(|_| rng.random_range(0..100) >= censored_percent)
+                    .collect(),
+                weights: (0..n)
+                    .map(|_| if random_weights { random_weight(rng) } else { 1.0 })
+                    .collect(),
+            }
+        }
+
+        /// Survival-shaped data: the response is a monotone signal in the covariate plus
+        /// independent noise (`rho` = signal share), right-censoring times are drawn below
+        /// the event time, and covariate/response are optionally quantized onto discrete
+        /// grids.
+        fn survival(
+            rng: &mut StdRng,
+            n: usize,
+            covariate_levels: Option<u32>,
+            response_levels: Option<u32>,
+            rho: f64,
+            censoring: f64,
+            random_weights: bool,
+        ) -> Self {
+            let quantize = |value: f64, levels: Option<u32>| match levels {
+                Some(levels) => (value * levels as f64).floor() / levels as f64,
+                None => value,
+            };
+            let mut instance = Instance {
+                x: Vec::with_capacity(n),
+                y: Vec::with_capacity(n),
+                observed: Vec::with_capacity(n),
+                weights: Vec::with_capacity(n),
+            };
+            for _ in 0..n {
+                let x = quantize(rng.random(), covariate_levels);
+                let event_time = rho * x + (1.0 - rho) * rng.random::<f64>();
+                let censored = rng.random_bool(censoring);
+                let y = if censored {
+                    event_time * rng.random::<f64>()
+                } else {
+                    event_time
+                };
+                instance.x.push(x);
+                instance.y.push(quantize(y, response_levels));
+                instance.observed.push(!censored);
+                instance
+                    .weights
+                    .push(if random_weights { random_weight(rng) } else { 1.0 });
+            }
+            instance
+        }
+
+        /// Run both implementations and compare; `Err` describes the worst difference and
+        /// the full instance.
+        fn check(&self) -> Result<(), String> {
+            let context = preprocess(&self.x, &self.y, &self.observed, &self.weights).unwrap();
+            let expected = definition::algorithm::<Increasing, _, _>(&context);
+            let actual = fast::algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+
+            assert_eq!(expected.len(), actual.len());
+            let worst = expected
+                .iter()
+                .zip(&actual)
+                .map(|(e, a)| (e - a).abs())
+                .fold(0.0f32, f32::max);
+            if worst <= TOLERANCE {
+                Ok(())
+            } else {
+                Err(format!(
+                    "max |definition - fast| = {worst:e}\n  \
+                     x = {:?}\n  y = {:?}\n  observed = {:?}\n  weights = {:?}\n  \
+                     definition = {expected:?}\n  fast = {actual:?}",
+                    self.x, self.y, self.observed, self.weights,
+                ))
+            }
+        }
+    }
+
+    fn assert_all_ok(failures: Vec<String>) {
+        if let Some(first) = failures.first() {
+            panic!("{} failing instances, first:\n{first}", failures.len());
+        }
+    }
+
+    /// Factor grid matching the benchmark axes: continuous/discrete covariate and response,
+    /// strong/weak/no X-Y dependence, low/high censoring share, several sizes.
+    #[test]
+    fn factor_grid() {
+        let mut failures = Vec::new();
+        let mut seed = 1u64;
+        for covariate_levels in [None, Some(7)] {
+            for response_levels in [None, Some(9)] {
+                for rho in [0.9, 0.3, 0.0] {
+                    for censoring in [0.3, 0.7] {
+                        for n in [1, 2, 3, 5, 17, 60] {
+                            seed += 1;
+                            let instance = Instance::survival(
+                                &mut StdRng::seed_from_u64(seed),
+                                n,
+                                covariate_levels,
+                                response_levels,
+                                rho,
+                                censoring,
+                                seed.is_multiple_of(2),
+                            );
+                            failures.extend(
+                                instance.check().err().map(|e| format!("seed {seed}: {e}")),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_all_ok(failures);
+    }
+
+    /// Dense micro-instance sweep. This is the search that found
+    /// `test_tied_uncensored_responses` and `clip_order_instance` (the factor grid ran at
+    /// sizes where those patterns slipped through).
+    #[test]
+    fn micro_instances() {
+        let mut rng = StdRng::seed_from_u64(0x5eed);
+        let mut failures = Vec::new();
+        for n in 3..=8 {
+            for attempt in 0usize..2000 {
+                let instance = Instance::integer_grid(&mut rng, n, 4, 3, 40, !attempt.is_multiple_of(2));
+                failures.extend(instance.check().err());
+            }
+        }
+        assert_all_ok(failures);
+    }
+
+    /// Deep brute-force sweep: ~210 000 deterministic instances over n up to 40, 2-10
+    /// covariate levels, 2-8 response levels, 20-70% censoring, equal and random weights.
+    /// The per-instance cost is roughly linear in n, so attempts scale as 1/n to spend
+    /// comparable time on every size; the whole sweep stays within seconds even in debug
+    /// builds.
+    #[test]
+    fn deep_search() {
+        let mut rng = StdRng::seed_from_u64(0xfeedbeef);
+        let mut failures = Vec::new();
+        for n in [3, 4, 5, 6, 7, 8, 10, 12, 18, 25, 40] {
+            for attempt in 0..140_000 / n {
+                let instance = Instance::integer_grid(
+                    &mut rng,
+                    n,
+                    [2, 4, 6, 10][attempt % 4],
+                    [2, 3, 5, 8][(attempt / 4) % 4],
+                    [20, 40, 70][(attempt / 16) % 3],
+                    attempt.is_multiple_of(2),
+                );
+                failures.extend(instance.check().err());
+            }
+        }
+        assert_all_ok(failures);
+    }
+
+    /// Regression instance for the clip-order divergence. `definition` originally clipped
+    /// in (r asc, s asc, k asc) order, where the column-side inputs `(k+1, s)` were not yet
+    /// clipped at the current threshold, while `fast` clips against fully-clipped values on
+    /// both sides; on this instance the two orders gave visibly different results (CDF
+    /// 0.6549 vs 0.6308 at the second threshold). Resolved by defining clipping in
+    /// span-ascending order, so clips only ever use already-clipped values — matching
+    /// `fast`.
+    #[test]
+    fn clip_order_instance() {
+        let instance = Instance {
+            x: vec![1.0, 2.0, 2.0, 1.0, 3.0, 1.0, 4.0, 3.0],
+            y: vec![1.0, 1.0, 3.0, 1.0, 2.0, 1.0, 1.0, 1.0],
+            observed: vec![false, true, false, false, true, true, false, false],
+            weights: vec![
+                0.5948106348514557,
+                1.312944918870926,
+                0.6167095303535461,
+                0.825943648815155,
+                0.5218165516853333,
+                1.0982480347156525,
+                0.674931526184082,
+                1.6719395518302917,
+            ],
+        };
+        instance.check().unwrap();
+    }
 }

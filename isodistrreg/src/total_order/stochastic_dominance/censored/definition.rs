@@ -46,8 +46,32 @@ pub(crate) fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
 
                 value.min(maximum).max(minimum)
             }
-            for r in 0..context.n_covariate() - 1 {
-                for s in r + 1..context.n_covariate() {
+            // Clip in order of increasing span, so that every value used for clipping —
+            // the same-row left part (r..=k) as well as the column right part (k+1..=s),
+            // both spanning strictly fewer covariates — is itself already fully clipped.
+            for span in 1..context.n_covariate() {
+                for r in 0..context.n_covariate() - span {
+                    let s = r + span;
+
+                    // The clip intervals of the different splits k are always compatible:
+                    // L = max_k min(left, right) never exceeds U = min_k max(left, right).
+                    // Consequently, sequentially clipping into each split's interval (below)
+                    // is equivalent to a single clamp into [L, U], independent of the k
+                    // order — which is what the fast algorithm's bound propagation relies
+                    // on.
+                    let mut lower = f64::NEG_INFINITY;
+                    let mut upper = f64::INFINITY;
+                    for k in r..s {
+                        let left = survivals[r][k - r];
+                        let right = survivals[k + 1][s - k - 1];
+                        lower = lower.max(left.min(right));
+                        upper = upper.min(left.max(right));
+                    }
+                    assert!(
+                        lower <= upper,
+                        "conflicting clip bounds for interval ({r}, {s}): L={lower} > U={upper}",
+                    );
+
                     for k in r..s {
                         // All bounds are inclusive
                         let left_start = r;
