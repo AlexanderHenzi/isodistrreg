@@ -23,6 +23,12 @@ pub fn mean<Y: Float>(
         },
     );
 
+    // A sub-CDF (censored mass beyond the largest threshold) has an undefined mean. The
+    // comparison is exact on purpose: every producer pins values that are mathematically
+    // exactly 1 — the uncensored kernels write literal 1.0 rows, `empirical_cdf` pins its
+    // final value, and the censored Kaplan-Meier producers pin survival to exactly 0
+    // whenever the last positive-weight observation is an event (a purely combinatorial
+    // condition, immune to f32 round-off).
     if last_cdf_value < 1.0 {
         Y::nan()
     } else {

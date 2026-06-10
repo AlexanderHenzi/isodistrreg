@@ -82,7 +82,7 @@ pub fn empirical_cdf<C, Y, I: Into<Observation<C, Y, (), f32>>>(
     observations: impl Iterator<Item = I>,
     total_weight: f32,
 ) -> Vec<f32> {
-    observations
+    let mut cdf: Vec<f32> = observations
         .map(Into::into)
         .scan(0.0, |acc, o| {
             *acc += o.weight / total_weight;
@@ -90,7 +90,14 @@ pub fn empirical_cdf<C, Y, I: Into<Observation<C, Y, (), f32>>>(
             *acc = acc.clamp(0.0, 1.0);
             Some(*acc)
         })
-        .collect()
+        .collect();
+    // The final cumulative value is total_weight / total_weight — exactly 1. Pin it so
+    // downstream proper-CDF checks (e.g. `prediction::mean`) see 1.0 rather than
+    // accumulated f32 round-off like 0.99999994.
+    if let Some(last) = cdf.last_mut() {
+        *last = 1.0;
+    }
+    cdf
 }
 
 /// Compute the Kaplan-Meier estimator on unique responses.

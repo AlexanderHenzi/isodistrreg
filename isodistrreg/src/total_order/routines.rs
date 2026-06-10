@@ -39,14 +39,29 @@ pub fn single_response<D: Direction, Y>(
     let n_covariate = covariate_statistics.len();
     // observations may not be sorted by covariate
     let mut uncensored_per_covariate = vec![0.0f32; n_covariate];
+    let mut any_censored = vec![false; n_covariate];
     for o in observations {
         if o.observed {
             uncensored_per_covariate[o.x] += o.weight;
+        } else if o.weight > 0.0 {
+            any_censored[o.x] = true;
         }
     }
     let shares = uncensored_per_covariate
         .into_iter()
+        .zip(any_censored)
         .zip(covariate_statistics.iter())
-        .map(|(uncensored, cs)| (uncensored / cs.weight, cs.weight));
+        .map(|((uncensored, censored), cs)| {
+            let share = if !censored && uncensored > 0.0 {
+                // All of this covariate's mass is observed: the share is exactly
+                // total/total = 1. Summing numerator and denominator separately can
+                // leave the ratio a few ulps off, which the exact proper-CDF gate in
+                // `prediction::mean` must not see.
+                1.0
+            } else {
+                uncensored / cs.weight
+            };
+            (share, cs.weight)
+        });
     tonic_regression::algorithm_pre_sorted_deduplicated::<D::REVERSE, f32, _>(shares).collect()
 }

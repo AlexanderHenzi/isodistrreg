@@ -363,9 +363,15 @@ impl<T: Default + Sync + Send + TotalCmp> Functional for KaplanMeier<T> {
         // We narrow once at the return so the partial-order censored algorithm body
         // can stay in f32 end-to-end (matching the rest of the censored stack).
         let mut at_risk = 0.0;
+        let mut n_positive = 0usize;
         let mut subset: Vec<_> = obs
             .into_iter()
-            .inspect(|o| at_risk += o.weight)
+            .inspect(|o| {
+                at_risk += o.weight;
+                if o.weight > 0.0 {
+                    n_positive += 1;
+                }
+            })
             .filter(|o| o.y <= self.threshold)
             .filter(|o| o.weight > 0.0)
             .map(|o| Observation {
@@ -381,12 +387,23 @@ impl<T: Default + Sync + Send + TotalCmp> Functional for KaplanMeier<T> {
                 .then(l.observed.cmp(&r.observed).reverse())
         });
 
+        // Survival reaches exactly 0 iff every positive-weight observation lies at or
+        // below the threshold AND the last one (response order, events before
+        // censorings at ties) is observed: only then does some event's factor become
+        // exactly `1 - w/w`. The condition is purely combinatorial, so pin that case —
+        // the running at-risk subtraction drifts, leaving the product a few ulps off
+        // where mathematics says exactly 0.
+        let completes = subset.len() == n_positive && subset.last().is_some_and(|o| o.observed);
+
         let mut survival = 1.0;
         for o in subset {
             if o.observed {
                 survival *= 1.0 - o.weight / at_risk;
             }
             at_risk -= o.weight;
+        }
+        if completes {
+            survival = 0.0;
         }
 
         (1.0 - survival) as f32
