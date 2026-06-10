@@ -81,8 +81,9 @@ impl<const B: usize> BitSet<B> {
     pub fn max(&self) -> Option<usize> {
         for (word_index, word) in self.words.iter().enumerate().rev() {
             if *word != 0 {
+                // The highest set bit sits at `bits_per_word - 1 - leading_zeros`.
                 return Some(
-                    (word_index + 1) * Self::bits_per_word() - word.leading_zeros() as usize,
+                    (word_index + 1) * Self::bits_per_word() - 1 - word.leading_zeros() as usize,
                 );
             }
         }
