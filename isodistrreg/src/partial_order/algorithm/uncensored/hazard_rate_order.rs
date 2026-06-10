@@ -4,12 +4,19 @@ use std::borrow::Cow;
 
 #[allow(clippy::doc_overindented_list_items)]
 /// Update A in-place to encode HRO constraints per edge-row.
+///
+/// The variables are the survival values at the current threshold and `S` holds the
+/// survivals at the previous threshold, so `x/S` is the per-step survival ratio. The
+/// hazard rate order requires that ratio to be nondecreasing along the covariate order
+/// (Y_i <=hr Y_j iff S_j(t)/S_i(t) is nondecreasing in t) — the same orientation as the
+/// plain-order fallback, just ratio-weighted.
+///
 /// For each row r that originally encoded x_i <= x_j:
 /// - If D::IS_INCREASING:
-///     HRO:  (x_i / S_i) - (x_j / S_j) >= 0, if S_i > 0 and S_j > 0
+///     HRO:  (x_j / S_j) - (x_i / S_i) >= 0, if S_i > 0 and S_j > 0
 ///     else:            x_j - x_i       >= 0
 /// - Else (decreasing):
-///     HRO:  (x_j / S_j) - (x_i / S_i) >= 0, if S_i > 0 and S_j > 0
+///     HRO:  (x_i / S_i) - (x_j / S_j) >= 0, if S_i > 0 and S_j > 0
 ///     else:            x_i - x_j       >= 0
 ///
 /// Invariants expected:
@@ -108,15 +115,17 @@ pub fn update_constraint_matrix<D: Direction>(existing_matrix: &mut CscMatrix, s
             let use_hro = s_i > 0.0 && s_j > 0.0;
 
             if use_hro {
-                // HRO coefficients: signs depend on direction.
+                // HRO coefficients: signs depend on direction, matching the plain-order
+                // fallback below (the survival ratio x/S must be nondecreasing along the
+                // covariate order for an increasing fit).
                 if D::IS_INCREASING {
-                    // (x_i/S_i) - (x_j/S_j) >= 0
-                    data[pos_i] = 1.0 / s_i;
-                    data[pos_j] = -1.0 / s_j;
-                } else {
                     // (x_j/S_j) - (x_i/S_i) >= 0
                     data[pos_i] = -1.0 / s_i;
                     data[pos_j] = 1.0 / s_j;
+                } else {
+                    // (x_i/S_i) - (x_j/S_j) >= 0
+                    data[pos_i] = 1.0 / s_i;
+                    data[pos_j] = -1.0 / s_j;
                 }
             } else {
                 // Fallback to simple order.
@@ -242,7 +251,7 @@ mod tests {
         let n = 3;
 
         let base_simple = build_order_constraints::<Increasing, false>(&constraints, n);
-        let base_hazard = build_order_constraints::<Increasing, true>(&constraints, n);
+        let base_hazard = build_order_constraints::<Decreasing, true>(&constraints, n);
 
         // survival satisfies S0 ≤ S1 ≤ S2
         let survival = vec![0.5, 0.75, 1.0];
@@ -269,7 +278,7 @@ mod tests {
         let n = 3;
 
         let base_simple = build_order_constraints::<Increasing, false>(&constraints, n);
-        let base_hazard = build_order_constraints::<Increasing, true>(&constraints, n);
+        let base_hazard = build_order_constraints::<Decreasing, true>(&constraints, n);
 
         // Make S0 = 0 (and maintain monotone: 0 ≤ 0.5 ≤ 1.0).
         let survival = vec![0.0, 0.5, 1.0];
@@ -290,7 +299,7 @@ mod tests {
         let n = 3;
 
         let base_simple = build_order_constraints::<Increasing, false>(&constraints, n);
-        let base_hazard = build_order_constraints::<Increasing, true>(&constraints, n);
+        let base_hazard = build_order_constraints::<Decreasing, true>(&constraints, n);
 
         // survival: 0.25 ≤ 0.5 ≤ 1.0
         let survival = vec![0.25, 0.5, 1.0];
@@ -310,7 +319,7 @@ mod tests {
         let n = 3;
 
         let base_simple = build_order_constraints::<Increasing, false>(&constraints, n);
-        let base_hazard = build_order_constraints::<Increasing, true>(&constraints, n);
+        let base_hazard = build_order_constraints::<Decreasing, true>(&constraints, n);
 
         let mut mat = base_simple.clone();
 
@@ -340,7 +349,7 @@ mod tests {
         let n = 3;
 
         let base_simple = build_order_constraints::<Increasing, false>(&constraints, n);
-        let base_hazard = build_order_constraints::<Increasing, true>(&constraints, n);
+        let base_hazard = build_order_constraints::<Decreasing, true>(&constraints, n);
 
         // survival strictly positive
         let survival = vec![0.25, 0.5, 1.0];
@@ -363,8 +372,9 @@ mod tests {
         let constraints = vec![(0usize, 1usize), (1usize, 2usize)];
         let n = 3usize;
 
-        // Build the base (hazard-oriented) matrix for decreasing direction.
-        let base_hazard = build_order_constraints::<Decreasing, true>(&constraints, n);
+        // Build the base (hazard-oriented) matrix for a decreasing fit — the pipeline
+        // builds with D::REVERSE (algorithm/uncensored/mod.rs), so Increasing here.
+        let base_hazard = build_order_constraints::<Increasing, true>(&constraints, n);
         let mut mat = base_hazard.clone();
 
         // Helper: position in CSC storage for (col, row), using the (unchanging) base structure.
@@ -381,7 +391,9 @@ mod tests {
 
         // Reproduce the implementation’s orientation and coefficient rule for Decreasing:
         // - i = endpoint with larger (or equal) survival (tie-break: larger column index).
-        // - If both survivals > 0: set -1/S_i at i and +1/S_j at j.
+        // - If both survivals > 0: set +1/S_i at i and -1/S_j at j, i.e.
+        //   (x_i/S_i) - (x_j/S_j) >= 0 — the survival ratio nonincreasing along the
+        //   covariate order, the hazard rate order for a decreasing fit.
         // - Else: fallback simple decreasing: +1 at i and -1 at j.
         let mat_nrows = mat.nrows;
         let expected_for = |survival: &[f64]| -> Vec<f64> {
@@ -405,8 +417,8 @@ mod tests {
                 let pj = pos(j_col, r);
 
                 if s_i > 0.0 && s_j > 0.0 {
-                    out[pi] = -1.0 / s_i;
-                    out[pj] = 1.0 / s_j;
+                    out[pi] = 1.0 / s_i;
+                    out[pj] = -1.0 / s_j;
                 } else {
                     out[pi] = 1.0;
                     out[pj] = -1.0;
