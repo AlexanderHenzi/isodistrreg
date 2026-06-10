@@ -81,6 +81,14 @@ impl<F: Functional> CauchyMeanValueFunctional for ClippingWrapper<F> {
                 for k in r..s {
                     let l = shared[index(r, k)];
                     let r = shared[index(k + 1, s)];
+                    // A split with an undefined side imposes no clipping
+                    // constraint, and depending on the functional, the number
+                    // of elements needed to compute a value can be > 1, such
+                    // as with the sample variance. NaN-ignoring min/max would
+                    // instead pin the value to the defined side.
+                    if l.is_nan() || r.is_nan() {
+                        continue;
+                    }
                     lower = lower.max(l.min(r));
                     upper = upper.min(l.max(r));
                 }
