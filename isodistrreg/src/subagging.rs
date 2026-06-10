@@ -137,10 +137,12 @@ impl Config {
             return Err(BadParam("n_jobs must be at least 1"));
         }
 
-        // Simplify by recognizing default values
+        // Simplify by recognizing default values. Full size is only equivalent to "no
+        // subsampling" when drawing WITHOUT replacement: a full-size draw with
+        // replacement is the classic bootstrap and must keep its explicit size.
         let subsample_size = match subsample_size {
-            Some(Left(count)) if count == n => None,
-            Some(Right(1.0)) => None,
+            Some(Left(count)) if count == n && !replace => None,
+            Some(Right(1.0)) if !replace => None,
             other => other,
         };
 
@@ -326,7 +328,11 @@ macro_rules! impl_idr_fit_for {
 
                 let tracker = MultiTracker::<TRACKER_STEPS>::new(config.n_subsamples, progress);
 
-                let fits = if config.subsample_size == n {
+                // A full-size subsample is the whole data set only when drawn WITHOUT
+                // replacement; a with-replacement draw of size n is a genuine bootstrap
+                // resample (it almost surely contains duplicates) and must go through
+                // the resampling path below.
+                let fits = if config.subsample_size == n && !config.replace {
                     vec![<$inner>::fit(
                         x,
                         y,
@@ -650,6 +656,7 @@ fn derive_threshold_map<F: IsotonicDistributionalRegressionFit>(
 
 #[cfg(test)]
 mod test {
+    use itertools::Either;
     use crate::partial_order::CovariateGroups;
     use crate::structures::{Increasing, StochasticOrder};
     use crate::subagging::{Config, Fit};
@@ -777,6 +784,21 @@ mod test {
         assert_eq!(fit.cdf_at(5.0, 35.0), 1.0);
         assert_eq!(fit.cdf_at(15.0, 5.0), 0.0);
         assert_eq!(fit.cdf_at(15.0, 35.0), 1.0);
+    }
+
+    /// A subsample fraction of 1.0 combined with `replace = true` is the
+    /// classic bootstrap and must keep the full subsample size `n`.
+    #[test]
+    fn parse_full_size_bootstrap_keeps_size() {
+        let config = Config::parse(Some(7), Some(Either::Right(1.0)), true, 10, Some(3), 1)
+            .expect("b=7, p=1.0, replace=true is a valid bootstrap configuration");
+        assert_eq!(config.n_subsamples, 7);
+        assert!(config.replace);
+        assert_eq!(
+            config.subsample_size, 10,
+            "p = 1.0 must give subsamples of size n = 10 (got {})",
+            config.subsample_size
+        );
     }
 
     #[test]
