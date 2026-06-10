@@ -22,6 +22,15 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     context: &CensoredSdContext<X, Y>,
     progress: &dyn ProgressTracker,
 ) -> Vec<f32> {
+    let mut cdfs = algorithm_impl::<D, X, Y>(context, progress);
+    pin_completed_mass::<D, X, Y>(context, &mut cdfs);
+    cdfs
+}
+
+fn algorithm_impl<D: Direction, X: crate::Float, Y: crate::Float>(
+    context: &CensoredSdContext<X, Y>,
+    progress: &dyn ProgressTracker,
+) -> Vec<f32> {
     progress.set_total(context.n_threshold());
 
     if context.n_threshold() == 0 {
@@ -306,6 +315,108 @@ fn dispatch_generalized_pava<D: Direction, X: crate::Float, Y: crate::Float>(
         cdf,
         progress,
     );
+}
+
+/// Pin the last threshold's CDF row to exactly 1.0 on its "dead" section — the
+/// covariates whose fitted sub-CDF completes, i.e. has no mass beyond the largest
+/// threshold in exact arithmetic. The f32 running weight bookkeeping inside the
+/// algorithm can leave those values a few ulps short, which downstream consumers
+/// (`prediction::mean`'s exact proper-CDF gate) must not see.
+///
+/// Runs once on the finished output, so it adds nothing to the per-threshold hot
+/// path; being purely combinatorial it is also immune to the f32 state (including
+/// cells frozen early by the noise-floor guard).
+///
+/// Derivation: an interval Kaplan-Meier survival is exactly 0 iff the interval's last
+/// positive-weight observation (response order, events before censorings at ties) is
+/// an EVENT — only then is some factor exactly `1 - w/w`. Clipping preserves this:
+/// for any split, the side containing that observation is itself exactly 0 by
+/// induction over the span, so the clip interval's lower edge is 0. With `t[x]` the
+/// index of covariate x's last positive-weight observation and `e[x]` whether it is
+/// observed, the fitted survival at covariate i — `max_{r<=i} min_{s>=i}` over the
+/// clipped cells — is exactly 0 iff every right-to-left maximum j of `t[..=i]` either
+/// satisfies `e[j]` or is resolved by a later event: an event covariate `x > i` with
+/// `t[x] > max(t[j..x])` (choosing `s = x` then makes that event the interval `[j, x]`'s
+/// last observation — an event merely later than `t[j]` is not enough, it must also
+/// outlast every censoring between `j` and `x`). The completing covariates form a
+/// prefix (the fitted CDF row is nonincreasing along covariates), computed with two
+/// monotonic-stack sweeps.
+fn pin_completed_mass<D: Direction, X, Y>(input: &CensoredSdContext<X, Y>, cdf: &mut [f32]) {
+    let n_covariate = input.n_covariate();
+    let n_threshold = input.n_threshold();
+    debug_assert!(cdf.is_empty() || cdf.len() == n_threshold * n_covariate);
+    if n_covariate == 0 || n_threshold == 0 || cdf.len() != n_threshold * n_covariate {
+        return;
+    }
+
+    // Last positive-weight observation per covariate: index (+1; 0 = none) and
+    // whether it is an event.
+    let mut t = vec![0usize; n_covariate];
+    let mut e = vec![false; n_covariate];
+    for (index, observation) in input.observations.iter().enumerate() {
+        if observation.weight > 0.0 {
+            t[observation.x] = index + 1;
+            e[observation.x] = observation.observed;
+        }
+    }
+    // A decreasing fit is the increasing fit on the mirrored covariate order.
+    if !D::IS_INCREASING {
+        t.reverse();
+        e.reverse();
+    }
+
+    // event_record_after[i] = the largest `t` among EVENT covariates x > i that are
+    // records of the suffix (t[x] greater than every t between i and x) — exactly the
+    // events that some interval ending at x can have as its last observation. Events
+    // shadowed by a later censoring in between resolve nothing. Right-to-left
+    // monotonic stack of suffix records; each entry carries the max event `t` at or
+    // below it in the stack.
+    let mut event_record_after = vec![0usize; n_covariate];
+    {
+        let mut records: Vec<(usize, usize)> = Vec::new();
+        for i in (0..n_covariate).rev() {
+            event_record_after[i] = records.last().map_or(0, |&(_, event_max)| event_max);
+            while records.last().is_some_and(|&(t_top, _)| t_top < t[i]) {
+                records.pop();
+            }
+            let event_below = records.last().map_or(0, |&(_, event_max)| event_max);
+            let event_max = if e[i] {
+                event_below.max(t[i])
+            } else {
+                event_below
+            };
+            records.push((t[i], event_max));
+        }
+    }
+
+    let last_row = &mut cdf[(n_threshold - 1) * n_covariate..];
+    // Monotonic stack of the right-to-left maxima of `t[..=i]`; each entry carries the
+    // max `t` among censored-ending entries at or below it in the stack.
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    for i in 0..n_covariate {
+        while stack.last().is_some_and(|&(t_top, _)| t_top < t[i]) {
+            stack.pop();
+        }
+        let censored_below = stack.last().map_or(0, |&(_, censored_max)| censored_max);
+        let censored_max = if e[i] {
+            censored_below
+        } else {
+            censored_below.max(t[i])
+        };
+        stack.push((t[i], censored_max));
+
+        // The sub-CDF at covariate i completes iff no censored-ending right-to-left
+        // maximum outlasts every resolving event beyond i. Failures are monotone in i,
+        // so the dead section ends at the first one.
+        if censored_max > event_record_after[i] {
+            return;
+        }
+        last_row[if D::IS_INCREASING {
+            i
+        } else {
+            n_covariate - 1 - i
+        }] = 1.0;
+    }
 }
 
 fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
