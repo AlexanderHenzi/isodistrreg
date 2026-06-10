@@ -4,6 +4,7 @@ use crate::structures::{Decreasing, Direction, Increasing};
 use crate::total_order::routines::{pool_partitions_from_right, single_response};
 use crate::total_order::structures::{AlgorithmContext, WeightedPartition};
 use crate::total_order::weight_noise_floor;
+use itertools::Itertools;
 use std::iter::{repeat, repeat_n};
 use std::mem;
 
@@ -27,16 +28,30 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     // SD-censored case (here we sum/subtract `covariate_statistics[i].weight` and compare
     // `survival[i]` against 0/1) but the Wilkinson-style bound in `weight_noise_floor` is
     // conservative enough to cover both.
-    let epsilon = weight_noise_floor(observations.len());
+    let epsilon = weight_noise_floor(covariate_statistics.iter().map(|s| s.weight).sum());
 
     if unique_responses.len() == 1 {
         // Single threshold -> simple binary isotonic regression with censoring amount
         return single_response::<D, _>(observations.clone(), covariate_statistics);
     }
     if covariate_statistics.len() == 1 {
-        // Single covariate -> a single empirical cdf
-        // Observations have been deduplicated so responses are unique
-        return kaplan_meier(observations.iter().copied(), covariate_statistics[0].weight);
+        // Single covariate -> a single Kaplan-Meier curve. `kaplan_meier` emits one
+        // value per distinct response INCLUDING censored-only ones, but the fit's
+        // thresholds (`unique_responses`) keep only responses with an observed event —
+        // restrict the curve to those.
+        let km = kaplan_meier(observations.iter().copied(), covariate_statistics[0].weight);
+        return observations
+            .iter()
+            .map(|o| o.y)
+            .dedup()
+            .zip(km)
+            .filter(|(y, _)| {
+                unique_responses
+                    .binary_search_by(|t| t.total_cmp(y))
+                    .is_ok()
+            })
+            .map(|(_, v)| v)
+            .collect();
     }
 
     // At least two thresholds
@@ -44,19 +59,31 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     let mut partitions: Vec<WeightedPartition> = Vec::with_capacity(n_covariate);
 
     let mut data_index = 0;
-    let mut threshold = observations[data_index].y;
+    // Leading censored observations (before the first event) only shrink the
+    // available mass; their response values are not thresholds (no event), so no CDF
+    // row is emitted for them.
     while data_index < observations.len() && !observations[data_index].observed {
         let observation = &observations[data_index];
         covariate_statistics[observation.x].weight -= observation.weight;
         data_index += 1;
-        if data_index < observations.len() && observations[data_index].y != threshold {
-            cdfs.extend(repeat_n(0.0, n_covariate));
-            threshold = observations[data_index].y;
-        }
     }
     if data_index == observations.len() {
-        cdfs.extend(repeat_n(0.0, n_covariate));
+        // No events at all: there are no thresholds and the fit is the empty sub-CDF.
+        debug_assert!(unique_responses.is_empty());
         return cdfs;
+    }
+    let mut threshold = observations[data_index].y;
+
+    // Index (+1; 0 = none) of each covariate's last positive-weight observation. Once
+    // it is consumed no mass remains in the group, so the raw Kaplan-Meier estimator
+    // (when it is an event) respectively the at-risk mass (when censored) is exactly
+    // 0 — a purely combinatorial fact. Pin those cases below: the running f32 weight
+    // bookkeeping drifts a few ulps off the exact zero otherwise.
+    let mut last_positive = vec![0usize; n_covariate];
+    for (d, o) in observations.iter().enumerate() {
+        if o.weight > 0.0 {
+            last_positive[o.x] = d + 1;
+        }
     }
 
     let mut estimators = vec![1.0; n_covariate];
@@ -69,6 +96,9 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         let first_observation = &observations[data_index];
         assert!(first_observation.observed);
         estimators[first_observation.x] -= first_observation.weight / at_risk[first_observation.x];
+        if data_index + 1 == last_positive[first_observation.x] {
+            estimators[first_observation.x] = 0.0;
+        }
         let total_at_risk = at_risk[..=first_observation.x].iter().sum();
         partitions.push(WeightedPartition {
             index: first_observation.x + 1,
@@ -83,6 +113,9 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             let observation = &observations[data_index];
 
             estimators[observation.x] -= observation.weight / at_risk[observation.x];
+            if data_index + 1 == last_positive[observation.x] {
+                estimators[observation.x] = 0.0;
+            }
             let total_at_risk = at_risk[(previous.x + 1)..=observation.x].iter().sum();
             partitions.push(WeightedPartition {
                 index: observation.x + 1,
@@ -95,8 +128,15 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             data_index += 1;
         }
 
-        if partitions[0].value >= 1.0 - epsilon {
-            zero_count = partitions[0].index;
+        // Mark every leading fully-died block as dead, not just the first partition:
+        // equal-valued partitions are never pooled, so two adjacent groups that both
+        // die at the first threshold form two separate partitions at value 1.
+        for partition in &partitions {
+            if partition.value >= 1.0 - epsilon {
+                zero_count = partition.index;
+            } else {
+                break;
+            }
         }
 
         let values = partitions
@@ -115,66 +155,92 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     for i in 0..n_covariate {
         at_risk[i] *= survival[i];
     }
-    while observations[data_index].y == threshold {
+    while data_index < observations.len() && observations[data_index].y == threshold {
         let observation = observations[data_index];
         debug_assert!(!observation.observed);
 
-        at_risk[observation.x] *=
-            1.0 - observation.weight / covariate_statistics[observation.x].weight;
-        covariate_statistics[observation.x].weight -= observation.weight;
+        // Zero-weight observations carry no mass (and could divide 0/0 when the
+        // covariate's remaining mass is already exhausted).
+        if observation.weight > 0.0 {
+            at_risk[observation.x] *=
+                1.0 - observation.weight / covariate_statistics[observation.x].weight;
+            covariate_statistics[observation.x].weight -= observation.weight;
+            if data_index + 1 == last_positive[observation.x] {
+                at_risk[observation.x] = 0.0;
+            }
+        }
         data_index += 1;
     }
 
     while data_index < observations.len() {
         threshold = observations[data_index].y;
+        // Events sort before censored observations within a tied response, so this
+        // threshold has at least one event iff its first observation is observed.
+        // Event-free thresholds are not part of `unique_responses` and get no CDF
+        // row; their censored observations only shrink the at-risk masses below.
+        let emit_row = observations[data_index].observed;
 
-        // Update zero count
-        while data_index < observations.len() && observations[data_index].y == threshold {
-            while survival[zero_count] <= 0.0 + epsilon {
-                zero_count += 1;
-            }
-
-            let observation = &observations[data_index];
-            // TODO: Numerics
-            if observation.x == zero_count
-                && observation.observed
-                && (observation.weight - covariate_statistics[observation.x].weight).abs()
-                    <= epsilon
-            {
-                // No need to update the weight total in the covariate static or estimator, they
-                // won't be used from now on
-                zero_count += 1;
-                // Skip the estimators already zero
-                while zero_count < n_covariate && estimators[zero_count] <= 0.0 + epsilon {
+        if emit_row {
+            // Update zero count
+            while data_index < observations.len() && observations[data_index].y == threshold {
+                while zero_count < n_covariate && survival[zero_count] <= 0.0 + epsilon {
                     zero_count += 1;
                 }
 
-                data_index += 1;
-            } else {
-                break;
+                let observation = &observations[data_index];
+                // TODO: Numerics
+                if observation.x == zero_count
+                    && observation.observed
+                    && (observation.weight - covariate_statistics[observation.x].weight).abs()
+                        <= epsilon
+                {
+                    // No need to update the weight total in the covariate static or estimator,
+                    // they won't be used from now on
+                    zero_count += 1;
+                    // Skip the estimators already zero
+                    while zero_count < n_covariate && estimators[zero_count] <= 0.0 + epsilon {
+                        zero_count += 1;
+                    }
+
+                    data_index += 1;
+                } else {
+                    break;
+                }
             }
-        }
 
-        // Update non-zero items
-        let mut i = zero_count;
-        while data_index < observations.len()
-            && observations[data_index].y == threshold
-            && observations[data_index].observed
-        {
-            let observation = &observations[data_index];
+            // Update non-zero items
+            let mut i = zero_count;
+            while data_index < observations.len()
+                && observations[data_index].y == threshold
+                && observations[data_index].observed
+            {
+                let observation = &observations[data_index];
 
-            let share_of_remaining =
-                observation.weight / covariate_statistics[observation.x].weight;
-            estimators[observation.x] *= 1.0 - share_of_remaining;
-            covariate_statistics[observation.x].weight -= observation.weight;
+                let share_of_remaining =
+                    observation.weight / covariate_statistics[observation.x].weight;
+                estimators[observation.x] *= 1.0 - share_of_remaining;
+                covariate_statistics[observation.x].weight -= observation.weight;
+                if data_index + 1 == last_positive[observation.x] {
+                    estimators[observation.x] = 0.0;
+                }
 
-            partitions.push(WeightedPartition {
-                index: i + 1,
-                weight: at_risk[i],
-                value: estimators[i] / survival[i],
-            });
-            i += 1;
-            while i < observation.x {
+                // Push every covariate up to and including the event's, pooling after
+                // each push (mirrors the uncensored kernel). Pushing the cursor and the
+                // event covariate separately would double-push when the event sits at
+                // the cursor, skipping the next covariate and corrupting the row.
+                while i <= observation.x {
+                    partitions.push(WeightedPartition {
+                        index: i + 1,
+                        weight: at_risk[i],
+                        value: estimators[i] / survival[i],
+                    });
+                    pool_partitions_from_right::<Increasing, _>(&mut partitions);
+                    i += 1;
+                }
+
+                data_index += 1;
+            }
+            while i < n_covariate {
                 partitions.push(WeightedPartition {
                     index: i + 1,
                     weight: at_risk[i],
@@ -183,50 +249,42 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
                 pool_partitions_from_right::<Increasing, _>(&mut partitions);
                 i += 1;
             }
-            partitions.push(WeightedPartition {
-                index: observation.x + 1,
-                weight: at_risk[observation.x],
-                value: estimators[observation.x] / survival[observation.x],
-            });
-            pool_partitions_from_right::<Increasing, _>(&mut partitions);
-            i += 1;
-
-            data_index += 1;
-        }
-        while i < n_covariate {
-            partitions.push(WeightedPartition {
-                index: i + 1,
-                weight: at_risk[i],
-                value: estimators[i] / survival[i],
-            });
-            pool_partitions_from_right::<Increasing, _>(&mut partitions);
-            i += 1;
         }
         while data_index < observations.len() && observations[data_index].y == threshold {
             let observation = observations[data_index];
             debug_assert!(!observation.observed);
 
-            at_risk[observation.x] *=
-                1.0 - observation.weight / covariate_statistics[observation.x].weight;
-            covariate_statistics[observation.x].weight -= observation.weight;
+            // Zero-weight observations carry no mass (and could divide 0/0 when the
+            // covariate's remaining mass is already exhausted).
+            if observation.weight > 0.0 {
+                at_risk[observation.x] *=
+                    1.0 - observation.weight / covariate_statistics[observation.x].weight;
+                covariate_statistics[observation.x].weight -= observation.weight;
+                if data_index + 1 == last_positive[observation.x] {
+                    at_risk[observation.x] = 0.0;
+                }
+            }
             data_index += 1;
         }
 
-        // Save results
-        cdfs.extend(repeat_n(1.0, zero_count));
-        let mut start_index = zero_count;
-        for partition in partitions.drain(..) {
-            for index in start_index..partition.index {
-                // Previous iteration update
-                at_risk[index] *= partition.value;
-                // Current iteration update
-                survival[index] *= partition.value;
-                // Write out result, clamp to ensure numerical noise doesn't get us out of [0, 1]
-                cdfs.push(1.0 - survival[index].clamp(0.0, 1.0));
+        if emit_row {
+            // Save results
+            cdfs.extend(repeat_n(1.0, zero_count));
+            let mut start_index = zero_count;
+            for partition in partitions.drain(..) {
+                for index in start_index..partition.index {
+                    // Previous iteration update
+                    at_risk[index] *= partition.value;
+                    // Current iteration update
+                    survival[index] *= partition.value;
+                    // Write out result, clamp to ensure numerical noise doesn't get us out of
+                    // [0, 1]
+                    cdfs.push(1.0 - survival[index].clamp(0.0, 1.0));
+                }
+                start_index = partition.index;
             }
-            start_index = partition.index;
+            progress.increment();
         }
-        progress.increment();
     }
 
     cdfs
