@@ -119,7 +119,9 @@ impl<const N: usize> CovariateInterpolator for [f32; N] {
 
 #[inline]
 pub fn search_response<Y: Float>(target: Y, thresholds: &[Y]) -> ResponseCoordinate {
-    assert!(!thresholds.is_empty());
+    // An empty threshold grid (e.g. a fit on fully censored data) represents the
+    // sub-CDF that is 0 everywhere; binary_search on an empty slice yields Err(0)
+    // and thus StrictlyBelowAll, which interpolates to 0.
     debug_assert!(thresholds.array_windows().all(|[l, r]| l < r));
 
     match thresholds.binary_search_by(|t| t.partial_cmp(&target).unwrap()) {
