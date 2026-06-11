@@ -38,9 +38,9 @@ pub struct Fit<X: Float, Y: Float> {
 }
 
 /// Configuration for the total-order solver. Currently has no tunable knobs — the
-/// f32 noise-clamping tolerance used by the hazard-rate and SD-censored kernels is
-/// computed per-fit from the post-preprocessing observation count via
-/// [`weight_noise_floor`].
+/// f32 noise-clamping tolerance used by the SD-censored fast path is computed per-fit
+/// from the total observation weight via [`weight_noise_floor`] (the hazard-rate
+/// kernels track group exhaustion combinatorially and need no tolerance).
 #[derive(Clone, Default)]
 pub struct Config;
 
