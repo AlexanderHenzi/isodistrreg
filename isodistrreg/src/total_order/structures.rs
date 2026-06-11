@@ -303,6 +303,11 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
     }
 
     fn assert_consistent(&self) {
+        if self.is_empty() {
+            // The empty fit (a sub-CDF that is 0 everywhere) is a documented legal
+            // result of fit() — consistent vacuously.
+            return;
+        }
         assert!(!self.covariates.is_empty());
         assert!(self.covariates.windows(2).all(|w| w[0] < w[1]));
 
