@@ -4,13 +4,12 @@ use crate::structures::{Decreasing, Direction, Increasing};
 use crate::total_order::routines::{
     pool_partitions_from_right_zero_weight_blocks, single_response,
 };
-use crate::total_order::structures::{AlgorithmContext, WeightedPartition};
-use itertools::Itertools;
+use crate::total_order::structures::{CensoredContext, WeightedPartition};
 use std::iter::{repeat, repeat_n};
 use std::mem;
 
 pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
-    context: &AlgorithmContext<X, Y, bool>,
+    context: &CensoredContext<X, Y>,
     progress: &dyn ProgressTracker,
 ) -> Vec<f32> {
     if !D::IS_INCREASING {
@@ -21,36 +20,27 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     // The algorithm mutates `covariate_statistics` (decrementing weights as observations are
     // consumed). Clone once at entry so the caller's context stays immutable.
     let mut covariate_statistics = context.covariate_statistics.clone();
-    let unique_responses = &context.unique_responses;
-    progress.set_total(unique_responses.len());
+    progress.set_total(context.n_threshold());
     let n_covariate = covariate_statistics.len();
 
-    if unique_responses.len() == 1 {
+    if context.n_threshold() == 0 {
+        // No events at all: there are no thresholds and the fit is the empty sub-CDF.
+        debug_assert!(context.unique_covariates.is_empty());
+        return Vec::with_capacity(0);
+    }
+    if context.n_threshold() == 1 {
         // Single threshold -> simple binary isotonic regression with censoring amount
         return single_response::<D, _>(observations.clone(), covariate_statistics);
     }
-    if covariate_statistics.len() == 1 {
-        // Single covariate -> a single Kaplan-Meier curve. `kaplan_meier` emits one
-        // value per distinct response INCLUDING censored-only ones, but the fit's
-        // thresholds (`unique_responses`) keep only responses with an observed event —
-        // restrict the curve to those.
-        let km = kaplan_meier(observations.iter().copied(), covariate_statistics[0].weight);
-        return observations
-            .iter()
-            .map(|o| o.y)
-            .dedup()
-            .zip(km)
-            .filter(|(y, _)| {
-                unique_responses
-                    .binary_search_by(|t| t.total_cmp(y))
-                    .is_ok()
-            })
-            .map(|(_, v)| v)
-            .collect();
+    if n_covariate == 1 {
+        // Single covariate -> a single Kaplan-Meier curve. Censored responses are
+        // snapped onto event thresholds during preprocessing, so the curve has exactly
+        // one value per threshold.
+        return kaplan_meier(observations.iter().copied(), covariate_statistics[0].weight);
     }
 
     // At least two thresholds
-    let mut cdfs = Vec::with_capacity(unique_responses.len() * n_covariate);
+    let mut cdfs = Vec::with_capacity(context.n_threshold() * n_covariate);
     let mut partitions: Vec<WeightedPartition> = Vec::with_capacity(n_covariate);
 
     // Index (+1; 0 = none) of each covariate's last observation — preprocessing
@@ -67,26 +57,12 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         last_positive[o.x] = d + 1;
     }
 
+    // Preprocessing discards censored observations sorting before the first event (they
+    // only shrink mass that the covariate statistics already exclude), so the stream
+    // starts with the first threshold's events.
     let mut data_index = 0;
-    // Leading censored observations (before the first event) only shrink the
-    // available mass; their response values are not thresholds (no event), so no CDF
-    // row is emitted for them.
-    while data_index < observations.len() && !observations[data_index].observed {
-        let observation = &observations[data_index];
-        covariate_statistics[observation.x].weight -= observation.weight;
-        if data_index + 1 == last_positive[observation.x] {
-            // Fully censored group: no positive mass remains — exactly 0, so the
-            // at-risk vector below starts at an exact 0 instead of subtraction drift.
-            covariate_statistics[observation.x].weight = 0.0;
-        }
-        data_index += 1;
-    }
-    if data_index == observations.len() {
-        // No events at all: there are no thresholds and the fit is the empty sub-CDF.
-        debug_assert!(unique_responses.is_empty());
-        return cdfs;
-    }
     let mut threshold = observations[data_index].y;
+    debug_assert!(observations[data_index].observed);
 
     let mut estimators = vec![1.0; n_covariate];
     let mut at_risk: Vec<_> = covariate_statistics.iter().map(|cs| cs.weight).collect();
@@ -186,85 +162,71 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
 
     while data_index < observations.len() {
         threshold = observations[data_index].y;
-        // Events sort before censored observations within a tied response, so this
-        // threshold has at least one event iff its first observation is observed.
-        // Event-free thresholds are not part of `unique_responses` and get no CDF
-        // row; their censored observations only shrink the at-risk masses below.
-        let emit_row = observations[data_index].observed;
+        // Censored responses are snapped onto event thresholds during preprocessing
+        // (events sorting before censored within a threshold), so every remaining
+        // threshold starts with an event and emits a CDF row.
+        debug_assert!(observations[data_index].observed);
 
-        if emit_row {
-            // Update zero count
-            while data_index < observations.len() && observations[data_index].y == threshold {
-                // Fitted survival reaches exactly 0 only for groups that died (their
-                // snapped 0-estimator makes the partition value exactly 0) or whose
-                // censored-away mass sat inside a dying span; frozen groups keep a
-                // strictly positive survival and are never pinned.
-                while zero_count < n_covariate && survival[zero_count] == 0.0 {
-                    zero_count += 1;
-                }
-
-                let observation = &observations[data_index];
-                // The group at the cursor dies here exactly when this event is its
-                // last positive-weight observation: censored mass at earlier responses
-                // already left, none remains at later ones, so the event consumes the
-                // whole remaining mass — an exact index check, no weight comparison.
-                if observation.x == zero_count
-                    && observation.observed
-                    && data_index + 1 == last_positive[observation.x]
-                {
-                    // No need to update the weight total in the covariate static or estimator,
-                    // they won't be used from now on
-                    zero_count += 1;
-                    // Skip groups that already died earlier (estimators snapped to an
-                    // exact 0 at their final event; frozen groups stay positive)
-                    while zero_count < n_covariate && estimators[zero_count] == 0.0 {
-                        zero_count += 1;
-                    }
-
-                    data_index += 1;
-                } else {
-                    break;
-                }
+        // Update zero count
+        while data_index < observations.len() && observations[data_index].y == threshold {
+            // Fitted survival reaches exactly 0 only for groups that died (their
+            // snapped 0-estimator makes the partition value exactly 0) or whose
+            // censored-away mass sat inside a dying span; frozen groups keep a
+            // strictly positive survival and are never pinned.
+            while zero_count < n_covariate && survival[zero_count] == 0.0 {
+                zero_count += 1;
             }
 
-            // Update non-zero items
-            let mut i = zero_count;
-            while data_index < observations.len()
-                && observations[data_index].y == threshold
-                && observations[data_index].observed
+            let observation = &observations[data_index];
+            // The group at the cursor dies here exactly when this event is its
+            // last positive-weight observation: censored mass at earlier responses
+            // already left, none remains at later ones, so the event consumes the
+            // whole remaining mass — an exact index check, no weight comparison.
+            if observation.x == zero_count
+                && observation.observed
+                && data_index + 1 == last_positive[observation.x]
             {
-                let observation = &observations[data_index];
-
-                let share_of_remaining =
-                    observation.weight / covariate_statistics[observation.x].weight;
-                estimators[observation.x] *= 1.0 - share_of_remaining;
-                covariate_statistics[observation.x].weight -= observation.weight;
-                if data_index + 1 == last_positive[observation.x] {
-                    // This event consumes the group's whole remaining mass — death,
-                    // exactly.
-                    estimators[observation.x] = 0.0;
-                }
-
-                // Push every covariate up to and including the event's, pooling after
-                // each push (mirrors the uncensored kernel). Pushing the cursor and the
-                // event covariate separately would double-push when the event sits at
-                // the cursor, skipping the next covariate and corrupting the row.
-                // The least-squares weight of the ratio regression is w·S(t-)²
-                // (mirroring the uncensored kernel); `at_risk` already carries one
-                // factor of the fitted survival, so multiply in the second.
-                while i <= observation.x {
-                    partitions.push(WeightedPartition {
-                        index: i + 1,
-                        weight: at_risk[i] * survival[i],
-                        value: estimators[i] / survival[i],
-                    });
-                    pool_partitions_from_right_zero_weight_blocks::<Increasing, _>(&mut partitions);
-                    i += 1;
+                // No need to update the weight total in the covariate static or estimator,
+                // they won't be used from now on
+                zero_count += 1;
+                // Skip groups that already died earlier (estimators snapped to an
+                // exact 0 at their final event; frozen groups stay positive)
+                while zero_count < n_covariate && estimators[zero_count] == 0.0 {
+                    zero_count += 1;
                 }
 
                 data_index += 1;
+            } else {
+                break;
             }
-            while i < n_covariate {
+        }
+
+        // Update non-zero items
+        let mut i = zero_count;
+        while data_index < observations.len()
+            && observations[data_index].y == threshold
+            && observations[data_index].observed
+        {
+            let observation = &observations[data_index];
+
+            let share_of_remaining =
+                observation.weight / covariate_statistics[observation.x].weight;
+            estimators[observation.x] *= 1.0 - share_of_remaining;
+            covariate_statistics[observation.x].weight -= observation.weight;
+            if data_index + 1 == last_positive[observation.x] {
+                // This event consumes the group's whole remaining mass — death,
+                // exactly.
+                estimators[observation.x] = 0.0;
+            }
+
+            // Push every covariate up to and including the event's, pooling after
+            // each push (mirrors the uncensored kernel). Pushing the cursor and the
+            // event covariate separately would double-push when the event sits at
+            // the cursor, skipping the next covariate and corrupting the row.
+            // The least-squares weight of the ratio regression is w·S(t-)²
+            // (mirroring the uncensored kernel); `at_risk` already carries one
+            // factor of the fitted survival, so multiply in the second.
+            while i <= observation.x {
                 partitions.push(WeightedPartition {
                     index: i + 1,
                     weight: at_risk[i] * survival[i],
@@ -273,7 +235,21 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
                 pool_partitions_from_right_zero_weight_blocks::<Increasing, _>(&mut partitions);
                 i += 1;
             }
+
+            data_index += 1;
         }
+        while i < n_covariate {
+            partitions.push(WeightedPartition {
+                index: i + 1,
+                weight: at_risk[i] * survival[i],
+                value: estimators[i] / survival[i],
+            });
+            pool_partitions_from_right_zero_weight_blocks::<Increasing, _>(&mut partitions);
+            i += 1;
+        }
+
+        // Censored observations at this threshold leave the risk set only after the
+        // threshold's events (the events-before-censorings tie convention).
         while data_index < observations.len() && observations[data_index].y == threshold {
             let observation = observations[data_index];
             debug_assert!(!observation.observed);
@@ -288,30 +264,28 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             data_index += 1;
         }
 
-        if emit_row {
-            // Save results
-            cdfs.extend(repeat_n(1.0, zero_count));
-            let mut start_index = zero_count;
-            for partition in partitions.drain(..) {
-                // A pooled ratio target can exceed 1 (a group's raw Kaplan-Meier
-                // survival sits above its pooled fitted survival after a neighbouring
-                // group died, and zero-at-risk blocks don't pull it back). Survival
-                // never increases, so cap the applied step at 1 — the exact solution
-                // of the ratio regression under its θ ≤ 1 bound.
-                let step = partition.value.min(1.0);
-                for index in start_index..partition.index {
-                    // Previous iteration update
-                    at_risk[index] *= step;
-                    // Current iteration update
-                    survival[index] *= step;
-                    // Write out result, clamp to ensure numerical noise doesn't get us out of
-                    // [0, 1]
-                    cdfs.push(1.0 - survival[index].clamp(0.0, 1.0));
-                }
-                start_index = partition.index;
+        // Save results
+        cdfs.extend(repeat_n(1.0, zero_count));
+        let mut start_index = zero_count;
+        for partition in partitions.drain(..) {
+            // A pooled ratio target can exceed 1 (a group's raw Kaplan-Meier
+            // survival sits above its pooled fitted survival after a neighbouring
+            // group died, and zero-at-risk blocks don't pull it back). Survival
+            // never increases, so cap the applied step at 1 — the exact solution
+            // of the ratio regression under its θ ≤ 1 bound.
+            let step = partition.value.min(1.0);
+            for index in start_index..partition.index {
+                // Previous iteration update
+                at_risk[index] *= step;
+                // Current iteration update
+                survival[index] *= step;
+                // Write out result, clamp to ensure numerical noise doesn't get us out of
+                // [0, 1]
+                cdfs.push(1.0 - survival[index].clamp(0.0, 1.0));
             }
-            progress.increment();
+            start_index = partition.index;
         }
+        progress.increment();
     }
 
     cdfs
@@ -322,7 +296,7 @@ mod test {
     use crate::structures::Increasing;
     use crate::test::is_relative_eq_vec;
     use crate::total_order::hazard_rate_order::censored::algorithm;
-    use crate::total_order::hazard_rate_order::preprocessing::preprocess_censored;
+    use crate::total_order::preprocessing::preprocess_censored;
 
     fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usize>(
         x: [f64; N],
@@ -331,10 +305,10 @@ mod test {
         weight: [f64; N],
         expected: [[f64; N_COVARIATE]; N_THRESHOLD],
     ) {
-        let context = preprocess_censored(&x, &y, &observed, &weight);
+        let context = preprocess_censored(&x, &y, &observed, &weight).unwrap();
         let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
         assert_eq!(context.unique_covariates.len(), N_COVARIATE);
-        assert_eq!(context.unique_responses.len(), N_THRESHOLD);
+        assert_eq!(context.thresholds.len(), N_THRESHOLD);
         let expected_flat: Vec<_> = expected.iter().flatten().copied().collect();
         // The hazard-rate algorithm now runs in f32; narrow the test's f64 expected.
         let expected_f32: Vec<_> = expected_flat.iter().map(|&v| v as f32).collect();
@@ -360,8 +334,9 @@ mod test {
         );
     }
 
-    /// Censored-only response values are not thresholds: the single-covariate
-    /// Kaplan-Meier fast path restricts its curve to `unique_responses`.
+    /// Censored-only response values are not thresholds: preprocessing snaps the
+    /// censored observation onto the threshold below it, so the single-covariate
+    /// Kaplan-Meier fast path emits exactly one value per threshold.
     /// KM: F(1) = 1/3; censor@2 leaves the at-risk set; F(3) = 1.
     #[test]
     fn test_censored_only_threshold_single_covariate() {
@@ -375,7 +350,7 @@ mod test {
     }
 
     /// Censored-only thresholds get no CDF row: the matrix is exactly
-    /// `unique_responses.len() x unique_covariates.len()`.
+    /// `thresholds.len() x unique_covariates.len()`.
     #[test]
     fn test_censored_only_threshold_shape() {
         let context = preprocess_censored(
@@ -383,12 +358,13 @@ mod test {
             &[1.0, 2.0, 3.0],
             &[true, false, true],
             &[1.0; 3],
-        );
+        )
+        .unwrap();
         let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
-        assert_eq!(context.unique_responses.len(), 2);
+        assert_eq!(context.thresholds.len(), 2);
         assert_eq!(
             cdfs.len(),
-            context.unique_responses.len() * context.unique_covariates.len()
+            context.thresholds.len() * context.unique_covariates.len()
         );
         assert!(cdfs.iter().all(|v| (0.0..=1.0).contains(v)));
     }
@@ -403,10 +379,11 @@ mod test {
             &[2.0, 4.0, 1.0, 2.0, 1.0],
             &[true; 5],
             &[2.0, 2.0, 2.0, 1.0, 1.0],
-        );
+        )
+        .unwrap();
         let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
         let n_cov = context.unique_covariates.len();
-        assert_eq!(cdfs.len(), context.unique_responses.len() * n_cov);
+        assert_eq!(cdfs.len(), context.thresholds.len() * n_cov);
         for (t, row) in cdfs.chunks_exact(n_cov).enumerate() {
             for c in 1..n_cov {
                 assert!(
@@ -426,11 +403,12 @@ mod test {
             &[9.0, 1.0, 2.0, 2.0, 1.0, 3.0],
             &[true, false, true, false, true, true],
             &[1.0; 6],
-        );
+        )
+        .unwrap();
         let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
         assert_eq!(
             cdfs.len(),
-            context.unique_responses.len() * context.unique_covariates.len()
+            context.thresholds.len() * context.unique_covariates.len()
         );
         assert!(
             cdfs.iter()
@@ -529,6 +507,9 @@ mod test {
         );
     }
 
+    /// The covariates at 2.0 and 3.0 are censored strictly before the only event:
+    /// they leave the risk set before every threshold, carry no information, and are
+    /// discarded by preprocessing — the grid keeps [1.0, 4.0, 5.0].
     #[test]
     fn test_5() {
         execute_test(
@@ -536,7 +517,7 @@ mod test {
             [3.0, 2.0, 1.0, 5.0, 4.0],
             [true, false, false, false, false],
             [1.0; 5],
-            [[1.0, 0.0, 0.0, 0.0, 0.0]],
+            [[1.0, 0.0, 0.0]],
         );
     }
 

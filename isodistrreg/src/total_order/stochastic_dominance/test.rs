@@ -7,8 +7,8 @@ use crate::preprocessing::validate;
 use crate::structures::{Decreasing, Increasing};
 use crate::test::is_relative_eq_vec;
 use crate::total_order::functionals::algorithm;
+use crate::total_order::preprocessing::preprocess_censored;
 use crate::total_order::preprocessing::preprocess_uncensored;
-use crate::total_order::stochastic_dominance::censored::preprocess as preprocess_censored;
 use crate::total_order::stochastic_dominance::{censored, uncensored};
 use itertools::izip;
 

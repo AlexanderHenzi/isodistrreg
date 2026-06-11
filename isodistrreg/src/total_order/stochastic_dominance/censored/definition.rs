@@ -32,10 +32,10 @@
 //! module) and `partial_order::algorithm::test` (general posets).
 
 use crate::structures::Direction;
-use crate::total_order::stochastic_dominance::censored::structures::CensoredSdContext;
+use crate::total_order::structures::CensoredContext;
 
 pub(crate) fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
-    context: &CensoredSdContext<X, Y>,
+    context: &CensoredContext<X, Y>,
 ) -> Vec<f32> {
     (0..context.thresholds.len())
         .map(|threshold| {

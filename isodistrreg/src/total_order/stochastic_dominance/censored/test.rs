@@ -7,7 +7,7 @@ use crate::preprocessing::validate;
 use crate::structures::{Decreasing, Increasing};
 use crate::test::is_relative_eq_vec;
 use crate::total_order::functionals::algorithm;
-use crate::total_order::stochastic_dominance::censored::preprocess;
+use crate::total_order::preprocessing::preprocess_censored as preprocess;
 use crate::total_order::stochastic_dominance::censored::{definition, fast};
 use itertools::izip;
 
@@ -634,7 +634,8 @@ fn test_6x6() {
 /// tests guard against produced errors of 1e-2 and larger.
 mod differential {
     use crate::structures::Increasing;
-    use crate::total_order::stochastic_dominance::censored::{definition, fast, preprocess};
+    use crate::total_order::preprocessing::preprocess_censored as preprocess;
+    use crate::total_order::stochastic_dominance::censored::{definition, fast};
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
 
@@ -730,9 +731,21 @@ mod differential {
             instance
         }
 
-        /// Run both implementations and compare; `Err` describes the worst difference and
+        /// Run all implementations and compare; `Err` describes the worst difference and
         /// the full instance.
         fn check(&self) -> Result<(), String> {
+            self.check_full(true)
+        }
+
+        /// Compare `definition` against `fast`; with `run_partial` (and the
+        /// `partial-order` feature) additionally route the instance through the
+        /// partial-order censored solver — the 1-D covariates replicated to three
+        /// identical dimensions form a chain in the componentwise order — and through
+        /// the literal min-max/RKM specification
+        /// (`partial_order::algorithm::definition`), all against the same expected
+        /// values.
+        #[cfg_attr(not(feature = "partial-order"), allow(unused_variables))]
+        fn check_full(&self, run_partial: bool) -> Result<(), String> {
             let context = preprocess(&self.x, &self.y, &self.observed, &self.weights).unwrap();
             let expected = definition::algorithm::<Increasing, _, _>(&context);
             let actual = fast::algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
@@ -743,14 +756,86 @@ mod differential {
                 .zip(&actual)
                 .map(|(e, a)| (e - a).abs())
                 .fold(0.0f32, f32::max);
-            if worst <= TOLERANCE {
-                Ok(())
-            } else {
-                Err(format!(
+            if worst > TOLERANCE {
+                return Err(format!(
                     "max |definition - fast| = {worst:e}\n  \
                      x = {:?}\n  y = {:?}\n  observed = {:?}\n  weights = {:?}\n  \
                      definition = {expected:?}\n  fast = {actual:?}",
                     self.x, self.y, self.observed, self.weights,
+                ));
+            }
+
+            #[cfg(feature = "partial-order")]
+            if run_partial {
+                self.check_partial(&expected)?;
+            }
+            Ok(())
+        }
+
+        /// Chain correspondence of the general partial-order algorithms with the
+        /// total-order `definition`.
+        #[cfg(feature = "partial-order")]
+        fn check_partial(&self, expected: &[f32]) -> Result<(), String> {
+            use crate::partial_order::{self, CovariateGroups};
+            use std::iter::repeat_n;
+
+            let dimensions = 3;
+            let cov_repeated: Vec<f64> = self
+                .x
+                .iter()
+                .flat_map(|&c| repeat_n(c, dimensions))
+                .collect();
+            let context = partial_order::preprocess_censored(
+                &cov_repeated,
+                &self.y,
+                &self.observed,
+                &self.weights,
+                &CovariateGroups::empty(dimensions),
+            );
+
+            let solver =
+                partial_order::censored::<Increasing, _, _>(&context, &crate::NoProgress).cdfs;
+            self.compare_partial("partial-order solver", &solver, expected)?;
+
+            // The literal specification enumerates (lower set, upper set) pairs:
+            // polynomial on chains, but the per-subset partition enumeration is
+            // exponential in the interval length, hence the covariate-count cap.
+            if context.n_covariate() <= 12 {
+                let spec = partial_order::censored_definition::<Increasing, _, _>(&context);
+                self.compare_partial("min-max specification", &spec, expected)?;
+            }
+            Ok(())
+        }
+
+        #[cfg(feature = "partial-order")]
+        fn compare_partial(
+            &self,
+            label: &str,
+            actual: &[f32],
+            expected: &[f32],
+        ) -> Result<(), String> {
+            let instance = format!(
+                "x = {:?}\n  y = {:?}\n  observed = {:?}\n  weights = {:?}",
+                self.x, self.y, self.observed, self.weights,
+            );
+            if actual.len() != expected.len() {
+                return Err(format!(
+                    "{label}: output length {} != total-order definition length {}\n  {instance}",
+                    actual.len(),
+                    expected.len(),
+                ));
+            }
+            let worst = expected
+                .iter()
+                .zip(actual)
+                .map(|(e, a)| (e - a).abs())
+                .fold(0.0f32, f32::max);
+            if worst <= TOLERANCE {
+                Ok(())
+            } else {
+                Err(format!(
+                    "max |definition - {label}| = {worst:e}\n  {instance}\n  \
+                     definition = {expected:?}\n  {label} = {actual:?}",
                 ))
             }
         }
@@ -830,7 +915,13 @@ mod differential {
                     [20, 40, 70][(attempt / 16) % 3],
                     attempt.is_multiple_of(2),
                 );
-                failures.extend(instance.check().err());
+                // The partial-order legs run on a 1-in-13 subsample to keep this
+                // sweep within its in-debug seconds budget; 13 is coprime to the
+                // %4 / %16 / %3 parameter cycling (period 48), so the subsample
+                // still covers every parameter combination. Full partial-order
+                // coverage at smaller scale comes from `factor_grid` and
+                // `micro_instances`.
+                failures.extend(instance.check_full(attempt % 13 == 0).err());
             }
         }
         assert_all_ok(failures);
@@ -861,6 +952,57 @@ mod differential {
             ],
         };
         instance.check().unwrap();
+    }
+}
+
+/// Regression test for exact-1.0 pinning at *intermediate* thresholds
+/// (`CompletionIndex` interleaved into the fast algorithm; the deleted
+/// `pin_completed_mass` post-pass only repaired the final threshold row).
+///
+/// Instance (sorted covariates 1..5): cov 1: event y=2 (w=1.7); cov 2: event y=1
+/// (w=0.3); cov 3: censored y=4; cov 4: event y=5; cov 5: event y=3. The sub-CDFs at
+/// covariates 1 and 2 complete at threshold y=2 — every interval Kaplan-Meier cell over
+/// `{1}`, `{2}`, or `[1, 2]` ends in an event there, so the CDF is mathematically
+/// exactly 1.0 from the second threshold on. The drift-prone weights make the f32
+/// running sums land off by ulps: without the pin, the row at the *intermediate*
+/// threshold y=3 came out as `[1.0, 0.9999998, ...]` (the bridged diagonal cell's
+/// BIT-reconstructed consumed weight differs from the covariate weight by an ulp), so
+/// the column at covariate 2 DECREASED along the thresholds.
+#[test]
+fn pins_exact_one_at_intermediate_threshold() {
+    let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let y = [2.0, 1.0, 4.0, 5.0, 3.0];
+    let observed = [true, true, false, true, true];
+    let w = [1.7, 0.3, 1.0, 1.0, 1.0];
+
+    let context = preprocess(&x, &y, &observed, &w).unwrap();
+    let n_covariate = context.n_covariate();
+    let n_threshold = context.n_threshold();
+    assert_eq!((n_covariate, n_threshold), (5, 4));
+    assert_eq!(context.thresholds, vec![1.0, 2.0, 3.0, 5.0]);
+
+    let cdfs = fast::algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+    for covariate in 0..2 {
+        // Exactly 1.0 (bitwise) from the second threshold on — including the
+        // intermediate rows.
+        for threshold in 1..n_threshold {
+            assert_eq!(
+                cdfs[threshold * n_covariate + covariate],
+                1.0,
+                "covariate {covariate}, threshold index {threshold}: completed sub-CDF \
+                 must be exactly 1.0; cdfs = {cdfs:?}",
+            );
+        }
+    }
+    // Every column must be nondecreasing along the thresholds.
+    for covariate in 0..n_covariate {
+        let column: Vec<f32> = (0..n_threshold)
+            .map(|threshold| cdfs[threshold * n_covariate + covariate])
+            .collect();
+        assert!(
+            column.is_sorted(),
+            "column at covariate index {covariate} decreases in the threshold: {column:?}",
+        );
     }
 }
 

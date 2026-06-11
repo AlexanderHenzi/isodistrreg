@@ -6,6 +6,64 @@ use bitree::BITree;
 use std::cmp::Reverse;
 use std::iter::repeat_n;
 
+/// Exact bookkeeping of the observations the classical PAVA has consumed so far.
+///
+/// All weight arithmetic runs in f32 (see the weight contract on `fit()`), so quotients of
+/// consumed and total weight drift by ulps and cannot be trusted to land on exact 0.0/1.0.
+/// The integer observation counts are exact: a covariate range whose consumed count equals
+/// its total count is fully consumed, and its share is mathematically `total/total` — the
+/// same combinatorial-pinning idea as the censored `CompletionIndex` and the hazard-rate
+/// kernels' `remaining_observations`.
+pub struct ConsumedMass {
+    /// Consumed f32 weight per covariate, range-queryable.
+    pub weight: BITree<f32>,
+    /// Consumed observation count per covariate, range-queryable.
+    count: BITree<u32>,
+    /// `cumulative_count[i]` = number of observations with covariate index `<= i`.
+    cumulative_count: Vec<u32>,
+}
+
+impl ConsumedMass {
+    pub fn new<R, S>(observations: &[Observation<usize, R, S, f32>], n_covariate: usize) -> Self {
+        let mut cumulative_count = vec![0u32; n_covariate];
+        for observation in observations {
+            cumulative_count[observation.x] += 1;
+        }
+        let mut accumulated = 0;
+        for count in cumulative_count.iter_mut() {
+            accumulated += *count;
+            *count = accumulated;
+        }
+        Self {
+            weight: BITree::new_zeros(n_covariate),
+            count: BITree::new_zeros(n_covariate),
+            cumulative_count,
+        }
+    }
+
+    fn consume(&mut self, x: usize, weight: f32) {
+        self.weight.add_at(x, weight);
+        self.count.add_at(x, 1);
+    }
+
+    /// Has every observation with covariate index in `[lower, upper_inclusive]` been
+    /// consumed? Pure integer arithmetic — exact.
+    fn range_complete(&self, lower: usize, upper_inclusive: usize) -> bool {
+        let total = self.cumulative_count[upper_inclusive]
+            - if lower > 0 {
+                self.cumulative_count[lower - 1]
+            } else {
+                0
+            };
+        self.count.prefix_sum(upper_inclusive + 1) - self.count.prefix_sum(lower) == total
+    }
+
+    /// Consumed f32 weight over covariate indices `[lower, upper_inclusive]`.
+    fn range_weight(&self, lower: usize, upper_inclusive: usize) -> f32 {
+        self.weight.prefix_sum(upper_inclusive + 1) - self.weight.prefix_sum(lower)
+    }
+}
+
 pub fn accelerated_pava<R: PartialOrd + Copy, S: Copy, STOP: Fn(S) -> bool, D: Direction>(
     data_index: &mut usize,
     observations: &[Observation<usize, R, S, f32>],
@@ -14,7 +72,7 @@ pub fn accelerated_pava<R: PartialOrd + Copy, S: Copy, STOP: Fn(S) -> bool, D: D
     partitions_to_store: &mut Vec<WeightedPartition>,
     cdf: &mut Vec<f32>,
     progress: &dyn ProgressTracker,
-) -> (Vec<f32>, BITree<f32>, Vec<WeightedPartition>) {
+) -> (Vec<f32>, ConsumedMass, Vec<WeightedPartition>) {
     debug_assert!(
         observations.len() - *data_index > 1,
         "Need at least two observations; one to initialize, another to start the loop",
@@ -23,10 +81,11 @@ pub fn accelerated_pava<R: PartialOrd + Copy, S: Copy, STOP: Fn(S) -> bool, D: D
     let n_covariate = covariate_statistics.len();
 
     // State variables maintained as we iterate over the data — all in f32, matching the
-    // post-preprocessing convention used by the total-order context structs.
+    // post-preprocessing convention used by the total-order context structs, plus the exact
+    // consumed-observation counts that pin fully-consumed shares to exactly 1.0.
     let mut consumed_share = vec![0.0; n_covariate];
     // TODO: Keeping this data structure updated has a cost that is only worth it from n=2000-3000
-    let mut consumed_weight = BITree::new_zeros(n_covariate);
+    let mut consumed_weight = ConsumedMass::new(observations, n_covariate);
     // TODO: Should this be a linked list or other data structure that makes local modifications
     //  cheap? It should be very fast to scan, though...
     let mut partitions = Vec::with_capacity(n_covariate);
@@ -91,18 +150,34 @@ pub fn accelerated_pava<R: PartialOrd + Copy, S: Copy, STOP: Fn(S) -> bool, D: D
 fn initialize_partitions<R, S, D: Direction>(
     data_index: &mut usize,
     consumed_share: &mut [f32],
-    consumed_weight: &mut BITree<f32>,
+    consumed_weight: &mut ConsumedMass,
     partitions: &mut Vec<WeightedPartition>,
     observations: &[Observation<usize, R, S, f32>],
     covariate_statistics: &[CovariateStatistic],
 ) {
     // Get first value for lowest y and build the antitonic regression
     let obs = &observations[*data_index];
-    consumed_share[obs.x] = obs.weight / covariate_statistics[obs.x].weight;
-    consumed_weight.add_at(obs.x, obs.weight);
+    consumed_weight.consume(obs.x, obs.weight);
+    // The share is exactly 1.0 when this is the covariate's only observation (the f32
+    // quotient of separately accumulated sums can sit ulps off).
+    consumed_share[obs.x] = if consumed_weight.range_complete(obs.x, obs.x) {
+        1.0
+    } else {
+        obs.weight / covariate_statistics[obs.x].weight
+    };
 
     let total_weight = covariate_statistics.last().unwrap().cumulative_weight;
     let n_covariate = covariate_statistics.len();
+
+    // The first block's value is its consumed share; pinned to exactly 1.0 when the block
+    // holds no other observation, like `new_partition`.
+    let block_share = |lower: usize, upper_inclusive: usize, block_weight: f32| {
+        if consumed_weight.range_complete(lower, upper_inclusive) {
+            1.0
+        } else {
+            obs.weight / block_weight
+        }
+    };
 
     // When we initialize the partitions for increasing (resp. decreasing), the thresholds are
     // decreasing (resp. increasing) isotonic regressions. D is the ordering of the threshold.
@@ -111,7 +186,7 @@ fn initialize_partitions<R, S, D: Direction>(
         partitions.push(Partition {
             index: obs.x + 1,
             weight: left_weight,
-            value: obs.weight / left_weight,
+            value: block_share(0, obs.x, left_weight),
         });
         // The first antitonic regression may have a second partition, if the value isn't the last
         if obs.x < n_covariate - 1 {
@@ -126,7 +201,7 @@ fn initialize_partitions<R, S, D: Direction>(
             partitions.push(Partition {
                 index: n_covariate,
                 weight: total_weight,
-                value: obs.weight / total_weight,
+                value: block_share(0, n_covariate - 1, total_weight),
             });
         } else {
             let left_weight = covariate_statistics[obs.x - 1].cumulative_weight;
@@ -134,7 +209,7 @@ fn initialize_partitions<R, S, D: Direction>(
             partitions.push(Partition {
                 index: n_covariate,
                 weight: right_weight,
-                value: obs.weight / right_weight,
+                value: block_share(obs.x, n_covariate - 1, right_weight),
             });
             partitions.push(Partition {
                 index: obs.x,
@@ -153,15 +228,23 @@ fn initialize_partitions<R, S, D: Direction>(
 pub fn classical_pava_update_step<R, S, D: Direction>(
     obs: &Observation<usize, R, S, f32>,
     consumed_share: &mut [f32],
-    consumed_weight: &mut BITree<f32>,
+    consumed_weight: &mut ConsumedMass,
     partitions: &mut Vec<WeightedPartition>,
     covariate_statistics: &[CovariateStatistic],
     partitions_to_store: &mut Vec<WeightedPartition>,
 ) {
     let covariate = obs.x;
 
-    consumed_share[covariate] += obs.weight / covariate_statistics[covariate].weight;
-    consumed_weight.add_at(covariate, obs.weight);
+    consumed_weight.consume(covariate, obs.weight);
+    // Once every observation of the covariate is consumed, the share is mathematically
+    // `total/total` — exactly 1.0; the f32 running sum can sit ulps off, and rows that are
+    // mathematically flat at 1.0 must not wobble (`Fit::assert_consistent` requires every
+    // per-covariate CDF row to be sorted along the thresholds).
+    consumed_share[covariate] = if consumed_weight.range_complete(covariate, covariate) {
+        1.0
+    } else {
+        consumed_share[covariate] + obs.weight / covariate_statistics[covariate].weight
+    };
 
     // In which partition does the new observation fall?
     let (partition_index, (lower, upper)) = find_partition_bounds::<_, _, D>(covariate, partitions);
@@ -260,10 +343,15 @@ pub fn find_partition_bounds<W, V, D: Direction>(
     (partition_index, (lower, upper))
 }
 
+/// Build the partition covering covariates `[lower, upper_inclusive]`, deriving its total
+/// weight from the cumulative weights and its value from the consumed-mass BIT. A fully
+/// consumed block (exact integer-count check) is pinned to exactly 1.0: the value is
+/// mathematically `total/total`, while the two independently accumulated f32 sums can each
+/// drift by ulps.
 fn new_partition(
     lower: usize,
     upper_inclusive: usize,
-    consumed: &BITree<f32>,
+    consumed: &ConsumedMass,
     covariate_statistics: &[CovariateStatistic],
 ) -> Partition<f32, f32> {
     let total_weight = if lower > 0 {
@@ -272,21 +360,16 @@ fn new_partition(
     } else {
         covariate_statistics[upper_inclusive].cumulative_weight
     };
-    let consumed_weight = range_sum_inclusive(consumed, lower, upper_inclusive);
+    let value = if consumed.range_complete(lower, upper_inclusive) {
+        1.0
+    } else {
+        consumed.range_weight(lower, upper_inclusive) / total_weight
+    };
     Partition {
         index: upper_inclusive + 1,
         weight: total_weight,
-        value: consumed_weight / total_weight,
+        value,
     }
-}
-
-/// Inclusive-range prefix-sum query on the BIT: sum over covariate indices `[a, b]`.
-/// `ftree::BITree::prefix_sum(k, init)` returns `init + Σ_{i<k} values[i]`, i.e. strict
-/// prefix, so the inclusive range `[a, b]` corresponds to `prefix_sum(b+1) − prefix_sum(a)`.
-#[inline]
-fn range_sum_inclusive(tree: &BITree<f32>, a: usize, b: usize) -> f32 {
-    debug_assert!(a <= b);
-    tree.prefix_sum(b + 1) - tree.prefix_sum(a)
 }
 
 fn add_remaining(

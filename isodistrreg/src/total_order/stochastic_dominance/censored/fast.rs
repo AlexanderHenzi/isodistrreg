@@ -8,27 +8,18 @@ use crate::total_order::stochastic_dominance::censored::propagate_bounds::{
 };
 use crate::total_order::stochastic_dominance::censored::propagate_bounds::{Kernel, ScalarKernel};
 use crate::total_order::stochastic_dominance::censored::structures::{
-    CensoredSdContext, Estimates, Partition,
+    CompletionIndex, Estimates, Partition,
 };
 use crate::total_order::stochastic_dominance::routines;
 use crate::total_order::structures;
+use crate::total_order::structures::CensoredContext;
 use crate::total_order::structures::WeightedPartition;
 use crate::total_order::weight_noise_floor;
-use bitree::BITree;
 use std::cmp::Ordering;
 use std::iter::repeat_n;
 
 pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
-    context: &CensoredSdContext<X, Y>,
-    progress: &dyn ProgressTracker,
-) -> Vec<f32> {
-    let mut cdfs = algorithm_impl::<D, X, Y>(context, progress);
-    pin_completed_mass::<D, X, Y>(context, &mut cdfs);
-    cdfs
-}
-
-fn algorithm_impl<D: Direction, X: crate::Float, Y: crate::Float>(
-    context: &CensoredSdContext<X, Y>,
+    context: &CensoredContext<X, Y>,
     progress: &dyn ProgressTracker,
 ) -> Vec<f32> {
     progress.set_total(context.n_threshold());
@@ -73,6 +64,15 @@ fn algorithm_impl<D: Direction, X: crate::Float, Y: crate::Float>(
         return cdfs;
     }
 
+    // Build the exact-0 completion oracle once (O(n + C log C)); `Estimates` carries it
+    // through the whole hot call tree so every cell write pins mathematically-completed
+    // intervals to exactly 0 the moment they complete. None of the early returns above
+    // need it: `single_response` already pins its completed covariates (`share = 1.0`)
+    // and all-1.0 blocks never merge under the strict pooling comparison, `kaplan_meier`
+    // tracks `last_positive_observed`, and `finalize_for_single_uncensored` emits
+    // literal 0.0/1.0.
+    let completion = CompletionIndex::new(&context.observations, context.n_covariate());
+
     let at_least_two_more = data_index + 1 < context.n();
     let at_least_two_uncensored = context.observations[data_index + 1].observed;
     let (start_threshold, estimates, partitions) = if at_least_two_more && at_least_two_uncensored {
@@ -116,6 +116,7 @@ fn algorithm_impl<D: Direction, X: crate::Float, Y: crate::Float>(
                     context,
                     &mut cdfs,
                     partitions_to_store,
+                    &completion,
                 );
             }
             progress.increment();
@@ -125,9 +126,10 @@ fn algorithm_impl<D: Direction, X: crate::Float, Y: crate::Float>(
         // Initialize for the general algorithm
         let start_threshold = context.observations[data_index].y;
         let estimates = Estimates::from_partial_uncensored_solution(
-            consumed_weight,
+            consumed_weight.weight,
             context.covariate_statistics.as_slice(),
             data_index,
+            completion,
         );
         let index_only_partitions: Vec<_> = partitions
             .into_iter()
@@ -138,7 +140,7 @@ fn algorithm_impl<D: Direction, X: crate::Float, Y: crate::Float>(
         // Initialize directly for the more general algorithm
 
         // Set the start count already to the value that will be appropriate after initialization
-        let mut estimates = Estimates::new(context.n_covariate(), data_index);
+        let mut estimates = Estimates::new(context.n_covariate(), data_index, completion);
         let mut partitions = Vec::with_capacity(context.n_covariate());
 
         // First uncensored threshold (fast initialization only)
@@ -170,7 +172,7 @@ fn algorithm_impl<D: Direction, X: crate::Float, Y: crate::Float>(
 
 fn finalize_for_single_uncensored<D: Direction, X: crate::Float, Y: crate::Float>(
     data_index: usize,
-    input: &CensoredSdContext<X, Y>,
+    input: &CensoredContext<X, Y>,
     cdf: &mut Vec<f32>,
 ) {
     match D::IS_INCREASING {
@@ -187,6 +189,7 @@ fn finalize_for_single_uncensored<D: Direction, X: crate::Float, Y: crate::Float
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finalize_for_censoring_only_in_final_threshold<
     D: Direction,
     X: crate::Float,
@@ -194,11 +197,12 @@ fn finalize_for_censoring_only_in_final_threshold<
 >(
     data_index: usize,
     mut consumed_share: Vec<f32>,
-    mut consumed_weight: BITree<f32>,
+    mut consumed_weight: routines::ConsumedMass,
     mut partitions: Vec<WeightedPartition>,
-    input: &CensoredSdContext<X, Y>,
+    input: &CensoredContext<X, Y>,
     cdf: &mut Vec<f32>,
     mut partitions_to_store: Vec<WeightedPartition>,
+    completion: &CompletionIndex,
 ) {
     for observation in &input.observations[data_index..] {
         if observation.observed {
@@ -213,6 +217,26 @@ fn finalize_for_censoring_only_in_final_threshold<
         }
     }
 
+    // Pin completed partitions to exactly 1.0. Partition values here are CDF-space
+    // shares (consumed/total of f32 running sums), which can sit ulps off 1.0 even when
+    // every observation of the range was consumed as an event. In this path every
+    // censored observation sorts at/after the final threshold's events, so with all data
+    // consumed a range completes iff it contains no censoring at all — exactly the cells
+    // whose CDF is mathematically 1. The partition→range mapping mirrors
+    // `routines::store_in_cdf`: ascending indices for increasing fits (partition `l`
+    // covers `[partitions[l - 1].index, partitions[l].index)`), descending otherwise.
+    for l in 0..partitions.len() {
+        let start = if D::IS_INCREASING {
+            if l == 0 { 0 } else { partitions[l - 1].index }
+        } else {
+            partitions.get(l + 1).map_or(0, |p| p.index)
+        };
+        let end = partitions[l].index; // exclusive
+        if completion.completes_with_all_data(start, end - 1) {
+            partitions[l].value = 1.0;
+        }
+    }
+
     routines::store_in_cdf::<_, D>(&partitions, cdf);
 }
 
@@ -220,7 +244,7 @@ fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimators: &mut Estimates,
     partitions: &mut Vec<Partition>,
-    input: &CensoredSdContext<X, Y>,
+    input: &CensoredContext<X, Y>,
 ) {
     let observation = &input.observations[data_index];
     let obs_x = observation.x;
@@ -234,7 +258,16 @@ fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
         } else {
             input.covariate_statistics[obs_x].cumulative_weight
         };
-        let raw_value = 1.0 - obs_weight / total_weight;
+        // A completing interval must be exactly 0 despite the f32 arithmetic: the cell's
+        // total weight is a cumulative-weight difference, so even `1 - w/total` for a
+        // lone observation is not exactly 0. Only `r == obs_x` can actually fire here
+        // (any wider range contains another covariate whose observations all sort after
+        // this very first one).
+        let raw_value = if estimators.completion.completes(r, obs_x, data_index) {
+            0.0
+        } else {
+            1.0 - obs_weight / total_weight
+        };
 
         let (value, cold) = estimators.entry_mut(r, obs_x);
         cold.raw_value = raw_value;
@@ -277,7 +310,7 @@ fn dispatch_generalized_pava<D: Direction, X: crate::Float, Y: crate::Float>(
     start_threshold: usize,
     estimates: Estimates,
     partitions: Vec<Partition>,
-    input: &CensoredSdContext<X, Y>,
+    input: &CensoredContext<X, Y>,
     cdf: &mut Vec<f32>,
     progress: &dyn ProgressTracker,
 ) {
@@ -317,114 +350,12 @@ fn dispatch_generalized_pava<D: Direction, X: crate::Float, Y: crate::Float>(
     );
 }
 
-/// Pin the last threshold's CDF row to exactly 1.0 on its "dead" section — the
-/// covariates whose fitted sub-CDF completes, i.e. has no mass beyond the largest
-/// threshold in exact arithmetic. The f32 running weight bookkeeping inside the
-/// algorithm can leave those values a few ulps short, which downstream consumers
-/// (`prediction::mean`'s exact proper-CDF gate) must not see.
-///
-/// Runs once on the finished output, so it adds nothing to the per-threshold hot
-/// path; being purely combinatorial it is also immune to the f32 state (including
-/// cells frozen early by the noise-floor guard).
-///
-/// Derivation: an interval Kaplan-Meier survival is exactly 0 iff the interval's last
-/// positive-weight observation (response order, events before censorings at ties) is
-/// an EVENT — only then is some factor exactly `1 - w/w`. Clipping preserves this:
-/// for any split, the side containing that observation is itself exactly 0 by
-/// induction over the span, so the clip interval's lower edge is 0. With `t[x]` the
-/// index of covariate x's last positive-weight observation and `e[x]` whether it is
-/// observed, the fitted survival at covariate i — `max_{r<=i} min_{s>=i}` over the
-/// clipped cells — is exactly 0 iff every right-to-left maximum j of `t[..=i]` either
-/// satisfies `e[j]` or is resolved by a later event: an event covariate `x > i` with
-/// `t[x] > max(t[j..x])` (choosing `s = x` then makes that event the interval `[j, x]`'s
-/// last observation — an event merely later than `t[j]` is not enough, it must also
-/// outlast every censoring between `j` and `x`). The completing covariates form a
-/// prefix (the fitted CDF row is nonincreasing along covariates), computed with two
-/// monotonic-stack sweeps.
-fn pin_completed_mass<D: Direction, X, Y>(input: &CensoredSdContext<X, Y>, cdf: &mut [f32]) {
-    let n_covariate = input.n_covariate();
-    let n_threshold = input.n_threshold();
-    debug_assert!(cdf.is_empty() || cdf.len() == n_threshold * n_covariate);
-    if n_covariate == 0 || n_threshold == 0 || cdf.len() != n_threshold * n_covariate {
-        return;
-    }
-
-    // Last observation per covariate: index (+1; 0 = none) and whether it is an
-    // event. Preprocessing guarantees every observation in the context has positive
-    // weight.
-    let mut t = vec![0usize; n_covariate];
-    let mut e = vec![false; n_covariate];
-    for (index, observation) in input.observations.iter().enumerate() {
-        debug_assert!(observation.weight > 0.0);
-        t[observation.x] = index + 1;
-        e[observation.x] = observation.observed;
-    }
-    // A decreasing fit is the increasing fit on the mirrored covariate order.
-    if !D::IS_INCREASING {
-        t.reverse();
-        e.reverse();
-    }
-
-    // event_record_after[i] = the largest `t` among EVENT covariates x > i that are
-    // records of the suffix (t[x] greater than every t between i and x) — exactly the
-    // events that some interval ending at x can have as its last observation. Events
-    // shadowed by a later censoring in between resolve nothing. Right-to-left
-    // monotonic stack of suffix records; each entry carries the max event `t` at or
-    // below it in the stack.
-    let mut event_record_after = vec![0usize; n_covariate];
-    {
-        let mut records: Vec<(usize, usize)> = Vec::new();
-        for i in (0..n_covariate).rev() {
-            event_record_after[i] = records.last().map_or(0, |&(_, event_max)| event_max);
-            while records.last().is_some_and(|&(t_top, _)| t_top < t[i]) {
-                records.pop();
-            }
-            let event_below = records.last().map_or(0, |&(_, event_max)| event_max);
-            let event_max = if e[i] {
-                event_below.max(t[i])
-            } else {
-                event_below
-            };
-            records.push((t[i], event_max));
-        }
-    }
-
-    let last_row = &mut cdf[(n_threshold - 1) * n_covariate..];
-    // Monotonic stack of the right-to-left maxima of `t[..=i]`; each entry carries the
-    // max `t` among censored-ending entries at or below it in the stack.
-    let mut stack: Vec<(usize, usize)> = Vec::new();
-    for i in 0..n_covariate {
-        while stack.last().is_some_and(|&(t_top, _)| t_top < t[i]) {
-            stack.pop();
-        }
-        let censored_below = stack.last().map_or(0, |&(_, censored_max)| censored_max);
-        let censored_max = if e[i] {
-            censored_below
-        } else {
-            censored_below.max(t[i])
-        };
-        stack.push((t[i], censored_max));
-
-        // The sub-CDF at covariate i completes iff no censored-ending right-to-left
-        // maximum outlasts every resolving event beyond i. Failures are monotone in i,
-        // so the dead section ends at the first one.
-        if censored_max > event_record_after[i] {
-            return;
-        }
-        last_row[if D::IS_INCREASING {
-            i
-        } else {
-            n_covariate - 1 - i
-        }] = 1.0;
-    }
-}
-
 fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     mut data_index: usize,
     start_threshold: usize,
     mut estimates: Estimates,
     mut partitions: Vec<Partition>,
-    input: &CensoredSdContext<X, Y>,
+    input: &CensoredContext<X, Y>,
     cdf: &mut Vec<f32>,
     progress: &dyn ProgressTracker,
 ) {
@@ -476,7 +407,7 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimates: &mut Estimates,
     partitions: &mut Vec<Partition>,
-    input: &CensoredSdContext<X, Y>,
+    input: &CensoredContext<X, Y>,
     epsilon: f32,
     tmp_partition_store: &mut Vec<Partition>,
     row_buf: &mut Vec<f32>,
@@ -523,7 +454,7 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimates: &mut Estimates,
     partitions: &mut Vec<structures::Partition<W, V>>,
-    input: &CensoredSdContext<X, Y>,
+    input: &CensoredContext<X, Y>,
     epsilon: f32,
     row_buf: &mut Vec<f32>,
 ) {
@@ -587,9 +518,28 @@ impl Estimates {
         data_index: usize,
         covariate_start_index: usize, // inclusive
         covariate_end_index: usize,   // inclusive
-        input: &CensoredSdContext<X, Y>,
+        input: &CensoredContext<X, Y>,
         epsilon: f32,
     ) {
+        // Exact-0 pinning, checked before anything else: once the interval's last
+        // observation has been consumed (an event — see `CompletionIndex`), the interval
+        // Kaplan-Meier survival is mathematically exactly 0 and must be stored as exactly
+        // 0 despite f32 drift. Deliberately UNCLIPPED: bounds freshly propagated from
+        // not-yet-exact neighbors can sit ulps above 0 and must not lift the exact zero.
+        // Deliberately no `cold.count`/`cold.weight` update: no in-range observation
+        // remains unconsumed, and this branch re-fires on every future call (the
+        // condition is monotone in `data_index`), so the stale bookkeeping is never read
+        // again.
+        if self
+            .completion
+            .completes(covariate_start_index, covariate_end_index, data_index)
+        {
+            let (value, cold) = self.entry_mut(covariate_start_index, covariate_end_index);
+            cold.raw_value = 0.0;
+            *value = 0.0;
+            return;
+        }
+
         let (value, cold) = self.entry_mut(covariate_start_index, covariate_end_index);
 
         // `cold.count` may already be `data_index + 1` when the cell was touched earlier in the
@@ -664,7 +614,7 @@ impl Estimates {
         data_index: usize,
         partition_start_index: usize,
         observation: &Observation<usize, usize, bool, f32>,
-        input: &CensoredSdContext<X, Y>,
+        input: &CensoredContext<X, Y>,
         epsilon: f32,
     ) {
         for r in (partition_start_index..=observation.x).rev() {
@@ -765,8 +715,8 @@ fn store_in_cdf<W, V>(
 #[cfg(test)]
 mod test {
     use crate::structures::Increasing;
+    use crate::total_order::preprocessing::preprocess_censored as preprocess;
     use crate::total_order::stochastic_dominance::censored::algorithm;
-    use crate::total_order::stochastic_dominance::censored::preprocess;
 
     #[test]
     fn small() {
