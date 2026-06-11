@@ -17,7 +17,7 @@ impl FromStr for StochasticOrder {
             "sd" => Ok(Self::StochasticDominance),
             "hazard" => Ok(Self::HazardRateOrder),
             unknown => Err(format!(
-                "unknown StochasticOrder identifier \"{unknown}\", I know \"sd\" and \"hro\"",
+                "unknown StochasticOrder identifier \"{unknown}\", I know \"sd\" and \"hazard\"",
             )),
         }
     }
