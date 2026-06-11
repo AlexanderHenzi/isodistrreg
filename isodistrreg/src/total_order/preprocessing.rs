@@ -1,5 +1,5 @@
 use crate::Float;
-use crate::routines::argsort_unstable_by;
+use crate::routines::argsort_indices_unstable_by;
 use crate::structures::{Increasing, Observation};
 use crate::total_order::structures::AlgorithmContext;
 use crate::total_order::structures::CovariateStatistic;
@@ -25,6 +25,15 @@ pub fn preprocess_uncensored<X: Float, Y: Float, W: Float>(
     context
 }
 
+/// Build the algorithm context: observations sorted and deduplicated, covariate grid and
+/// per-covariate weight statistics.
+///
+/// Zero-weight observations are dropped here, before anything is aggregated: they carry no
+/// statistical information (every estimator the kernels compute is invariant to adding
+/// them), their response values create no thresholds, and a covariate whose observations
+/// all have zero weight does not enter the grid. Downstream kernels divide by observation
+/// and covariate weights and rely on every weight in the context being positive. With all
+/// observations dropped, the returned context is empty (the empty fit).
 pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
     x: &[X],
     y: &[Y],
@@ -33,15 +42,26 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
 ) -> AlgorithmContext<X, Y, S> {
     let n = x.len();
 
-    // Determine the order by covariate and response
-    let order = argsort_unstable_by::<Increasing, _>(
+    // Determine the order by covariate and response, over the positive-weight
+    // observations only — zero-weight ones are dropped before they are even compared.
+    // `validate` has rejected negative and non-finite weights, so `> 0` is exactly
+    // "nonzero" here.
+    let order = argsort_indices_unstable_by::<Increasing, _>(
         |i, j| {
             x[i].total_cmp(&x[j])
                 .then(y[i].total_cmp(&y[j]))
                 .then(observed(i).cmp(&observed(j)).reverse())
         },
-        n,
+        (0..n).filter(|&i| weight[i] > W::zero()).collect(),
     );
+    if order.is_empty() {
+        return AlgorithmContext {
+            observations: Vec::with_capacity(0),
+            covariate_statistics: Vec::with_capacity(0),
+            unique_responses: Vec::with_capacity(0),
+            unique_covariates: Vec::with_capacity(0),
+        };
+    }
 
     // While copying the data in the sorted order and aggregating identical observations by weight,
     // we track the unique covariates we encounter.

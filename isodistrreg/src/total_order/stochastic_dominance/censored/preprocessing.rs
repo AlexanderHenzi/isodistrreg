@@ -1,7 +1,7 @@
 use crate::Float;
 use crate::error::Error;
 use crate::preprocessing::validate;
-use crate::routines::argsort_unstable_by;
+use crate::routines::{argsort_indices_unstable_by, argsort_unstable_by};
 use crate::structures::{Increasing, Observation};
 use crate::total_order::stochastic_dominance::censored::structures::CensoredSdContext;
 use crate::total_order::structures::CovariateStatistic;
@@ -20,13 +20,17 @@ pub fn preprocess<X: Float, Y: Float, W: Float>(
     let n = validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
 
     let (observations_response_sorted, thresholds) = {
-        let response_order = argsort_unstable_by::<Increasing, _>(
+        // Zero-weight observations are dropped before anything is aggregated (or even
+        // sorted): they carry no statistical information, create no thresholds, and the
+        // kernels rely on every weight in the context being positive. `validate` has
+        // rejected negative and non-finite weights, so `> 0` is exactly "nonzero".
+        let response_order = argsort_indices_unstable_by::<Increasing, _>(
             |i, j| {
                 y[i].total_cmp(&y[j])
                     .then(observed[i].cmp(&observed[j]).reverse())
                     .then(x[i].total_cmp(&x[j]))
             },
-            n,
+            (0..n).filter(|&i| weights[i] > W::zero()).collect(),
         );
 
         // Discard censored observations not greater than or equal to any uncensored observation

@@ -103,8 +103,12 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                             w[0].partial_cmp(&w[1]).unwrap() != std::cmp::Ordering::Greater
                         }));
                         let n_covariate = unique_covariates.len();
-                        for threshold in cdfs.chunks_exact_mut(n_covariate) {
-                            threshold.reverse();
+                        // An empty context (e.g. every observation dropped as zero-weight)
+                        // has no rows to mirror — and `chunks_exact_mut(0)` would panic.
+                        if n_covariate > 0 {
+                            for threshold in cdfs.chunks_exact_mut(n_covariate) {
+                                threshold.reverse();
+                            }
                         }
                         AlgorithmOutput {
                             cdfs,
@@ -150,8 +154,12 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                         }
                         unique_covariates.reverse();
                         let n_covariate = unique_covariates.len();
-                        for threshold in cdfs.chunks_exact_mut(n_covariate) {
-                            threshold.reverse();
+                        // An empty context (e.g. every observation dropped as zero-weight)
+                        // has no rows to mirror — and `chunks_exact_mut(0)` would panic.
+                        if n_covariate > 0 {
+                            for threshold in cdfs.chunks_exact_mut(n_covariate) {
+                                threshold.reverse();
+                            }
                         }
                         AlgorithmOutput {
                             cdfs,
@@ -208,8 +216,12 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                         }
                         unique_covariates.reverse();
                         let n_covariate = unique_covariates.len();
-                        for threshold in cdfs.chunks_exact_mut(n_covariate) {
-                            threshold.reverse();
+                        // An empty context (e.g. every observation dropped as zero-weight)
+                        // has no rows to mirror — and `chunks_exact_mut(0)` would panic.
+                        if n_covariate > 0 {
+                            for threshold in cdfs.chunks_exact_mut(n_covariate) {
+                                threshold.reverse();
+                            }
                         }
                         AlgorithmOutput {
                             cdfs,

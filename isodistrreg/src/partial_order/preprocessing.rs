@@ -2,7 +2,7 @@ use crate::Float;
 use crate::error::Error;
 use crate::partial_order::CensoredContext;
 use crate::partial_order::structures::{CovariateGroups, PartialOrder, UncensoredContext};
-use crate::routines::{argsort_unstable_by, lexicographic_cmp};
+use crate::routines::{argsort_indices_unstable_by, argsort_unstable_by, lexicographic_cmp};
 use crate::structures::Increasing;
 use itertools::Itertools;
 use std::cmp::Ordering;
@@ -134,12 +134,28 @@ fn group_by_covariate_uncensored<X: Float, Y: Float, W: Float>(
     // Sort by covariate, response and censoring to copy deduplicating, building a covariate index
 
     let get_cdf = |i| &covariates[i * covariate_dimension..(i + 1) * covariate_dimension];
-    let covariate_order = argsort_unstable_by::<Increasing, _>(
+    // Zero-weight observations are dropped before anything is aggregated (or even
+    // sorted): they carry no statistical information, create no thresholds, and a
+    // covariate row whose observations all have zero weight does not enter the grid.
+    // `validate` has rejected negative and non-finite weights, so `> 0` is exactly
+    // "nonzero". With everything dropped, the returned context is empty (the caller
+    // builds the empty fit).
+    let covariate_order = argsort_indices_unstable_by::<Increasing, _>(
         |a, b| {
             lexicographic_cmp(get_cdf(a), get_cdf(b)).then(responses[a].total_cmp(&responses[b]))
         },
-        n_max,
+        (0..n_max).filter(|&i| weights[i] > W::zero()).collect(),
     );
+    if covariate_order.is_empty() {
+        return UncensoredContext {
+            x: Vec::with_capacity(0),
+            x_weight: Vec::with_capacity(0),
+            y: Vec::with_capacity(0),
+            weight: Vec::with_capacity(0),
+            x_indices: Vec::with_capacity(0),
+            thresholds: Vec::with_capacity(0),
+        };
+    }
 
     // Caller-supplied weights live in `W`. The partial-order solver runs in `f64`, so we
     // narrow each weight once on read and accumulate in `f64` from here on.
@@ -294,13 +310,16 @@ fn group_by_covariate_censored<X: Float, Y: Float, W: Float>(
     //    Build thresholds and store threshold index per observation.
     // -------------------------------------------------------------------------
 
-    let response_order = argsort_unstable_by::<Increasing, _>(
+    // Zero-weight observations are dropped before anything is aggregated or sorted
+    // (see `group_by_covariate_uncensored`); with no positive-weight events left, the
+    // all-censored branch below returns the empty context.
+    let response_order = argsort_indices_unstable_by::<Increasing, _>(
         |i, j| {
             y[i].total_cmp(&y[j])
                 .then(observed[i].cmp(&observed[j]).reverse())
                 .then_with(|| lexicographic_cmp(get_cdf(i), get_cdf(j)))
         },
-        n,
+        (0..n).filter(|&i| weight[i] > W::zero()).collect(),
     );
 
     // Find first uncensored in the (response, censoring, covariate)-sorted order.
