@@ -1,4 +1,3 @@
-import logging
 from typing import Self, cast
 
 import numpy as np
@@ -118,8 +117,9 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         targets = validate_data(self, data, thresholds, reset=False)
 
         if kwargs:
-            # Unused arguments
-            logging.info(f"Unused kwargs {list(kwargs.keys())}")
+            raise TypeError(
+                f"cdf_at() got unexpected keyword arguments: {sorted(kwargs)}"
+            )
 
         return self._fit.cdf_at(targets, thresholds)
 
@@ -141,7 +141,8 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         upper = kwargs.pop("upper", False)
 
         if kwargs:
-            # Unused arguments
-            logging.info(f"Unused kwargs {list(kwargs.keys())}")
+            raise TypeError(
+                f"quantiles() got unexpected keyword arguments: {sorted(kwargs)}"
+            )
 
         return self._fit.quantile(targets, quantiles, upper)
