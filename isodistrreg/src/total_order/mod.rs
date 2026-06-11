@@ -1,4 +1,5 @@
 mod epsilon;
+#[doc(hidden)]
 pub mod functionals;
 pub mod hazard_rate_order;
 mod prediction;
@@ -10,6 +11,7 @@ mod tonic_regression;
 
 pub(crate) use epsilon::weight_noise_floor;
 
+#[doc(hidden)]
 pub use functionals::algorithm;
 pub use prediction::{CovariateSearch, GridPredictorState, Interpolation};
 pub use structures::{Config, Fit, QualityIndicators};
