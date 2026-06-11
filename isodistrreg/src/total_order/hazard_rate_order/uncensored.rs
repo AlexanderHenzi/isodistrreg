@@ -1,7 +1,7 @@
 use crate::progress::ProgressTracker;
 use crate::routines::empirical_cdf;
 use crate::structures::{Decreasing, Direction, Increasing};
-use crate::total_order::routines::pool_partitions_from_right;
+use crate::total_order::routines::pool_partitions_from_right_zero_weight_blocks;
 use crate::total_order::structures::{AlgorithmContext, WeightedPartition};
 use std::iter::{repeat, repeat_n};
 use std::mem;
@@ -128,7 +128,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
                 weight: total_weight,
                 value: observation.weight / total_weight,
             });
-            pool_partitions_from_right::<Decreasing, _>(&mut partitions);
+            pool_partitions_from_right_zero_weight_blocks::<Decreasing, _>(&mut partitions);
 
             data_index += 1;
         }
@@ -203,7 +203,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
                     weight: survival[i] * survival[i] * covariate_statistics[i].weight,
                     value: estimators[i] / survival[i],
                 });
-                pool_partitions_from_right::<Increasing, _>(&mut partitions);
+                pool_partitions_from_right_zero_weight_blocks::<Increasing, _>(&mut partitions);
                 i += 1;
             }
 
@@ -215,7 +215,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
                 weight: survival[i] * survival[i] * covariate_statistics[i].weight,
                 value: estimators[i] / survival[i],
             });
-            pool_partitions_from_right::<Increasing, _>(&mut partitions);
+            pool_partitions_from_right_zero_weight_blocks::<Increasing, _>(&mut partitions);
             i += 1;
         }
 
