@@ -64,14 +64,56 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     let mut constraint_matrix =
         build_order_constraints::<D::REVERSE, HRO>(&constraint_edges, context.n_covariate());
 
-    // Build diagonal P = diag(w_groups) (upper triangular only)
-    let weight_matrix = build_diagonal_matrix(&context.x_weight);
+    // --- Energy coordinates -------------------------------------------------------------
+    // OSQP's termination tolerances are absolute on the problem it is handed (eps_abs, plus
+    // eps_rel times the residual's own scale). The raw per-threshold QP has P = diag(w) and
+    // q proportional to the weights, so both the global weight scale and within-fit weight
+    // ratios silently weaken the enforced optimality: a coordinate with a tiny weight
+    // contributes almost nothing to the dual residual and can stop far from its optimum
+    // while OSQP reports a perfect solve. The estimator itself is invariant to rescaling
+    // all weights by a positive constant, so none of this is statistically meaningful.
+    // Two measures restore weight-scale robustness:
+    //  1. Global power-of-two normalization `weight_scale` placing the largest group
+    //     weight in (1/2, 1]. Power-of-two scaling is exact in binary floating point, so
+    //     the solved problem is bitwise identical under rescaling all weights by a power
+    //     of two (and equal up to rounding for any other positive factor).
+    //  2. The change of variables u_i = sqrt_weight[i] * x_i with
+    //     sqrt_weight[i] = sqrt(weight_scale * w_i). In u the objective is
+    //     0.5 u^T u + q_energy^T u with q_energy[i] = weight_scale * q[i] / sqrt_weight[i],
+    //     i.e. P is the identity (perfectly conditioned) and the per-coordinate dual
+    //     residual scales like sqrt(w_i) instead of w_i: a uniform absolute tolerance now
+    //     enforces per-coordinate optimality up to weight ratios of ~(1/eps)^2 instead
+    //     of ~1/eps.
+    // Constraint rows are mapped into u by dividing each column's coefficient by
+    // sqrt_weight (see `scale_constraints_to_energy` and `update_constraint_matrix`); an
+    // equivalent positive row rescaling keeps the largest |coefficient| at 1 so row values
+    // stay in [-1, 1] for x in [0, 1]^n and the fixed row upper bound of 1.0 below stays
+    // redundant.
+    let max_weight = context.x_weight.iter().copied().fold(0.0, f64::max);
+    debug_assert!(max_weight > 0.0 && max_weight.is_finite());
+    // Clamp keeps 2^-exponent finite/normal even for absurd weight magnitudes.
+    let mut weight_scale = 2f64.powi(-(max_weight.log2().ceil() as i32).clamp(-1022, 1022));
+    if max_weight * weight_scale > 1.0 {
+        // log2 + ceil can land just below a power-of-two boundary; one halving fixes it.
+        weight_scale *= 0.5;
+    }
+    let sqrt_weight: Vec<f64> = context
+        .x_weight
+        .iter()
+        .map(|w| (w * weight_scale).sqrt())
+        .collect();
+    scale_constraints_to_energy(&mut constraint_matrix, &constraint_edges, &sqrt_weight);
+
+    // In energy coordinates P is the identity (upper triangular only).
+    let identity_diagonal = vec![1.0; context.n_covariate()];
+    let weight_matrix = build_diagonal_matrix(&identity_diagonal);
 
     // State variables maintained as we iterate over the data
     let mut data_index = 0;
-    // Construct the linear cost vector `q`. It is the negative of the element-wise product of
-    // (grouped) weights and mean response. Together with the diagonal P, it represents each
-    // component of the loss like (with p_i share of weight below current threshold):
+    // Construct the linear cost vector `q` in the original x-coordinates. It is the negative
+    // of the element-wise product of (grouped) weights and mean response. Together with a
+    // diagonal P = diag(w), it represents each component of the loss like (with p_i share of
+    // weight below current threshold):
     // w_i (x_i - p_i)^2 = w_i (x_i^2 - 2 x_i p_i + p_i^2)
     //                   = w_i x_i^2 - 2 w_i x_i p_i + w_i p_i^2
     //                   ~ w_i x_i^2 - 2 w_i x_i p_i
@@ -83,12 +125,24 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     // In the above, 0 <= p_i = sum_j(w_ij / w_i if y_ij <= z) <= 1 and 0 < w_i = sum_j w_ij is the
     // total weight of the covariate, so we can equivalently use q_i = -sum_j(w_ij if y_ij <= z).
     //
+    // The QP is solved in energy coordinates (see above): `q` keeps accumulating raw weights
+    // across thresholds and `q_energy` is the mapped copy passed to OSQP before each solve.
+    //
     // Under HRO, we work in the reverse direction because we model the survival function.
-    let mut q = if HRO {
+    let mut q: Vec<f64> = if HRO {
         context.x_weight.iter().map(|w| -w).collect()
     } else {
         vec![0.0; context.n_covariate()]
     };
+    // q_energy[i] = q[i] * weight_scale / sqrt_weight[i]; buffers reused across thresholds.
+    let q_to_energy: Vec<f64> = sqrt_weight.iter().map(|sw| weight_scale / sw).collect();
+    let mut q_energy = vec![0.0; context.n_covariate()];
+    let mut warm_start = vec![0.0; context.n_covariate()];
+    fn map_into(dst: &mut [f64], src: &[f64], factor: &[f64]) {
+        for ((d, &s), &f) in dst.iter_mut().zip(src).zip(factor) {
+            *d = s * f;
+        }
+    }
 
     // We collect these results each iteration
     let mut cdfs = Vec::with_capacity(context.n_threshold() * context.n_covariate());
@@ -114,9 +168,10 @@ pub fn algorithm<D: Direction, const HRO: bool>(
         data_index += 1;
     }
 
+    map_into(&mut q_energy, &q, &q_to_energy);
     let mut problem = osqp::Problem::new(
         weight_matrix,
-        &q,
+        &q_energy,
         // TODO: This cloning only happens for the HRO case, is it optimized away for the SD case?
         constraint_matrix.clone(),
         &vec![0.0; constraint_edges.len()],
@@ -131,15 +186,26 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     )
     .expect("Failed to setup OSQP problem");
 
-    // Initial solve
-    problem.warm_start_x(&vec![if HRO { 1.0 } else { 0.0 }; context.n_covariate()]);
+    // Initial solve; the warm start is x = 1 (HRO survival) or x = 0 (SD CDF), i.e.
+    // u = sqrt_weight or u = 0 in energy coordinates.
+    if HRO {
+        warm_start.copy_from_slice(&sqrt_weight);
+    }
+    problem.warm_start_x(&warm_start);
     let status = problem.solve();
     if let osqp::Status::MaxIterationsReached(_) = status {
         iter_limit_hit_count += 1;
     }
     let solution = status.solution().expect("Need OSQP to find a solution");
     let old_length = cdfs.len();
-    cdfs.extend(solution.x().iter().map(|v| v.clamp(0.0, 1.0)));
+    // Map the primal solution back from energy coordinates: x_i = u_i / sqrt_weight[i].
+    cdfs.extend(
+        solution
+            .x()
+            .iter()
+            .zip(&sqrt_weight)
+            .map(|(u, sw)| (u / sw).clamp(0.0, 1.0)),
+    );
     progress.increment();
     let mut primal_variable = &cdfs[old_length..];
 
@@ -162,12 +228,19 @@ pub fn algorithm<D: Direction, const HRO: bool>(
         }
 
         // Warm-started remaining non-trivial solves. OSQP warm-starts by default, but we prefer to
-        // restart at the value clamped between 0 and 1.
-        problem.warm_start_x(primal_variable);
+        // restart at the value clamped between 0 and 1 (mapped into energy coordinates).
+        map_into(&mut warm_start, primal_variable, &sqrt_weight);
+        problem.warm_start_x(&warm_start);
         // Pass the updated linear cost
-        problem.update_lin_cost(&q);
+        map_into(&mut q_energy, &q, &q_to_energy);
+        problem.update_lin_cost(&q_energy);
         if HRO {
-            update_constraint_matrix::<D>(&mut constraint_matrix, primal_variable);
+            update_constraint_matrix::<D>(
+                &mut constraint_matrix,
+                &constraint_edges,
+                primal_variable,
+                &sqrt_weight,
+            );
             problem.update_A(constraint_matrix.clone());
         }
         let status = problem.solve();
@@ -176,7 +249,13 @@ pub fn algorithm<D: Direction, const HRO: bool>(
         }
         let solution = status.solution().expect("Need OSQP to find a solution");
         let old_length = cdfs.len();
-        cdfs.extend(solution.x().iter().map(|v| v.clamp(0.0, 1.0)));
+        cdfs.extend(
+            solution
+                .x()
+                .iter()
+                .zip(&sqrt_weight)
+                .map(|(u, sw)| (u / sw).clamp(0.0, 1.0)),
+        );
         progress.increment();
         primal_variable = &cdfs[old_length..];
     }
@@ -234,6 +313,9 @@ pub fn algorithm<D: Direction, const HRO: bool>(
 /// If HRO, the signs of these coefficients get flipped, because then we're fitting a survival curve
 /// and not a CDF.
 ///
+/// The ±1 coefficients are in the original x-coordinates; `algorithm` rescales them into
+/// energy coordinates with `scale_constraints_to_energy` before handing them to OSQP.
+///
 /// A has shape m x n, with m = number of edges and n = number of unique covariate rows.
 pub fn build_order_constraints<D: Direction, const HRO: bool>(
     constraints: &[(usize, usize)],
@@ -284,6 +366,45 @@ pub fn build_order_constraints<D: Direction, const HRO: bool>(
         indptr: Cow::Owned(indptr),
         indices: Cow::Owned(indices),
         data: Cow::Owned(data),
+    }
+}
+
+/// Rescale the ±1 coefficients of a matrix built by `build_order_constraints` into energy
+/// coordinates `u_i = sqrt_weight[i] * x_i`.
+///
+/// Expressing the row's constraint in `u` divides the column-`c` coefficient by
+/// `sqrt_weight[c]`; multiplying the whole row by `min(sqrt_weight[i], sqrt_weight[j])` (a
+/// positive row scaling, hence an equivalent constraint) then brings the largest
+/// |coefficient| back to exactly 1. With both coefficients in [-1, 1] and of opposite sign,
+/// row values stay in [-1, 1] for x in [0, 1]^n, keeping the QP's fixed row upper bound of
+/// 1.0 redundant (an OSQP duality-gap workaround, see `algorithm`).
+///
+/// This is exactly the S = 1 case of the HRO rule in `update_constraint_matrix`, applied
+/// once up front: the SD matrix is constant across thresholds, and the HRO matrix starts
+/// from the plain order before the first per-threshold ratio update.
+fn scale_constraints_to_energy(
+    matrix: &mut osqp::CscMatrix,
+    constraints: &[(usize, usize)],
+    sqrt_weight: &[f64],
+) {
+    debug_assert_eq!(matrix.nrows, constraints.len());
+    debug_assert_eq!(matrix.ncols, sqrt_weight.len());
+
+    let indptr = match &matrix.indptr {
+        Cow::Borrowed(s) => *s,
+        Cow::Owned(v) => v.as_slice(),
+    };
+    let indices = match &matrix.indices {
+        Cow::Borrowed(s) => *s,
+        Cow::Owned(v) => v.as_slice(),
+    };
+    let data = matrix.data.to_mut();
+
+    for (col, &sw_col) in sqrt_weight.iter().enumerate() {
+        for pos in indptr[col]..indptr[col + 1] {
+            let (i, j) = constraints[indices[pos]];
+            data[pos] *= sqrt_weight[i].min(sqrt_weight[j]) / sw_col;
+        }
     }
 }
 
