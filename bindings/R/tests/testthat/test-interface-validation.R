@@ -1,7 +1,8 @@
 test_that("crps works for fits with few jump points and recycles scalar y", {
   fit <- idr(c(0, 0, 1, 1), data.frame(x = rep(1, 4)), progress = FALSE)
   pred <- predict(fit, data.frame(x = 1:2))
-  # Two jump points, two predictions: used to fail with "subscript out of bounds".
+  # Two jump points, two predictions: used to fail with "subscript out of
+  # bounds".
   expect_equal(crps(pred, c(0, 1)), c(0.25, 0.25))
 
   fit5 <- idr(as.double(1:5), data.frame(x = as.double(1:5)), progress = FALSE)
@@ -110,7 +111,15 @@ test_that("idrbag returns predictions of class idr, as documented", {
   expect_identical(dim(bag_grid$cdf), c(5L, 3L))
 
   expect_error(
-    idrbag(y, X, newdata = nd, b = 2, p = 0.5, grid = c(1, NA), progress = FALSE),
+    idrbag(
+      y,
+      X,
+      newdata = nd,
+      b = 2,
+      p = 0.5,
+      grid = c(1, NA),
+      progress = FALSE
+    ),
     "without NAs"
   )
   expect_error(
@@ -134,7 +143,13 @@ test_that("pit is randomized only at jump points of the predictive CDF", {
 test_that("isotonic_regression validates input and accepts integer vectors", {
   expect_equal(isotonic_regression(c(3L, 1L, 2L)), c(2, 2, 2))
   expect_error(isotonic_regression(c(1, NA, 3)), "finite")
-  expect_error(isotonic_regression(c(3, 2, 1), weights = c(1, -1, 1)), "non-negative")
+  expect_error(
+    isotonic_regression(c(3, 2, 1), weights = c(1, -1, 1)),
+    "non-negative"
+  )
   expect_error(isotonic_regression(c(1, 2, 3), X = c(1, 2)), "equal length")
-  expect_error(isotonic_regression(c(3, 2, 1), weights = c(0, 0, 0)), "positive")
+  expect_error(
+    isotonic_regression(c(3, 2, 1), weights = c(0, 0, 0)),
+    "positive"
+  )
 })
