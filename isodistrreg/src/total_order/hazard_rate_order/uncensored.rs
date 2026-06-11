@@ -3,7 +3,6 @@ use crate::routines::empirical_cdf;
 use crate::structures::{Decreasing, Direction, Increasing};
 use crate::total_order::routines::pool_partitions_from_right;
 use crate::total_order::structures::{AlgorithmContext, WeightedPartition};
-use crate::total_order::weight_noise_floor;
 use std::iter::{repeat, repeat_n};
 use std::mem;
 
@@ -57,12 +56,6 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     } = context;
     progress.set_total(unique_responses.len());
     let n_covariate = covariate_statistics.len();
-    // Dynamic f32-noise floor for the running weight subtractions and survival/CDF saturation
-    // checks below. The hazard-rate uncensored kernel has a slightly different "noise source"
-    // from the SD-censored case (here we sum `survival[i] * survival[i] *
-    // covariate_statistics[i].weight` and compare `estimators[i]` against 0/1) but the
-    // Wilkinson-style bound in `weight_noise_floor` is conservative enough to cover both.
-    let epsilon = weight_noise_floor(covariate_statistics.iter().map(|s| s.weight).sum());
 
     if unique_responses.len() == 1 {
         // Single threshold -> all one's
@@ -79,6 +72,15 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     let mut partitions: Vec<WeightedPartition> = Vec::with_capacity(n_covariate);
 
     let mut estimators = vec![1.0; n_covariate];
+    // Exact death bookkeeping: a covariate group's mass is exhausted exactly when its
+    // last observation is consumed. Counting observations decides that without any
+    // f32-noise-floor comparison, and lets us snap the group's estimator to exactly
+    // 0.0 at that moment (the running `estimators` subtraction would otherwise leave
+    // round-off drift around zero).
+    let mut remaining_observations = vec![0_usize; n_covariate];
+    for observation in observations.iter() {
+        remaining_observations[observation.x] += 1;
+    }
 
     let mut data_index = 0;
     let mut zero_count = 0;
@@ -90,6 +92,11 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         let first_observation = &observations[data_index];
         estimators[first_observation.x] -=
             first_observation.weight / covariate_statistics[first_observation.x].weight;
+        remaining_observations[first_observation.x] -= 1;
+        if remaining_observations[first_observation.x] == 0 {
+            // Mass exhausted: the remaining share is exactly 0, not f32 drift.
+            estimators[first_observation.x] = 0.0;
+        }
         let total_weight = covariate_statistics[..=first_observation.x]
             .iter()
             .map(|cs| cs.weight)
@@ -107,6 +114,11 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
 
             estimators[observation.x] -=
                 observation.weight / covariate_statistics[observation.x].weight;
+            remaining_observations[observation.x] -= 1;
+            if remaining_observations[observation.x] == 0 {
+                // Mass exhausted: the remaining share is exactly 0, not f32 drift.
+                estimators[observation.x] = 0.0;
+            }
             let total_weight = covariate_statistics[(previous.x + 1)..=observation.x]
                 .iter()
                 .map(|cs| cs.weight)
@@ -121,8 +133,13 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             data_index += 1;
         }
 
-        if partitions[0].value >= 1.0 - epsilon {
-            zero_count = partitions[0].index;
+        // Pin every leading group whose observations are all consumed: a leading dead
+        // group always forms its own partition at value exactly 1 — a partition that
+        // spans further covariates includes alive zero-consumed mass and so sits
+        // strictly below 1, and equal-valued partitions are never pooled. The
+        // observation count makes this exact; no epsilon comparison on pooled values.
+        while zero_count < n_covariate && remaining_observations[zero_count] == 0 {
+            zero_count += 1;
         }
 
         let values = partitions
@@ -148,18 +165,15 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         // Update zero count
         while observations[data_index].y == threshold {
             let observation = &observations[data_index];
-            // TODO: Numerics
-            if observation.x == zero_count
-                && (observation.weight
-                    - estimators[observation.x] * covariate_statistics[observation.x].weight)
-                    .abs()
-                    <= epsilon
-            {
+            // The group at the cursor dies here exactly when this is its last
+            // observation — an exact count, no weight comparison against a noise floor.
+            if observation.x == zero_count && remaining_observations[observation.x] == 1 {
+                remaining_observations[observation.x] = 0;
                 // No need to update the weight total in the covariate static or estimator, they
                 // won't be used from now on
                 zero_count += 1;
-                // Skip the estimators already zero
-                while estimators[zero_count] <= 0.0 + epsilon {
+                // Skip groups whose observations were already exhausted earlier
+                while zero_count < n_covariate && remaining_observations[zero_count] == 0 {
                     zero_count += 1;
                 }
 
@@ -176,6 +190,12 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
 
             estimators[observation.x] -=
                 observation.weight / covariate_statistics[observation.x].weight;
+            remaining_observations[observation.x] -= 1;
+            if remaining_observations[observation.x] == 0 {
+                // Mass exhausted: the remaining share is exactly 0, not f32 drift —
+                // this group dies at this threshold (it just isn't at the cursor).
+                estimators[observation.x] = 0.0;
+            }
 
             while i <= observation.x {
                 partitions.push(WeightedPartition {

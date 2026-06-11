@@ -1,9 +1,11 @@
 //! Shared noise-clamping tolerance for the f32 post-preprocessing algorithms.
 //!
-//! Several total-order algorithms (the SD-censored fast path and both hazard-rate paths)
-//! run the entire inner loop in f32 and need to distinguish "this weight is exactly zero
-//! up to f32 round-off" from "this weight is genuinely zero". The conservative bound
-//! below works for all of them; per-call-site interpretation lives next to each call.
+//! The SD-censored fast path runs its entire inner loop in f32 and needs to
+//! distinguish "this weight is exactly zero up to f32 round-off" from "this weight is
+//! genuinely zero"; per-call-site interpretation lives next to each call. (Both
+//! hazard-rate kernels instead track each group's last observation combinatorially —
+//! remaining counts / `last_positive` indices — which decides group death exactly and
+//! lets them pin estimators, at-risk masses and survivals to exact zeros.)
 
 /// Dynamic f32-noise floor for running sums and differences of observation weights
 /// totalling `total_weight`.
