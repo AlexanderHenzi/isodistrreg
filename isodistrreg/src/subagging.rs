@@ -79,7 +79,6 @@ pub struct Config {
     /// Number of worker threads used to fit the individual subsamples in parallel.
     /// Only relevant when (su)bagging is active and the `parallel` feature is
     /// enabled. A value of `1` runs the subfits serially.
-    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
     n_jobs: usize,
 }
 impl Config {
@@ -107,6 +106,31 @@ impl Config {
     #[must_use]
     pub fn disable(subsample_size: usize) -> Self {
         Self::new(1, subsample_size, false, None, 1)
+    }
+
+    /// Re-checks against the training-data size `n` the invariants that
+    /// [`Config::parse`] enforces but the infallible [`Config::new`] cannot.
+    ///
+    /// Without this, a zero subsample count yields a fit whose every prediction
+    /// divides by the member count, a subsample size above `n` panics inside
+    /// `rand::seq::index::sample` when drawing without replacement, and a
+    /// subsample size of zero surfaces as a confusing shape error from the
+    /// inner fits.
+    fn validate(&self, n: usize) -> Result<(), Error> {
+        use crate::Error::SubaggingParameterInconsistency as BadParam;
+
+        if self.n_subsamples == 0 {
+            return Err(BadParam("subsample count should be >= 1"));
+        }
+        if self.subsample_size == 0 || self.subsample_size > n {
+            return Err(BadParam(
+                "subsample size should be at least 1 and at most the number of observations",
+            ));
+        }
+        if self.n_jobs == 0 {
+            return Err(BadParam("n_jobs must be at least 1"));
+        }
+        Ok(())
     }
 
     pub fn parse(
@@ -345,6 +369,11 @@ macro_rules! impl_idr_fit_for {
                 let n = validate(x.chunks_exact(dimension), y, y_observed, weight)?;
 
                 let (config, base_config) = config;
+
+                // `Config::new` is infallible and bypasses `Config::parse`'s validation;
+                // an inconsistent configuration would otherwise panic deep in the
+                // resampling code or yield a fit that panics on prediction.
+                config.validate(n)?;
 
                 let tracker = MultiTracker::<TRACKER_STEPS>::new(config.n_subsamples, progress);
 
@@ -863,6 +892,55 @@ mod test {
             assert_eq!(plain.n_subsamples, 1);
             assert_eq!(plain.subsample_size, 10);
         }
+    }
+
+    /// `Config::new` bypasses `parse`'s validation, so `fit` re-checks every
+    /// invariant against the training-data size.
+    #[test]
+    fn validate_checks_all_invariants() {
+        let config = |n_subsamples, subsample_size, replace, n_jobs| Config {
+            n_subsamples,
+            subsample_size,
+            replace,
+            seed: None,
+            n_jobs,
+        };
+
+        assert!(config(2, 3, false, 1).validate(5).is_ok());
+        // Classic bootstrap: full-size draws with replacement are valid.
+        assert!(config(2, 5, true, 1).validate(5).is_ok());
+
+        // Zero subsamples would yield a fit that divides by the member count.
+        assert!(config(0, 3, false, 1).validate(5).is_err());
+        // A subsample needs at least one observation.
+        assert!(config(2, 0, false, 1).validate(5).is_err());
+        // More draws than observations panic in the without-replacement sampler...
+        assert!(config(2, 6, false, 1).validate(5).is_err());
+        // ...and exceed the size contract of `parse` even with replacement.
+        assert!(config(2, 6, true, 1).validate(5).is_err());
+        // At least one worker thread is required.
+        assert!(config(2, 3, false, 0).validate(5).is_err());
+    }
+
+    /// The fit-time consistency check turns the oversized-subsample panic inside
+    /// `rand::seq::index::sample` into a recoverable error.
+    #[test]
+    fn fit_rejects_oversized_subsample() {
+        let result = Fit::<total_order::Fit<f64, f64>>::fit::<f64>(
+            &[1.0, 2.0, 3.0],
+            &[4.0, 3.0, 2.0],
+            None,
+            None,
+            Increasing,
+            StochasticOrder::StochasticDominance,
+            false,
+            (Config::new(2, 4, false, Some(0), 1), Default::default()),
+            &crate::NoProgress,
+        );
+        assert!(matches!(
+            result,
+            Err(crate::Error::SubaggingParameterInconsistency(_))
+        ));
     }
 
     #[test]
