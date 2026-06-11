@@ -16,10 +16,12 @@ idr(y, X, y_observed = NULL, weights = NULL, decreasing = FALSE,
 covariates).}
 
 \item{y_observed}{vector of indicators (TRUE or 1 for observed, FALSE or 0
-for right-censored). Default is all observed (\code{rep(TRUE, length(y))}).}
+for right-censored). At least one observation must be uncensored. Default
+is all observed (\code{rep(TRUE, length(y))}).}
 
-\item{weights}{vector of positive weights (same length as y). Default is
-all weights equal to one.}
+\item{weights}{vector of finite, non-negative weights (same length as y),
+at least one of which must be positive; observations with zero weight are
+dropped from the fit. Default is all weights equal to one.}
 
 \item{decreasing}{boolean indicating whether \code{y} decreases with \code{X}
 (by default, it increases with \code{X}).}
@@ -55,33 +57,35 @@ written to stderr and is best viewed in an interactive R session.}
 An object of class \code{"idrfit"} containing the following
   components:
 
-  \item{\code{X}}{data frame of all distinct covariate combinations used for
-  the fit.}
+  \item{\code{X}}{the training covariates as provided, one row per
+  observation (in input order, including duplicated rows).}
 
-  \item{\code{y}}{list of all observed responses in the training data for
-  given covariate combinations in \code{X}.}
+  \item{\code{y}}{numeric vector of the training responses.}
 
   \item{\code{cdf}}{matrix containing the estimated CDFs, one CDF per row,
   evaluated at \code{response_unique} (see next point). The CDF in the
   \code{i}th row corresponds to the estimated conditional distribution of the
   response given the covariates values in \code{X[i,]}.}
 
-  \item{\code{weights}}{aggregated weights of the observations.}
+  \item{\code{weights}}{the observation weights as provided (\code{NULL} if
+  none were given).}
 
-  \item{\code{response_unique}}{the response_unique at which the CDFs in
+  \item{\code{response_unique}}{the thresholds at which the CDFs in
   \code{cdf} are evaluated. The entries in \code{cdf[,j]} are the conditional
   CDFs evaluated at \code{response_unique[j]}.}
 
   \item{\code{groups}, \code{orders}}{ the groups and orders used for
   estimation.}
 
-  \item{\code{diagnostic}}{list giving a bound on the precision of the CDF
-  estimation (the maximal downwards-step in the CDF that has been detected)
-  and the fraction of CDF estimations that were stopped at the iteration
-  limit \code{max_iter}. Decrease the parameters \code{eps_abs} and/or
-  \code{eps_rel} or increase \code{max_iter} in \code{pars} to improve the
-  precision. See \code{pars} for more optimization
-  parameters.}
+  \item{\code{diagnostic}}{diagnostics of the CDF estimation. For univariate
+  fits (total order) this is \code{list(epsilon = )}, a bound on the
+  precision of the CDF estimation (the maximal downwards-step in the CDF
+  that has been detected). For multivariate fits (partial order) this is
+  \code{list(precision = , convergence_fraction = )}, where
+  \code{convergence_fraction} is the fraction of CDF estimations that
+  converged before hitting the iteration limit \code{max_iter}. Decrease the
+  parameters \code{eps_abs} and/or \code{eps_rel} or increase
+  \code{max_iter} in \code{pars} to improve the precision.}
 }
 \description{
 Fits isotonic distributional regression (IDR) to a training
@@ -133,6 +137,10 @@ The function \code{idr} is only intended for fitting IDR model for a
   training dataset and storing the results for further processing, but not
   for prediction or evaluation, which is done using the output of
   \code{\link{predict.idrfit}}.
+
+  The fitted object contains an external pointer to memory managed by the
+  internal Rust library. It is only valid within the R session that created
+  it: fits saved with \code{saveRDS} cannot be restored in a new session.
 }
 \examples{
 data("rain")

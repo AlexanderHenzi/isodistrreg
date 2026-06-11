@@ -15,8 +15,9 @@ factor variables are converted to numeric for computation, so ensure that
 the factor levels are identical in \code{data} and the training data for
 \code{fit}.}
 
-\item{digits}{number of decimal places for the predictive CDF (full precision
-by default).}
+\item{digits}{number of decimal places for the predictive CDF. Accepted for
+backwards compatibility but currently ignored (a warning is issued once
+per session); predictions are returned at full precision.}
 
 \item{interpolation}{interpolation method for univariate data, ignored at
 this time. Only linear is supported for single variate, multivariate uses

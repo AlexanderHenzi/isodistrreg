@@ -18,10 +18,12 @@ idrbag(y, X, y_observed = NULL, weights = NULL, decreasing = FALSE,
 covariates).}
 
 \item{y_observed}{vector of indicators (TRUE or 1 for observed, FALSE or 0
-for right-censored). Default is all observed (\code{rep(TRUE, length(y))}).}
+for right-censored). At least one observation must be uncensored. Default
+is all observed (\code{rep(TRUE, length(y))}).}
 
-\item{weights}{vector of positive weights (same length as y). Default is
-all weights equal to one.}
+\item{weights}{vector of finite, non-negative weights (same length as y),
+at least one of which must be positive; observations with zero weight are
+dropped from the fit. Default is all weights equal to one.}
 
 \item{decreasing}{boolean indicating whether \code{y} decreases with \code{X}
 (by default, it increases with \code{X}).}
@@ -66,10 +68,10 @@ so ensure that the factor levels are identical in \code{newdata} and in
 compatibility but ignored with warning: number of decimal places for the
 predictive CDF, useful to keep the solution small across covariates.}
 
-\item{interpolation}{interpolation method for univariate data. Default is
-\code{"linear"}. Any other argument will select midpoint interpolation (see
-'Details' in \code{\link{predict.idrfit}}). Has no effect for multivariate
-IDR.}
+\item{interpolation}{interpolation method for univariate data, ignored at
+this time (a warning is issued once per session if a value other than
+\code{"linear"} is supplied). Only linear is supported for single variate,
+multivariate uses midpoint.}
 
 \item{b}{number of (su)bagging samples.}
 

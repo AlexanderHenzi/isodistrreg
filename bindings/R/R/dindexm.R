@@ -15,8 +15,9 @@
 #' @param response name of the response variable in \code{data}.
 #' @param pars parameters for quadratic programming optimization (only relevant
 #'   for multivariate index functions), see the idr method for the options.
-#' @param progress display progressbar (\code{TRUE}, \code{FALSE} or \code{1},
-#'   \code{0}): no effect, for backwards compatibility only.
+#' @param progress display a progress bar while fitting the IDR step
+#'   (\code{TRUE}, \code{FALSE} or \code{1}, \code{0}). Default is \code{TRUE};
+#'   the bar is written to stderr.
 #' @param ... further arguments passed to \code{indexfit}.
 #'
 #' @details
@@ -38,7 +39,7 @@
 #' response \code{y}.
 #'
 #' @return
-#' Object of class \code{dindexm}: A list containing the index model (first
+#' Object of class \code{dindexfit}: A list containing the index model (first
 #' component) and the IDR fit on the pseudo-data with the index as covariate
 #' (second component).
 #'
@@ -90,7 +91,7 @@ dindexm <- function(
 ) {
   indexFit <- indexfit(formula = formula, data = data, ...)
   X <- predict(indexFit)
-  if (is.numeric(X) && !is.matrix(X) && !is.vector(X) && !is.array(X)) {
+  if (!(is.numeric(X) && (is.matrix(X) || is.vector(X) || is.array(X)))) {
     stop("predict method for 'indexfit' must return numeric matrix or vector")
   }
   if (is.array(X) && length(attributes(X)$dimnames) == 1) {
@@ -114,14 +115,13 @@ dindexm <- function(
 #' @param object DIM fit (object of class \code{"dindexfit"}).
 #' @param data optional \code{data.frame} containing variables with which to
 #'   predict. In-sample predictions are returned if this is omitted.
-#' @param digits number of decimal places for the predictive CDF.
-#' @param interpolation interpolation method for univariate index Default is
-#'   \code{"linear"}. Any other argument will select midpoint interpolation (see
-#'   'Details' in \code{\link{predict.idrfit}}). Has no effect for multivariate
-#'   index function.
-#' @param asplitAvail use \code{\link[base]{asplit}} for splitting arrays
-#'   (default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
-#'   \code{asplit} is not available.
+#' @param digits number of decimal places for the predictive CDF. Accepted for
+#'   backwards compatibility but currently ignored (a warning is issued once
+#'   per session); predictions are returned at full precision.
+#' @param interpolation interpolation method for univariate index, ignored at
+#'   this time. Only linear is supported for a univariate index, multivariate
+#'   uses midpoint.
+#' @param asplitAvail kept for backwards compatibility, ignored.
 #' @param ... further arguments passed to the index prediction function.
 #'
 #' @return
@@ -132,16 +132,13 @@ dindexm <- function(
 #' @seealso
 #' Examples in \code{\link{dindexm}}.
 predict.dindexfit <- function(
-  object, data = NULL, digits = 3,
-  interpolation = "linear", asplitAvail = TRUE, ...
+  object, data = NULL, digits = NULL,
+  interpolation = NULL, asplitAvail = NULL, ...
 ) {
   indexFit <- object$indexFit
   idrFit <- object$idrFit
   if (is.null(data)) {
-    return(predict(idrFit,
-      digits = digits, interpolation = interpolation,
-      asplitAvail = asplitAvail
-    ))
+    return(predict(idrFit, digits = digits, interpolation = interpolation))
   }
 
   indexPred <- as.data.frame(predict(indexFit, data, ...))
@@ -154,6 +151,6 @@ predict.dindexfit <- function(
 
   predict(
     object = idrFit, data = indexPred, digits = digits,
-    interpolation = interpolation, asplitAvail = asplitAvail
+    interpolation = interpolation
   )
 }

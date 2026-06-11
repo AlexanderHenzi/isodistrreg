@@ -12,9 +12,11 @@
 #' @param X data frame of numeric or ordered factor variables (the regression
 #'   covariates).
 #' @param y_observed vector of indicators (TRUE or 1 for observed, FALSE or 0
-#'   for right-censored). Default is all observed (\code{rep(TRUE, length(y))}).
-#' @param weights vector of positive weights (same length as y). Default is
-#'   all weights equal to one.
+#'   for right-censored). At least one observation must be uncensored. Default
+#'   is all observed (\code{rep(TRUE, length(y))}).
+#' @param weights vector of finite, non-negative weights (same length as y),
+#'   at least one of which must be positive; observations with zero weight are
+#'   dropped from the fit. Default is all weights equal to one.
 #' @param decreasing boolean indicating whether \code{y} decreases with \code{X}
 #'   (by default, it increases with \code{X}).
 #' @param groups named vector of length \code{ncol(X)} denoting groups of
@@ -83,33 +85,35 @@
 #' @return An object of class \code{"idrfit"} containing the following
 #'   components:
 #'
-#'   \item{\code{X}}{data frame of all distinct covariate combinations used for
-#'   the fit.}
+#'   \item{\code{X}}{the training covariates as provided, one row per
+#'   observation (in input order, including duplicated rows).}
 #'
-#'   \item{\code{y}}{list of all observed responses in the training data for
-#'   given covariate combinations in \code{X}.}
+#'   \item{\code{y}}{numeric vector of the training responses.}
 #'
 #'   \item{\code{cdf}}{matrix containing the estimated CDFs, one CDF per row,
 #'   evaluated at \code{response_unique} (see next point). The CDF in the
 #'   \code{i}th row corresponds to the estimated conditional distribution of the
 #'   response given the covariates values in \code{X[i,]}.}
 #'
-#'   \item{\code{weights}}{aggregated weights of the observations.}
+#'   \item{\code{weights}}{the observation weights as provided (\code{NULL} if
+#'   none were given).}
 #'
-#'   \item{\code{response_unique}}{the response_unique at which the CDFs in
+#'   \item{\code{response_unique}}{the thresholds at which the CDFs in
 #'   \code{cdf} are evaluated. The entries in \code{cdf[,j]} are the conditional
 #'   CDFs evaluated at \code{response_unique[j]}.}
 #'
 #'   \item{\code{groups}, \code{orders}}{ the groups and orders used for
 #'   estimation.}
 #'
-#'   \item{\code{diagnostic}}{list giving a bound on the precision of the CDF
-#'   estimation (the maximal downwards-step in the CDF that has been detected)
-#'   and the fraction of CDF estimations that were stopped at the iteration
-#'   limit \code{max_iter}. Decrease the parameters \code{eps_abs} and/or
-#'   \code{eps_rel} or increase \code{max_iter} in \code{pars} to improve the
-#'   precision. See \code{pars} for more optimization
-#'   parameters.}
+#'   \item{\code{diagnostic}}{diagnostics of the CDF estimation. For univariate
+#'   fits (total order) this is \code{list(epsilon = )}, a bound on the
+#'   precision of the CDF estimation (the maximal downwards-step in the CDF
+#'   that has been detected). For multivariate fits (partial order) this is
+#'   \code{list(precision = , convergence_fraction = )}, where
+#'   \code{convergence_fraction} is the fraction of CDF estimations that
+#'   converged before hitting the iteration limit \code{max_iter}. Decrease the
+#'   parameters \code{eps_abs} and/or \code{eps_rel} or increase
+#'   \code{max_iter} in \code{pars} to improve the precision.}
 #'
 #'
 #' @note The function \code{idr} is only intended for fitting IDR model for a
@@ -117,11 +121,16 @@
 #'   for prediction or evaluation, which is done using the output of
 #'   \code{\link{predict.idrfit}}.
 #'
+#'   The fitted object contains an external pointer to memory managed by the
+#'   internal Rust library. It is only valid within the R session that created
+#'   it: fits saved with \code{saveRDS} cannot be restored in a new session.
+#'
 #' @seealso The S3 method \code{\link{predict.idrfit}} for predictions based on
 #'   an IDR fit.
 #'
 #' @export
 #' @importFrom stats setNames
+#' @importFrom utils modifyList
 #'
 #' @references Henzi, A., Moesching, A. & Duembgen, L. Accelerating the
 #'   Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression.
@@ -243,6 +252,9 @@ validate <- function(y,
   if (anyNA(y)) {
     stop("'y' must not contain NAs")
   }
+  if (!all(is.finite(y))) {
+    stop("'y' must contain only finite values")
+  }
   y <- as.double(y)
 
   if (!is.data.frame(X)) {
@@ -262,23 +274,40 @@ validate <- function(y,
   if (anyNA(X)) {
     stop("'X' must not contain NAs")
   }
-  X_formatted <- as.numeric(t(X))
+  if (anyDuplicated(colnames(X))) {
+    stop("'X' must not contain duplicated column names")
+  }
+  # data.matrix encodes ordered factors by their level index; t(X) on a data
+  # frame with factor columns would instead go through a character matrix and
+  # destroy the values.
+  X_formatted <- as.numeric(t(data.matrix(X)))
+  if (!all(is.finite(X_formatted))) {
+    stop("'X' must contain only finite values")
+  }
 
   if (!is.null(y_observed)) {
     if (length(y_observed) != length(y)) {
       stop("length(y_observed) and length(y) must match")
     }
-    y_observed <- as.integer(y_observed)
-    if (any(is.na(y_observed))) {
-      stop("y_observed must only contain boolean values")
+    if (!(is.logical(y_observed) || is.numeric(y_observed)) ||
+          anyNA(y_observed) || !all(y_observed %in% c(0, 1))) {
+      stop("'y_observed' must contain only TRUE/1 or FALSE/0 values")
     }
     y_observed <- as.logical(y_observed)
+    if (!any(y_observed)) {
+      stop("at least one observation must be uncensored")
+    }
   }
 
   if (!is.null(weights)) {
-    if (!is.vector(weights, "numeric") ||
-          length(weights) != length(y) || any(weights < 0)) {
-      stop("'weights' must be a vector of positive weights as long as 'y'")
+    if (!is.vector(weights, "numeric") || length(weights) != length(y)) {
+      stop("'weights' must be a numeric vector as long as 'y'")
+    }
+    if (anyNA(weights) || !all(is.finite(weights)) || any(weights < 0)) {
+      stop("'weights' must contain only finite non-negative values")
+    }
+    if (!any(weights > 0)) {
+      stop("at least one weight must be positive")
     }
     weights <- as.double(weights)
   }
@@ -287,18 +316,28 @@ validate <- function(y,
     stop("decreasing must be a boolean")
   }
 
+  if (length(orders) > 0 &&
+        (is.null(names(orders)) || !all(nzchar(names(orders))))) {
+    stop("'orders' must be a named vector")
+  }
   if (!all(names(orders) %in% c("comp", "sd", "icx"))) {
     stop("orders must be in 'comp', 'sd', 'icx'")
   }
   if (length(orders) != length(unique(orders))) {
     stop("multiple orders specified for some group(s)")
   }
+  if (anyNA(groups)) {
+    stop("'groups' must not contain NAs")
+  }
   M <- match(colnames(X), names(groups), nomatch = 0)
   if (any(M == 0)) {
     stop("the same variable names must be used in 'groups' and in 'X'")
   }
-  if (!identical(sort(unique(unname(orders))), sort(unique(groups)))) {
-    stop("different group labels in 'groups' and 'orders")
+  if (!all(names(groups) %in% colnames(X))) {
+    stop("'groups' contains variable names that are not in 'X'")
+  }
+  if (!setequal(unname(orders), unname(groups))) {
+    stop("different group labels in 'groups' and 'orders'")
   }
 
   if (!identical(stoch, "sd") && !identical(stoch, "hazard")) {
@@ -315,30 +354,51 @@ validate <- function(y,
     stop("'progress' must be TRUE/FALSE or 1/0")
   }
 
-  if (!is.null(pars)) {
+  # Missing options fall back to the documented defaults; this also guarantees
+  # the Rust side always receives a complete settings list.
+  default_pars <- list(
+    verbose = FALSE,
+    eps_abs = 1e-5,
+    eps_rel = 1e-5,
+    max_iter = 10000L
+  )
+  if (is.null(pars)) {
+    pars <- default_pars
+  } else {
     if (!is.list(pars)) {
       stop("'pars' should be a list of options if provided")
     }
-    known <- names(pars) %in% c("verbose", "eps_abs", "eps_rel", "max_iter")
+    if (length(pars) > 0 &&
+          (is.null(names(pars)) || !all(nzchar(names(pars))))) {
+      stop("'pars' options must be named")
+    }
+    known <- names(pars) %in% names(default_pars)
     if (!all(known)) {
-      stop(paste("'pars' option(s)", names(pars)[~known], "unknown"))
+      stop(paste(
+        "'pars' option(s)",
+        paste(names(pars)[!known], collapse = ", "),
+        "unknown"
+      ))
     }
-    if ("verbose" %in% names(pars) && !is.logical(pars$verbose)) {
-      stop("'pars' option 'verbose' should be TRUE or FALSE")
-    }
-    if ("eps_abs" %in% names(pars) &&
-          (!is.double(pars$eps_abs) || pars$eps_abs <= 0.0)) {
-      stop("'pars' option 'eps_abs' should be a positive double")
-    }
-    if ("eps_rel" %in% names(pars) &&
-          (!is.double(pars$eps_rel) || pars$eps_rel <= 0.0)) {
-      stop("'pars' option 'eps_rel' should be a positive double")
-    }
-    if ("max_iter" %in% names(pars) &&
-          (!is.integer(pars$max_iter) || pars$max_iter <= 0)) {
-      stop("'pars' option 'max_iter' should be a positive integer")
-    }
+    pars <- modifyList(default_pars, pars)
   }
+  if (!isTRUE(pars$verbose) && !isFALSE(pars$verbose)) {
+    stop("'pars' option 'verbose' should be TRUE or FALSE")
+  }
+  if (!is.numeric(pars$eps_abs) || length(pars$eps_abs) != 1 ||
+        is.na(pars$eps_abs) || pars$eps_abs <= 0.0) {
+    stop("'pars' option 'eps_abs' should be a positive number")
+  }
+  if (!is.numeric(pars$eps_rel) || length(pars$eps_rel) != 1 ||
+        is.na(pars$eps_rel) || pars$eps_rel <= 0.0) {
+    stop("'pars' option 'eps_rel' should be a positive number")
+  }
+  if (!is.numeric(pars$max_iter) || length(pars$max_iter) != 1 ||
+        is.na(pars$max_iter) || pars$max_iter < 1 ||
+        pars$max_iter %% 1 != 0) {
+    stop("'pars' option 'max_iter' should be a positive integer")
+  }
+  pars$max_iter <- as.integer(pars$max_iter)
 
   if (!is.null(seed)) {
     if (!is.numeric(seed) || length(seed) != 1 || is.na(seed) || seed < 0) {
@@ -375,8 +435,9 @@ validate <- function(y,
 #'   factor variables are converted to numeric for computation, so ensure that
 #'   the factor levels are identical in \code{data} and the training data for
 #'   \code{fit}.
-#' @param digits number of decimal places for the predictive CDF (full precision
-#'   by default).
+#' @param digits number of decimal places for the predictive CDF. Accepted for
+#'   backwards compatibility but currently ignored (a warning is issued once
+#'   per session); predictions are returned at full precision.
 #' @param interpolation interpolation method for univariate data, ignored at
 #'   this time. Only linear is supported for single variate, multivariate uses
 #'   midpoint.
@@ -457,6 +518,10 @@ predict.idrfit <- function(object,
                            digits = NULL,
                            interpolation = NULL,
                            ...) {
+  if (is.null(data)) {
+    # In-sample predictions, as documented.
+    data <- object$X
+  }
   if (!is.data.frame(data)) {
     stop("'data' must be a data.frame")
   }
@@ -477,10 +542,23 @@ predict.idrfit <- function(object,
     }
     stop(message)
   }
+  fit_names <- colnames(object$X)
+  if (!is.null(fit_names) && !identical(colnames(data), fit_names)) {
+    if (setequal(colnames(data), fit_names)) {
+      # Same variables in a different order: match by name, not position.
+      data <- data[, fit_names, drop = FALSE]
+    } else {
+      stop("'data' must contain the same variables as the training data")
+    }
+  }
   if (anyNA(data)) {
     stop("'data' must not contain NAs")
   }
-  new_covariates <- as.numeric(t(data))
+  # See validate(): data.matrix keeps ordered factors usable as level codes.
+  new_covariates <- as.numeric(t(data.matrix(data)))
+  if (anyNA(new_covariates)) {
+    stop("'data' must not contain NAs")
+  }
 
   if (!is.null(digits)) {
     # TODO: Implement?
@@ -571,7 +649,7 @@ print.idrfit <- function(x, ...) {
     # Print diagnostics info
     prec <- signif(x$diagnostic$precision, 2)
     cat(paste("CDF estimation error:", prec, "\n"))
-    conv <- signif(x$diagnostic$convergence, 4) * 100
+    conv <- signif(x$diagnostic$convergence_fraction, 4) * 100
     cat(paste0(
       "Converged before hitting max iterations: ",
       conv,
@@ -580,6 +658,76 @@ print.idrfit <- function(x, ...) {
   }
 
   invisible(x)
+}
+
+#' Isotonic mean regression
+#'
+#' @description Computes isotonic mean regression for numeric responses. When
+#'   covariates are supplied they determine the ordering; when omitted the
+#'   responses are assumed pre-sorted (regression on the index). When weights
+#'   are omitted every observation receives weight 1.
+#'
+#' @param y numeric vector of response values.
+#' @param X numeric vector of covariate values, or \code{NULL} if responses are
+#'   pre-sorted.
+#' @param weights numeric vector of finite, non-negative weights, at least one
+#'   of which must be positive, or \code{NULL} for equal weights.
+#' @param decreasing whether the fit is decreasing in the covariate (default
+#'   \code{FALSE} is increasing, \code{TRUE} is decreasing).
+#'
+#' @return Numeric vector of isotonic fitted means, one per observation.
+#'
+#' @examples
+#' isotonic_regression(c(2, 3, 1, 4, 5), X = 1:5)
+#' isotonic_regression(c(3, 2, 4, 1), X = 1:4, weights = c(1, 2, 1, 1))
+#' isotonic_regression(sort(c(3, 1, 2, 5)))
+#' isotonic_regression(sort(c(2, 1, 3)), weights = c(1, 2, 1))
+#'
+#' @export
+isotonic_regression <- function(y, X = NULL, weights = NULL,
+                                decreasing = FALSE) {
+  if (!is.vector(y, mode = "numeric")) {
+    stop("'y' must be a numeric vector")
+  }
+  if (anyNA(y) || !all(is.finite(y))) {
+    stop("'y' must contain only finite values")
+  }
+  y <- as.double(y)
+
+  if (!is.null(X)) {
+    if (!is.vector(X, mode = "numeric")) {
+      stop("'X' must be a numeric vector")
+    }
+    if (length(X) != length(y)) {
+      stop("'X' and 'y' must have equal length")
+    }
+    if (anyNA(X) || !all(is.finite(X))) {
+      stop("'X' must contain only finite values")
+    }
+    X <- as.double(X)
+  }
+
+  if (!is.null(weights)) {
+    if (!is.vector(weights, mode = "numeric")) {
+      stop("'weights' must be a numeric vector")
+    }
+    if (length(weights) != length(y)) {
+      stop("'weights' and 'y' must have equal length")
+    }
+    if (anyNA(weights) || !all(is.finite(weights)) || any(weights < 0)) {
+      stop("'weights' must contain only finite non-negative values")
+    }
+    if (length(weights) > 0 && !any(weights > 0)) {
+      stop("at least one weight must be positive")
+    }
+    weights <- as.double(weights)
+  }
+
+  if (!isTRUE(decreasing) && !isFALSE(decreasing)) {
+    stop("'decreasing' must be TRUE or FALSE")
+  }
+
+  isotonic_regression_impl(y, X, weights, decreasing)
 }
 
 #' Helper to warn once per session

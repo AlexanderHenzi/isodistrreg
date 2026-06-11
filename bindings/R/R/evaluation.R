@@ -58,10 +58,13 @@ cdf.idr <- function(predictions, thresholds) {
   if (!is.vector(thresholds, "numeric")) {
     stop("'thresholds' must be a numeric vector")
   }
+  if (anyNA(thresholds)) {
+    stop("'thresholds' must not contain NAs")
+  }
 
   predictions$external_ptr$cdf_at(
     predictions$predict_covariates,
-    thresholds
+    as.double(thresholds)
   )
 }
 
@@ -75,8 +78,17 @@ cdf.data.frame <- function(predictions, thresholds) {
   if (!is.vector(thresholds, "numeric")) {
     stop("'thresholds' must be a numeric vector")
   }
+  if (anyNA(thresholds)) {
+    stop("'thresholds' must not contain NAs")
+  }
   if (!all(sapply(predictions, is.numeric))) {
     stop("'predictions' contains non-numeric variables")
+  }
+  if (anyNA(predictions)) {
+    stop("'predictions' must not contain NAs")
+  }
+  if (nrow(predictions) == 0) {
+    return(matrix(numeric(0), nrow = 0, ncol = length(thresholds)))
   }
   predictions <- asplit(data.matrix(predictions), 1)
   cdf0 <- function(data) {
@@ -146,14 +158,15 @@ qpred <- function(predictions, quantiles) {
 #' @export
 qpred.idr <- function(predictions, quantiles) {
   # Check input
-  if (!is.vector(quantiles, "numeric") || min(quantiles) < 0 ||
-        max(quantiles) > 1) {
-    stop("quantiles must be a numeric vector with entries in [0,1]")
+  if (!is.vector(quantiles, "numeric") || anyNA(quantiles) ||
+        (length(quantiles) > 0 &&
+           (min(quantiles) < 0 || max(quantiles) > 1))) {
+    stop("quantiles must be a numeric vector with entries in [0,1] and no NAs")
   }
 
   predictions$external_ptr$quantile(
     predictions$predict_covariates,
-    quantiles
+    as.double(quantiles)
   )
 }
 
@@ -167,12 +180,19 @@ qpred.idr <- function(predictions, quantiles) {
 #' @export
 qpred.data.frame <- function(predictions, quantiles) {
   # Check input
-  if (!is.vector(quantiles, "numeric") || min(quantiles) < 0 ||
-        max(quantiles) > 1) {
-    stop("quantiles must be a numeric vector with entries in [0,1]")
+  if (!is.vector(quantiles, "numeric") || anyNA(quantiles) ||
+        (length(quantiles) > 0 &&
+           (min(quantiles) < 0 || max(quantiles) > 1))) {
+    stop("quantiles must be a numeric vector with entries in [0,1] and no NAs")
   }
   if (!all(sapply(predictions, is.numeric))) {
     stop("'predictions' contains non-numeric variables")
+  }
+  if (anyNA(predictions)) {
+    stop("'predictions' must not contain NAs")
+  }
+  if (nrow(predictions) == 0) {
+    return(matrix(numeric(0), nrow = 0, ncol = length(quantiles)))
   }
 
   predictions <- asplit(data.matrix(predictions), 1)
@@ -408,10 +428,18 @@ crps.idr <- function(predictions, y) {
 
   p <- predictions$points
   cdfs <- predictions$cdf
-  w <- cbind(cdfs[, 1], t(apply(cdfs, 1, diff)))
+  n <- nrow(cdfs)
+  # Row-wise jump weights. Computed with shape-stable column arithmetic:
+  # apply(cdfs, 1, diff) would collapse to a vector when ncol(cdfs) == 2 and
+  # to numeric(0) when ncol(cdfs) == 1.
+  w <- cbind(
+    cdfs[, 1],
+    cdfs[, -1, drop = FALSE] - cdfs[, -ncol(cdfs), drop = FALSE]
+  )
+  y <- rep_len(y, n)
 
   vapply(
-    seq_along(y),
+    seq_len(n),
     function(i) {
       2 * sum(w[i, ] * ((y[i] < p) - cdfs[i, ] + 0.5 * w[i, ]) * (p - y[i]))
     },
@@ -432,6 +460,12 @@ crps.data.frame <- function(predictions, y) {
   n <- nrow(predictions)
   if (length(y) != 1 && length(y) != n) {
     stop("y must have length 1 or the same length as the predictions")
+  }
+  if (!all(sapply(predictions, is.numeric))) {
+    stop("'predictions' contains non-numeric variables")
+  }
+  if (anyNA(predictions)) {
+    stop("'predictions' must not contain NAs")
   }
 
   x <- lapply(split(data.matrix(predictions), seq_len(n)), sort)
@@ -599,6 +633,9 @@ pit.data.frame <- function(predictions,
   if (!all(sapply(predictions, is.numeric))) {
     stop("'predictions' contains non-numeric variables")
   }
+  if (anyNA(predictions)) {
+    stop("'predictions' must not contain NAs")
+  }
 
   pit0 <- function(data, y) {
     stats::ecdf(data)(y)
@@ -634,13 +671,10 @@ pit.data.frame <- function(predictions,
 #'
 #' @param x object of class \code{idr} (output of
 #'   \code{\link{predict.idrfit}}).
-#' @param index index of the prediction in \code{x} for which a plot is desired.
-#' @param bounds whether the bounds should be plotted or not (see
-#'   \code{\link{predict.idrfit}} for details about the meaning of the bounds).
+#' @param index single index of the prediction in \code{x} for which a plot is
+#'   desired.
 #' @param col.cdf color of the predictive CDF.
-#' @param col.bounds color of the bounds.
 #' @param lty.cdf linetype of the predictive CDF.
-#' @param lty.bounds linetype of the CDF bounds.
 #' @param main main title.
 #' @param xlab label for x axis.
 #' @param ylab label for y axis.
@@ -648,7 +682,7 @@ pit.data.frame <- function(predictions,
 #'   \code{\link{plot}}.
 #'
 #' @return
-#' The data based on which the plot is drawn (returned invisible).
+#' The plotted CDF values (returned invisible).
 #'
 #' @seealso \code{\link{predict.idrfit}}
 #'
@@ -673,15 +707,16 @@ pit.data.frame <- function(predictions,
 #' plot(pred)
 plot.idr <- function(x,
                      index = 1,
-                     bounds = TRUE,
                      col.cdf = "black",
-                     col.bounds = "blue",
                      lty.cdf = 1,
-                     lty.bounds = 3,
                      xlab = "Threshold",
                      ylab = "CDF",
                      main = "IDR predictive CDF",
                      ...) {
+  if (!is.numeric(index) || length(index) != 1 || is.na(index) ||
+        index < 1 || index > nrow(x$cdf)) {
+    stop("'index' must be a single index of a prediction in 'x'")
+  }
   cdf <- x$cdf[index, ]
 
   graphics::plot(

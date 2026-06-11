@@ -31,13 +31,14 @@ and the response variable.}
 \item{pars}{parameters for quadratic programming optimization (only relevant
 for multivariate index functions), see the idr method for the options.}
 
-\item{progress}{display progressbar (\code{TRUE}, \code{FALSE} or \code{1},
-\code{0}): no effect, for backwards compatibility only.}
+\item{progress}{display a progress bar while fitting the IDR step
+(\code{TRUE}, \code{FALSE} or \code{1}, \code{0}). Default is \code{TRUE};
+the bar is written to stderr.}
 
 \item{...}{further arguments passed to \code{indexfit}.}
 }
 \value{
-Object of class \code{dindexm}: A list containing the index model (first
+Object of class \code{dindexfit}: A list containing the index model (first
 component) and the IDR fit on the pseudo-data with the index as covariate
 (second component).
 }
