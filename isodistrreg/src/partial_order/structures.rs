@@ -500,6 +500,12 @@ impl CovariateGroups {
     pub fn is_consistent(&self) -> bool {
         let n_columns =
             self.ungrouped.len() + self.groups.iter().map(|(_, cs)| cs.len()).sum::<usize>();
+        // The groups and ungrouped lists together must cover exactly the declared
+        // dimension — downstream indexing uses `dimension` while the unified row
+        // produced from the lists has `n_columns` entries.
+        if n_columns != self.dimension {
+            return false;
+        }
         let mut seen = vec![false; n_columns];
         for &member in &self.ungrouped {
             if member >= n_columns || seen[member] {
