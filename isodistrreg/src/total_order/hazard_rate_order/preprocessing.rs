@@ -24,5 +24,15 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
         .map(|o| o.y)
         .collect();
 
+    if context.unique_responses.is_empty() {
+        // No events at all: there are no thresholds, so the fit is the fully-empty
+        // fit (a sub-CDF that is 0 everywhere), like the SD-censored route. Clear
+        // the covariate grid too — `Fit::is_empty` requires covariates, thresholds
+        // and cdfs to be empty together.
+        context.observations = Vec::with_capacity(0);
+        context.covariate_statistics = Vec::with_capacity(0);
+        context.unique_covariates = Vec::with_capacity(0);
+    }
+
     context
 }
