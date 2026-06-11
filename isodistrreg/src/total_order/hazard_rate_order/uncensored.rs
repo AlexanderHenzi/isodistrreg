@@ -229,7 +229,10 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         let mut start_index = zero_count;
         for partition in partitions.drain(..) {
             for s in &mut survival[start_index..partition.index] {
-                *s *= partition.value;
+                // A pooled ratio that is exactly 1 in exact arithmetic can round one
+                // f32 ulp above 1, which would inflate the survival past 1 and emit a
+                // negative CDF value; survival never increases, so cap at 1.
+                *s = (*s * partition.value).min(1.0);
                 cdfs.push(1.0 - *s);
             }
             start_index = partition.index;
@@ -348,7 +351,6 @@ mod test {
                     1.0 / 2.0,
                     0.0,
                 ],
-                // TODO: Manually verify these test values
                 [
                     803.0 / 884.0,
                     803.0 / 884.0,
