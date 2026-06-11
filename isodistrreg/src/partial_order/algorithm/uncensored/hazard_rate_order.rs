@@ -5,36 +5,72 @@ use std::borrow::Cow;
 #[allow(clippy::doc_overindented_list_items)]
 /// Update A in-place to encode HRO constraints per edge-row.
 ///
-/// The variables are the survival values at the current threshold and `S` holds the
+/// The QP runs in energy coordinates `u = sqrt_weight[c] * x_c` (see `algorithm`), where
+/// the x-variables are the survival values at the current threshold and `S` holds the
 /// survivals at the previous threshold, so `x/S` is the per-step survival ratio. The
 /// hazard rate order requires that ratio to be nondecreasing along the covariate order
 /// (Y_i <=hr Y_j iff S_j(t)/S_i(t) is nondecreasing in t) — the same orientation as the
 /// plain-order fallback, just ratio-weighted.
 ///
-/// For each row r that originally encoded x_i <= x_j:
+/// `constraints[r] = (i, j)` is the transitive-reduction edge encoded by row r, with i
+/// the covariate that is below j in the covariate order. The orientation of each row is
+/// fully determined by that statically known edge direction — it must NOT be inferred
+/// from the previous fitted survivals: pooled blocks make those survivals tied up to
+/// solver round-off, which would let noise decide the constraint direction.
+///
+/// For each row r encoding the edge (i, j), in x-space:
 /// - If D::IS_INCREASING:
-///     HRO:  (x_j / S_j) - (x_i / S_i) >= 0, if S_i > 0 and S_j > 0
-///     else:            x_j - x_i       >= 0
+///     HRO:  m * ((x_j / S_j) - (x_i / S_i)) >= 0, if S_i > 0 and S_j > 0
+///     else: m' *             (x_j - x_i)    >= 0
 /// - Else (decreasing):
-///     HRO:  (x_i / S_i) - (x_j / S_j) >= 0, if S_i > 0 and S_j > 0
-///     else:            x_i - x_j       >= 0
+///     HRO:  m * ((x_i / S_i) - (x_j / S_j)) >= 0, if S_i > 0 and S_j > 0
+///     else: m' *             (x_i - x_j)    >= 0
+///
+/// In energy coordinates the column-`c` coefficient additionally divides by
+/// `sqrt_weight[c]`, so with `d_c = sqrt_weight[c] * S_c` the stored coefficients are
+/// ±m/d_i and ∓m/d_j with the row scaling `m = min(d_i, d_j)` (and, for the plain-order
+/// fallback, ±m'/sqrt_weight with `m' = min(sqrt_weight[i], sqrt_weight[j])`). The
+/// positive row scaling keeps the constraint equivalent while bounding both coefficients
+/// by 1 in magnitude, so the row value stays in [-1, 1] for x in [0, 1]^n and the QP's
+/// fixed upper bound of 1.0 per row (an OSQP duality-gap workaround, see `algorithm`)
+/// remains redundant. Unscaled coefficients can produce row values above 1 that the
+/// bound would clip.
 ///
 /// Invariants expected:
-/// - existing_matrix has exactly two nonzeros per row (built by your builder or
-///   previously modified only by this function).
-/// - survival.len() == existing_matrix.ncols.
-/// - Within each row r, the two variables (i, j) satisfy:
-///     if D::IS_INCREASING      then survival[i] <= survival[j]
-///     if !D::IS_INCREASING     then survival[i] >= survival[j]
-pub fn update_constraint_matrix<D: Direction>(existing_matrix: &mut CscMatrix, survival: &[f64]) {
+/// - existing_matrix has exactly two nonzeros per row, in the columns given by
+///   `constraints` (built by `build_order_constraints` or previously modified only by
+///   this function or `scale_constraints_to_energy`).
+/// - constraints.len() == existing_matrix.nrows.
+/// - survival.len() == sqrt_weight.len() == existing_matrix.ncols.
+/// - sqrt_weight is strictly positive.
+pub fn update_constraint_matrix<D: Direction>(
+    existing_matrix: &mut CscMatrix,
+    constraints: &[(usize, usize)],
+    survival: &[f64],
+    sqrt_weight: &[f64],
+) {
     let m = existing_matrix.nrows;
     let n = existing_matrix.ncols;
 
+    assert_eq!(
+        constraints.len(),
+        m,
+        "constraints length ({}) must equal number of rows ({})",
+        constraints.len(),
+        m
+    );
     assert_eq!(
         survival.len(),
         n,
         "survival length ({}) must equal number of columns ({})",
         survival.len(),
+        n
+    );
+    assert_eq!(
+        sqrt_weight.len(),
+        n,
+        "sqrt_weight length ({}) must equal number of columns ({})",
+        sqrt_weight.len(),
         n
     );
 
@@ -49,106 +85,64 @@ pub fn update_constraint_matrix<D: Direction>(existing_matrix: &mut CscMatrix, s
     };
     let data = existing_matrix.data.to_mut();
 
-    // Temporary storage: remember first (col, position) seen for each row.
-    // Using usize::MAX as "none" sentinel avoids Option overhead.
-    let mut first_col = vec![usize::MAX; m];
-    let mut first_pos = vec![0usize; m];
-
-    // Helper: choose (i, j) from two columns using the survival ordering guarantee.
-    #[inline]
-    fn orient_pair<D: Direction>(
-        ca: usize,
-        sa: f64,
-        cb: usize,
-        sb: f64,
-    ) -> (usize, f64, usize, f64) {
-        if D::IS_INCREASING {
-            // i has smaller (or equal) survival, j the larger.
-            // Tie-break deterministically by column index.
-            if sa < sb || (sa == sb && ca <= cb) {
-                (ca, sa, cb, sb) // i = a, j = b
-            } else {
-                (cb, sb, ca, sa) // i = b, j = a
-            }
-        } else {
-            // Decreasing: i has larger (or equal) survival, j the smaller.
-            if sa > sb || (sa == sb && ca >= cb) {
-                (ca, sa, cb, sb) // i = a, j = b
-            } else {
-                (cb, sb, ca, sa) // i = b, j = a
-            }
-        }
-    }
-
-    // Pass over columns; when we see the second entry for a row, we have the full pair.
+    // Locate the storage position of each row's (i, j) entries. usize::MAX = not found.
+    let mut positions = vec![(usize::MAX, usize::MAX); m];
     for col in 0..n {
         #[allow(clippy::needless_range_loop)]
         for pos in indptr[col]..indptr[col + 1] {
             let r = indices[pos];
             debug_assert!(r < m, "row index out of range");
-
-            if first_col[r] == usize::MAX {
-                first_col[r] = col;
-                first_pos[r] = pos;
-                continue;
-            }
-
-            // We found the second column for this row r.
-            let col_a = first_col[r];
-            let pos_a = first_pos[r];
-            let col_b = col;
-            let pos_b = pos;
-
-            // Identify i and j using the survival guarantee.
-            let s_a = survival[col_a];
-            let s_b = survival[col_b];
-            let (i_col, s_i, _j_col, s_j) = orient_pair::<D>(col_a, s_a, col_b, s_b);
-
-            // Map columns back to their storage positions for this row.
-            let (pos_i, pos_j) = if i_col == col_a {
-                (pos_a, pos_b)
+            let (i, j) = constraints[r];
+            if col == i {
+                positions[r].0 = pos;
             } else {
-                (pos_b, pos_a)
-            };
-
-            // Decide HRO vs fallback (simple order) for this row.
-            let use_hro = s_i > 0.0 && s_j > 0.0;
-
-            if use_hro {
-                // HRO coefficients: signs depend on direction, matching the plain-order
-                // fallback below (the survival ratio x/S must be nondecreasing along the
-                // covariate order for an increasing fit).
-                if D::IS_INCREASING {
-                    // (x_j/S_j) - (x_i/S_i) >= 0
-                    data[pos_i] = -1.0 / s_i;
-                    data[pos_j] = 1.0 / s_j;
-                } else {
-                    // (x_i/S_i) - (x_j/S_j) >= 0
-                    data[pos_i] = 1.0 / s_i;
-                    data[pos_j] = -1.0 / s_j;
-                }
-            } else {
-                // Fallback to simple order.
-                if D::IS_INCREASING {
-                    // x_j - x_i >= 0
-                    data[pos_i] = -1.0;
-                    data[pos_j] = 1.0;
-                } else {
-                    // x_i - x_j >= 0
-                    data[pos_i] = 1.0;
-                    data[pos_j] = -1.0;
-                }
+                debug_assert_eq!(col, j, "row {r} has an entry outside its edge columns");
+                positions[r].1 = pos;
             }
-
-            // Optional: reset marker (not strictly necessary since each row should be hit exactly twice).
-            // first_col[r] = usize::MAX;
         }
     }
 
-    debug_assert!(
-        first_col.iter().all(|&c| c != usize::MAX),
-        "some rows did not have exactly two nonzeros"
-    );
+    for (r, &(i, j)) in constraints.iter().enumerate() {
+        let (pos_i, pos_j) = positions[r];
+        debug_assert!(
+            pos_i != usize::MAX && pos_j != usize::MAX,
+            "row {r} does not have exactly two nonzeros"
+        );
+
+        let s_i = survival[i];
+        let s_j = survival[j];
+
+        if s_i > 0.0 && s_j > 0.0 {
+            // `d_c` is the u-extent of column c: the ratio constraint divides x_c by S_c
+            // and energy coordinates divide by sqrt_weight[c]. The equivalent positive row
+            // rescaling by min(d_i, d_j) keeps |coefficient| <= 1.
+            let d_i = sqrt_weight[i] * s_i;
+            let d_j = sqrt_weight[j] * s_j;
+            let scale = d_i.min(d_j);
+            if D::IS_INCREASING {
+                // (x_j/S_j) - (x_i/S_i) >= 0
+                data[pos_i] = -scale / d_i;
+                data[pos_j] = scale / d_j;
+            } else {
+                // (x_i/S_i) - (x_j/S_j) >= 0
+                data[pos_i] = scale / d_i;
+                data[pos_j] = -scale / d_j;
+            }
+        } else {
+            // Fallback to simple order (in energy coordinates, with the same row scaling
+            // rule as `scale_constraints_to_energy`).
+            let scale = sqrt_weight[i].min(sqrt_weight[j]);
+            if D::IS_INCREASING {
+                // x_j - x_i >= 0
+                data[pos_i] = -scale / sqrt_weight[i];
+                data[pos_j] = scale / sqrt_weight[j];
+            } else {
+                // x_i - x_j >= 0
+                data[pos_i] = scale / sqrt_weight[i];
+                data[pos_j] = -scale / sqrt_weight[j];
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -170,13 +164,16 @@ mod tests {
         panic!("Row {row} not found in column {col}");
     }
 
-    // Build the expected data vector after an update for a given survival vector.
+    // Build the expected data vector after an update for a given survival vector, with
+    // unit sqrt-weights (energy coordinates with sqrt_weight = 1 reduce to x-space; see
+    // `energy_coordinates_scale_columns` for the non-unit rule).
     //
-    // The rule under test:
-    // - If S[i_row] == 0, row r = (i, j) uses the "simple" builder signs (base_simple).
-    // - If S[i_row] > 0, row uses the "hazard" builder signs (base_hazard), scaled as:
-    //     value at i becomes (base_hazard_sign at i)/S_i,
-    //     value at j becomes (base_hazard_sign at j)/S_j.
+    // The rule under test (orientation is static, from the row's edge (i, j)):
+    // - If S_i > 0 and S_j > 0, row r = (i, j) uses the "hazard" builder signs
+    //   (base_hazard), scaled with the normalization m = min(S_i, S_j):
+    //     value at i becomes (base_hazard_sign at i) * m / S_i,
+    //     value at j becomes (base_hazard_sign at j) * m / S_j.
+    // - Otherwise the row falls back to the "simple" builder signs (base_simple).
     //
     // This definition works whether the current matrix before update is simple or hazard
     // (the function must map from either state to this canonical target).
@@ -186,21 +183,22 @@ mod tests {
         constraints: &[(usize, usize)],
         survival: &[f64],
     ) -> Vec<f64> {
-        let mut expected = base_simple.data.to_vec(); // start with simple; we’ll overwrite where S_i > 0.
+        let mut expected = base_simple.data.to_vec(); // start with simple; we’ll overwrite where S > 0.
 
         for (r, &(i, j)) in constraints.iter().enumerate() {
             let ki = pos(base_simple, i, r);
             let kj = pos(base_simple, j, r);
-            if survival[i] == 0.0 {
+            if survival[i] > 0.0 && survival[j] > 0.0 {
+                // Use hazard signs scaled by normalized reciprocals.
+                let scale = survival[i].min(survival[j]);
+                let ki_h = pos(base_hazard, i, r);
+                let kj_h = pos(base_hazard, j, r);
+                expected[ki] = base_hazard.data[ki_h] * scale / survival[i];
+                expected[kj] = base_hazard.data[kj_h] * scale / survival[j];
+            } else {
                 // Keep simple signs (already in expected from base_simple).
                 expected[ki] = base_simple.data[ki];
                 expected[kj] = base_simple.data[kj];
-            } else {
-                // Use hazard signs scaled by reciprocals.
-                let ki_h = pos(base_hazard, i, r);
-                let kj_h = pos(base_hazard, j, r);
-                expected[ki] = base_hazard.data[ki_h] / survival[i];
-                expected[kj] = base_hazard.data[kj_h] / survival[j];
             }
         }
         expected
@@ -235,7 +233,7 @@ mod tests {
         let mut mat = base_simple.clone();
         let survival = vec![0.5, 1.0];
 
-        update_constraint_matrix::<Increasing>(&mut mat, &survival);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &[1.0; 2]);
 
         assert_same_structure(&mat, &base_simple);
         // Two nonzeros total; and two per row in this case.
@@ -257,7 +255,7 @@ mod tests {
         let survival = vec![0.5, 0.75, 1.0];
 
         let mut mat = base_simple.clone();
-        update_constraint_matrix::<Increasing>(&mut mat, &survival);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &[1.0; 3]);
 
         // Expected: hazard signs scaled by reciprocals.
         let expected =
@@ -267,7 +265,7 @@ mod tests {
 
         // Idempotence: applying again with same S yields identical data.
         let before = mat.data.to_owned().into_owned();
-        update_constraint_matrix::<Increasing>(&mut mat, &survival);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &[1.0; 3]);
         assert_data_eq(mat.data.as_ref(), &before.as_slice());
     }
 
@@ -284,7 +282,7 @@ mod tests {
         let survival = vec![0.0, 0.5, 1.0];
 
         let mut mat = base_simple.clone();
-        update_constraint_matrix::<Increasing>(&mut mat, &survival);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &[1.0; 3]);
 
         let expected =
             expected_data_from_bases(&base_simple, &base_hazard, &constraints, &survival);
@@ -305,7 +303,7 @@ mod tests {
         let survival = vec![0.25, 0.5, 1.0];
 
         let mut mat = base_simple.clone();
-        update_constraint_matrix::<Increasing>(&mut mat, &survival);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &[1.0; 3]);
 
         let expected =
             expected_data_from_bases(&base_simple, &base_hazard, &constraints, &survival);
@@ -325,21 +323,49 @@ mod tests {
 
         // First survival (strictly positive).
         let s1 = vec![0.5, 0.75, 1.0];
-        update_constraint_matrix::<Increasing>(&mut mat, &s1);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &s1, &[1.0; 3]);
         let expected1 = expected_data_from_bases(&base_simple, &base_hazard, &constraints, &s1);
         assert_data_eq(mat.data.as_ref(), &expected1);
 
         // Change survival: set S1 to 0 (row 1 should revert), others change scaling.
         let s2 = vec![0.0, 0.5, 1.0];
-        update_constraint_matrix::<Increasing>(&mut mat, &s2);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &s2, &[1.0; 3]);
         let expected2 = expected_data_from_bases(&base_simple, &base_hazard, &constraints, &s2);
         assert_data_eq(mat.data.as_ref(), &expected2);
 
         // Back to positive S1; should return to hazard scaling.
         let s3 = vec![0.5, 0.5, 1.0];
-        update_constraint_matrix::<Increasing>(&mut mat, &s3);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &s3, &[1.0; 3]);
         let expected3 = expected_data_from_bases(&base_simple, &base_hazard, &constraints, &s3);
         assert_data_eq(mat.data.as_ref(), &expected3);
+    }
+
+    /// Non-unit sqrt-weights (energy coordinates): column c divides by
+    /// sqrt_weight[c] * S_c, and the row is rescaled so the largest |coefficient| is
+    /// exactly 1. All values below are exact binary floats.
+    #[test]
+    fn energy_coordinates_scale_columns() {
+        let constraints = vec![(0usize, 1usize)];
+        let base_simple = build_order_constraints::<Increasing, false>(&constraints, 2);
+        let mut mat = base_simple.clone();
+        let sqrt_weight = [1.0, 0.125];
+
+        // Both survivals positive: d_0 = 1.0 * 0.5 = 0.5, d_1 = 0.125 * 0.25 = 0.03125,
+        // row scale min(d) = 0.03125 -> -0.0625 at column 0 and +1.0 at column 1.
+        let survival = [0.5, 0.25];
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &sqrt_weight);
+        assert_same_structure(&mat, &base_simple);
+        let k0 = pos(&base_simple, 0, 0);
+        let k1 = pos(&base_simple, 1, 0);
+        assert_eq!(mat.data[k0], -0.0625);
+        assert_eq!(mat.data[k1], 1.0);
+
+        // Zero survival falls back to the plain order in energy coordinates:
+        // row scale min(sqrt_weight) = 0.125 -> -0.125 at column 0 and +1.0 at column 1.
+        let survival = [0.5, 0.0];
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &sqrt_weight);
+        assert_eq!(mat.data[k0], -0.125);
+        assert_eq!(mat.data[k1], 1.0);
     }
 
     #[test]
@@ -356,7 +382,7 @@ mod tests {
 
         // Start from hazard-oriented matrix.
         let mut mat = base_hazard.clone();
-        update_constraint_matrix::<Increasing>(&mut mat, &survival);
+        update_constraint_matrix::<Increasing>(&mut mat, &constraints, &survival, &[1.0; 3]);
 
         // Expected does not depend on the current state; it must be "hazard signs scaled", or
         // "simple signs" for zero S_i (there are none here).
@@ -389,11 +415,12 @@ mod tests {
             panic!("Row {row} not found in column {col}");
         };
 
-        // Reproduce the implementation’s orientation and coefficient rule for Decreasing:
-        // - i = endpoint with larger (or equal) survival (tie-break: larger column index).
-        // - If both survivals > 0: set +1/S_i at i and -1/S_j at j, i.e.
-        //   (x_i/S_i) - (x_j/S_j) >= 0 — the survival ratio nonincreasing along the
-        //   covariate order, the hazard rate order for a decreasing fit.
+        // Reproduce the coefficient rule for Decreasing, with i the edge's statically
+        // known lower endpoint (constraints[r].0):
+        // - If both survivals > 0: with m = min(S_i, S_j), set +m/S_i at i and -m/S_j
+        //   at j, i.e. m * ((x_i/S_i) - (x_j/S_j)) >= 0 — the survival ratio
+        //   nonincreasing along the covariate order, the hazard rate order for a
+        //   decreasing fit, rescaled so the row's coefficients stay within ±1.
         // - Else: fallback simple decreasing: +1 at i and -1 at j.
         let mat_nrows = mat.nrows;
         let expected_for = |survival: &[f64]| -> Vec<f64> {
@@ -402,23 +429,17 @@ mod tests {
             let mut out = vec![0.0f64; nnz];
 
             for r in 0..mrows {
-                let (c0, c1) = constraints[r];
-                let s0 = survival[c0];
-                let s1 = survival[c1];
-
-                // orient_pair for decreasing (match the implementation)
-                let (i_col, s_i, j_col, s_j) = if s0 > s1 || (s0 == s1 && c0 >= c1) {
-                    (c0, s0, c1, s1)
-                } else {
-                    (c1, s1, c0, s0)
-                };
+                let (i_col, j_col) = constraints[r];
+                let s_i = survival[i_col];
+                let s_j = survival[j_col];
 
                 let pi = pos(i_col, r);
                 let pj = pos(j_col, r);
 
                 if s_i > 0.0 && s_j > 0.0 {
-                    out[pi] = 1.0 / s_i;
-                    out[pj] = -1.0 / s_j;
+                    let scale = s_i.min(s_j);
+                    out[pi] = scale / s_i;
+                    out[pj] = -scale / s_j;
                 } else {
                     out[pi] = 1.0;
                     out[pj] = -1.0;
@@ -429,7 +450,7 @@ mod tests {
 
         // Case 1: strictly positive survivals (S0 ≥ S1 ≥ S2).
         let s1 = vec![1.0, 0.5, 0.25];
-        update_constraint_matrix::<Decreasing>(&mut mat, &s1);
+        update_constraint_matrix::<Decreasing>(&mut mat, &constraints, &s1, &[1.0; 3]);
 
         // Structure must be preserved.
         assert_eq!(mat.nrows, base_hazard.nrows);
@@ -450,9 +471,8 @@ mod tests {
         }
 
         // Case 2: introduce zeros to trigger fallback on rows touching zero-survival endpoints.
-        // Here S1 = 0 and S2 = 0; orientation for row (1,2) will pick i=2, j=1 due to tie-break.
         let s2 = vec![1.0, 0.0, 0.0];
-        super::update_constraint_matrix::<Decreasing>(&mut mat, &s2);
+        super::update_constraint_matrix::<Decreasing>(&mut mat, &constraints, &s2, &[1.0; 3]);
 
         let expected2 = expected_for(&s2);
         for (k, (a, e)) in mat
