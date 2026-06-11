@@ -2,7 +2,7 @@ from typing import Self, cast
 
 import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.utils import check_array
+from sklearn.utils import check_array, check_consistent_length
 from sklearn.utils.validation import check_is_fitted, validate_data
 
 import numpy.typing as npt
@@ -19,14 +19,19 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         # Parse optional arguments
         y_observed = kwargs.pop("y_observed", None)
         if y_observed is not None:
-            y_observed = check_array(y_observed)
+            y_observed = np.ravel(check_array(y_observed, ensure_2d=False, dtype=None))
+            check_consistent_length(X, y_observed)
             if not np.isin(y_observed, [0, 1]).all():
                 raise ValueError(
                     "y_observed must contain only 0/1 or True/False values"
                 )
+            y_observed = y_observed.astype(bool)
         sample_weight = kwargs.pop("sample_weight", None)
         if sample_weight is not None:
-            sample_weight = check_array(sample_weight)
+            sample_weight = np.ravel(
+                check_array(sample_weight, ensure_2d=False, dtype="numeric")
+            )
+            check_consistent_length(X, sample_weight)
         if self.n_features_in_ > 1:
             covariate_order = kwargs.pop("covariate_order", None)
             if covariate_order is not None:
@@ -37,9 +42,13 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
                             f"covariate_order kind must be 'comp', 'sd', or 'icx', got '{kind}'"
                         )
                     for i in ids:
-                        if not isinstance(i, int) or i >= self.n_features_in_:
+                        if (
+                            not isinstance(i, (int, np.integer))
+                            or i < 0
+                            or i >= self.n_features_in_
+                        ):
                             raise ValueError(
-                                f"covariate_order index must be an int < {self.n_features_in_}, got {i!r}"
+                                f"covariate_order index must be an int in [0, {self.n_features_in_}), got {i!r}"
                             )
                         if seen[i]:
                             raise ValueError(f"duplicate column '{i}'")
@@ -63,9 +72,7 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         n_jobs = kwargs.pop("n_jobs", 1)
 
         if kwargs:
-            raise TypeError(
-                f"fit() got unexpected keyword arguments: {sorted(kwargs)}"
-            )
+            raise TypeError(f"fit() got unexpected keyword arguments: {sorted(kwargs)}")
 
         self._fit = IDR(
             y,
@@ -103,9 +110,7 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         targets = validate_data(self, X, reset=False)
 
         if kwargs:
-            raise TypeError(
-                f"cdf() got unexpected keyword arguments: {sorted(kwargs)}"
-            )
+            raise TypeError(f"cdf() got unexpected keyword arguments: {sorted(kwargs)}")
 
         return self._fit.cdf(targets)
 
@@ -113,15 +118,20 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         self, data: npt.ArrayLike, thresholds: npt.ArrayLike, **kwargs
     ) -> np.typing.NDArray:
         check_is_fitted(self)
-        # Check thresholds as y values
-        targets = validate_data(self, data, thresholds, reset=False)
+        targets = validate_data(self, data, reset=False)
+        targets = cast(np.ndarray, targets)
+        thresholds = np.asarray(thresholds, dtype=np.float64)
+        if thresholds.ndim > 1:
+            raise ValueError("thresholds must be a scalar or 1-D array")
 
         if kwargs:
             raise TypeError(
                 f"cdf_at() got unexpected keyword arguments: {sorted(kwargs)}"
             )
 
-        return self._fit.cdf_at(targets, thresholds)
+        # Insert a broadcast axis so each row is evaluated at every threshold,
+        # yielding an (n_rows, n_thresholds) matrix.
+        return self._fit.cdf_at(targets[:, None, :], np.atleast_1d(thresholds))
 
     def quantiles(
         self, data: npt.ArrayLike, quantiles: npt.ArrayLike, **kwargs
