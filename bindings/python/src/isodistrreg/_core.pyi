@@ -27,7 +27,9 @@ class IDR:
     y_observed:
         Optional 1D boolean array-like of shape (n,). If provided, True marks observed, False marks censored.
     sample_weight:
-        Optional 1D real array-like of shape (n,). Must be non-negative if provided.
+        Optional 1D real array-like of shape (n,). Must be non-negative if provided. Weights are processed in
+        single precision; it is up to the caller to avoid extreme imbalance (as a rule of thumb, no weight
+        below ~1e-7 of the total weight).
     X_order:
         Optional sequence of (name, indices) where indices is a sequence of 0-based column indices.
         Note: supplying X_order selects the partial-order solver even for 1-D covariates.

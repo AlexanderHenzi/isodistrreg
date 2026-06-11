@@ -23,7 +23,9 @@ is all observed (\code{rep(TRUE, length(y))}).}
 
 \item{weights}{vector of finite, non-negative weights (same length as y),
 at least one of which must be positive; observations with zero weight are
-dropped from the fit. Default is all weights equal to one.}
+dropped from the fit. Default is all weights equal to one. Weights are
+processed in single precision; it is up to the caller to avoid extreme
+imbalance (as a rule of thumb, no weight below ~1e-7 of the total weight).}
 
 \item{decreasing}{boolean indicating whether \code{y} decreases with \code{X}
 (by default, it increases with \code{X}).}

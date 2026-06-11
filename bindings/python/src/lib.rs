@@ -62,7 +62,9 @@ use std::sync::{Mutex, OnceLock};
 ///     If given, indicates right-censored observations (True = observed,
 ///     False = censored). If not provided, interpreted as all observed.
 /// sample_weight : array_like, shape (n,), optional
-///     Non-negative observation weights.
+///     Non-negative observation weights. Weights are processed in single
+///     precision; it is up to the caller to avoid extreme imbalance (as a
+///     rule of thumb, no weight below ~1e-7 of the total weight).
 /// X_order : list of (str, list of int), optional
 ///     Specifies the partial order on the covariate space. Each entry is
 ///     a tuple ``(kind, column_indices)`` where *kind* is one of

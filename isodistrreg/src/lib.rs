@@ -55,6 +55,12 @@ pub trait IsotonicDistributionalRegressionFit: Sized {
     /// narrows once on read to whatever precision its algorithm operates in (`f32` for the
     /// total-order kernels, `f64` for the OSQP-backed partial-order solver).
     ///
+    /// Since weight arithmetic runs in f32, it is up to the caller to keep the weights (and
+    /// their sum) within f32's finite range and not too imbalanced — as a rule of thumb, no
+    /// weight should be smaller than roughly 2⁻²⁴ (~1e-7) of the total. Beyond that, small
+    /// weights can lose their mass to round-off or the fit can produce NaN values. Positive
+    /// weights that round to 0.0f32 are dropped like zero weights.
+    ///
     /// Zero weights are allowed; such observations are dropped during preprocessing, so the
     /// fit equals the fit on the positive-weight subsample — including the threshold grid
     /// and covariate set. With every weight zero, the result is the empty fit (a sub-CDF
