@@ -1,5 +1,6 @@
 mod error;
 mod float;
+#[doc(hidden)]
 pub mod functionals;
 #[cfg(feature = "partial-order")]
 pub mod partial_order;
