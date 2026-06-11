@@ -45,7 +45,7 @@ d = y <= c
 fit = IDR(t, x, d)
 
 # Sorted and deduplicated covariates and thresholds are available
-sorted_x = fit.covariates
+sorted_x = fit.X
 sorted_y = fit.thresholds
 
 # Estimate and plot the complete distributional estimate

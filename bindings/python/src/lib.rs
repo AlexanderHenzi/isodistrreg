@@ -80,7 +80,11 @@ use std::sync::{Mutex, OnceLock};
 ///     random subsamples and the results are averaged.
 /// subsample_size : int or float, optional
 ///     Size of each subsample. An int is an absolute count; a float in
-///     (0, 1] is a fraction of the training set.
+///     (0, 1] is a fraction of the training set. Defaults to half the
+///     training set when sampling without replacement (subagging) and to
+///     the full training set size when ``replace=True`` (the classic
+///     bootstrap). The full size without replacement would reproduce the
+///     plain fit and is rejected when ``subsamples > 1``.
 /// replace : bool, optional
 ///     If True, sample with replacement (bootstrap). Default is False.
 /// settings : dict, optional

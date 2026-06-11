@@ -30,15 +30,18 @@ class IDR:
         Optional 1D real array-like of shape (n,). Must be non-negative if provided.
     X_order:
         Optional sequence of (name, indices) where indices is a sequence of 0-based column indices.
+        Note: supplying X_order selects the partial-order solver even for 1-D covariates.
     y_order:
-        Optional string; default "sd". May be None, which results also in "sd".
+        Optional string, "sd" or "hazard"; default "sd". May be None, which results also in "sd".
     decreasing:
         If True, fit is monotone decreasing in responses; default False.
     subsamples:
         Optional integer, how many subsamples to create while subagging (default is 1: a single sample with all data)
     subsample_size:
-        Optional float (strictly between 0.0 and 1.0) or integer (at least 1, less than the number of observations) used
-        for subagging (default is half the data).
+        Optional float in (0, 1] or integer (at least 1, at most the number of observations) used
+        for subagging. The default is half the data when ``replace=False`` (subagging) and the
+        full sample size when ``replace=True`` (the classic bootstrap). The full size without
+        replacement would reproduce the plain fit and is rejected when ``subsamples > 1``.
     settings:
         Optional dictionary with settings for the fit, depends on the dimension of X.
     """
@@ -107,11 +110,14 @@ class IDR:
     ) -> npt.NDArray[np.float32]: ...
 
     """
-    Predict the CDF at a grid of **sorted** covariate and **sorted** response values.
+    Predict the CDF at a grid of **sorted** covariate and **sorted** response values
+    (sortedness is validated).
 
-    X: 1D array-like of shape (m,) if fit argument had shape (n,), or array-like of shape (m, d) if fit argument had
-        shape (n, d).
-    y: 1D array-like of shape (t,).
+    Only supported for models fitted on univariate covariates; multivariate models
+    raise ValueError.
+
+    X: 1D array-like of shape (m,), sorted in non-decreasing order.
+    y: 1D array-like of shape (t,), sorted in non-decreasing order.
     Returns: float32 ndarray of shape (m, t).
     """
 
@@ -174,9 +180,10 @@ def isotonic_regression(
     X: Optional[npt.ArrayLike] = None,
     sample_weight: Optional[npt.ArrayLike] = None,
     decreasing: bool = False,
+    constraints: Optional[npt.ArrayLike] = None,
 ) -> npt.NDArray[np.float64]: ...
 def kaplan_meier(
-    times: npt.ArrayLike,
-    events: npt.ArrayLike,
-    weights: Optional[npt.ArrayLike] = None,
+    y: npt.ArrayLike,
+    y_observed: npt.ArrayLike,
+    weight: Optional[npt.ArrayLike] = None,
 ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.float64]]: ...
