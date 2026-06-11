@@ -26,7 +26,9 @@ pub fn algorithm<D: Direction, X: PartialOrd, Y: Default + Sync + Send + TotalCm
         };
     }
 
-    match (context.n() - 1) / BitSet::<1>::capacity() {
+    // The bitsets index unique covariates, not observation records, so the width
+    // dispatch must key on the covariate count.
+    match (context.n_covariate() - 1) / BitSet::<1>::capacity() {
         0..1 => algorithm_inner::<D, 1, X, Y>(context, progress),
         1..2 => algorithm_inner::<D, 2, X, Y>(context, progress),
         2..4 => algorithm_inner::<D, 4, X, Y>(context, progress),
