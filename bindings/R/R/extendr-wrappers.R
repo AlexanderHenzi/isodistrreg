@@ -75,23 +75,17 @@ plain_survival_isotonic_distributional_regression_threshold <- function(threshol
 
 #' Compute the isotonic regression for the mean for totally ordered covariates.
 #'
-#' @description
-#' Computes isotonic mean regression for numeric responses. When covariates are supplied
-#' they determine the ordering; when omitted the responses are assumed pre-sorted (regression on
-#' the index). When weights are omitted every observation receives weight 1.
+#' Internal wrapper; user-facing input validation happens in the R function
+#' `isotonic_regression()` (R/modeling.R). The asserts here are backstops with clear
+#' messages for anyone calling the wrapper directly.
 #'
+#' @description Internal method that is used by R code to pass into Rust code.
 #' @param y Double vector of response values.
 #' @param X Double vector of covariate values, or NULL if responses are pre-sorted.
 #' @param weights Double vector of non-negative weights, or NULL for equal weights.
 #' @param decreasing Bool indicating direction (default FALSE is increasing, TRUE is decreasing).
 #' @returns Numeric vector of isotonic fitted means.
-#' @examples
-#' isotonic_regression(c(2, 3, 1, 4, 5), X = as.double(1:5))
-#' isotonic_regression(c(3, 2, 4, 1), X = as.double(1:4), weights = c(1, 2, 1, 1))
-#' isotonic_regression(sort(c(3, 1, 2, 5)))
-#' isotonic_regression(sort(c(2, 1, 3)), weights = c(1, 2, 1))
-#' @export
-isotonic_regression <- function(y, X = NULL, weights = NULL, decreasing = FALSE) .Call(wrap__isotonic_regression, y, X, weights, decreasing)
+isotonic_regression_impl <- function(y, X = NULL, weights = NULL, decreasing = FALSE) .Call(wrap__isotonic_regression_impl, y, X, weights, decreasing)
 
 #'
 #' @section Methods:

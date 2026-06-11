@@ -17,10 +17,10 @@
 #' @param digits removed functionality, parameter kept for backwards
 #'   compatibility but ignored with warning: number of decimal places for the
 #'   predictive CDF, useful to keep the solution small across covariates.
-#' @param interpolation interpolation method for univariate data. Default is
-#'   \code{"linear"}. Any other argument will select midpoint interpolation (see
-#'   'Details' in \code{\link{predict.idrfit}}). Has no effect for multivariate
-#'   IDR.
+#' @param interpolation interpolation method for univariate data, ignored at
+#'   this time (a warning is issued once per session if a value other than
+#'   \code{"linear"} is supplied). Only linear is supported for single variate,
+#'   multivariate uses midpoint.
 #' @param b number of (su)bagging samples.
 #' @param p size of (su)bagging samples relative to training data.
 #' @param replace draw samples with (\code{TRUE}, \code{1}) or without
@@ -82,14 +82,14 @@ idrbag <- function(y,
     progress,
     seed
   )
-  if (!is.numeric(b) || length(b) != 1 || !(as.integer(b) == b) || b < 1) {
-    stop("'b' must be a positive integer smaller than length(y)")
+  if (!is.numeric(b) || length(b) != 1 || is.na(b) || b %% 1 != 0 || b < 1) {
+    stop("'b' must be a positive integer")
   }
-  if (!is.numeric(p) || length(p) != 1 || p <= 0 || p >= 1) {
+  if (!is.numeric(p) || length(p) != 1 || is.na(p) || p <= 0 || p >= 1) {
     stop("'p' must be a number in (0,1)")
   }
-  if (!is.numeric(n_jobs) || length(n_jobs) != 1 ||
-        !(as.integer(n_jobs) == n_jobs) || n_jobs < 1) {
+  if (!is.numeric(n_jobs) || length(n_jobs) != 1 || is.na(n_jobs) ||
+        n_jobs %% 1 != 0 || n_jobs < 1) {
     stop("'n_jobs' must be a positive integer")
   }
   n_jobs <- as.integer(n_jobs)
@@ -103,13 +103,29 @@ idrbag <- function(y,
   if (!isTRUE(progress) && !isFALSE(progress)) {
     stop("'progress' must be TRUE/FALSE or 1/0")
   }
+  # Fail fast on invalid prediction inputs before spending time on the fit;
+  # the full checks (including name-based column matching and ordered factor
+  # conversion) happen in predict.idrfit below.
   if (!is.null(newdata)) {
     if (!is.data.frame(newdata)) {
       stop("'newdata' must be a data.frame")
     }
-    if (ncol(newdata) != ncol(X)) {
+    if (nrow(newdata) == 0) {
+      stop("'newdata' must have at least 1 row")
+    }
+    if (ncol(newdata) != ncol(X) ||
+          !setequal(colnames(newdata), colnames(X))) {
       stop("'newdata' must have the same columns as 'X'")
     }
+    if (anyNA(newdata)) {
+      stop("'newdata' must not contain NAs")
+    }
+  }
+  if (!is.null(grid)) {
+    if (!is.vector(grid, "numeric") || anyNA(grid)) {
+      stop("'grid' must be a numeric vector without NAs")
+    }
+    grid <- as.double(grid)
   }
 
   # Pack the column indices into the orders list
@@ -140,26 +156,10 @@ idrbag <- function(y,
     show_progress  = inputs$progress
   )
 
-  if (!is.null(newdata)) {
-    X_eval <- t(newdata)
-  } else {
-    X_eval <- inputs$X_formatted
-  }
-  if (!is.null(grid)) {
-    cdf <- external_ptr$cdf_at(X_eval, grid)
-    points <- grid
-  } else {
-    cdf <- external_ptr$cdf(X_eval)
-    points <- external_ptr$thresholds()
-  }
-
-  structure(
+  fit <- structure(
     list(
       y = inputs$y,
       X = inputs$X,
-      # takes care of duplicate obs as opposed to simply taking the backing cdfs
-      cdf = cdf,
-      points = points,
       weights = inputs$weights,
       response_unique = external_ptr$thresholds(),
       groups = inputs$groups,
@@ -169,4 +169,20 @@ idrbag <- function(y,
     ),
     class = "idrfit"
   )
+
+  if (!identical(interpolation, "linear")) {
+    warn_once(
+      "interpolation",
+      "'interpolation' parameter is ignored, last warning this session"
+    )
+  }
+
+  # As documented: the return value is a prediction object (class "idr"),
+  # usable with cdf(), qpred(), crps(), pit() and plot().
+  preds <- predict(fit, data = newdata, digits = digits)
+  if (!is.null(grid)) {
+    preds$cdf <- external_ptr$cdf_at(preds$predict_covariates, grid)
+    preds$points <- grid
+  }
+  preds
 }

@@ -7,9 +7,9 @@
 \method{predict}{dindexfit}(
   object,
   data = NULL,
-  digits = 3,
-  interpolation = "linear",
-  asplitAvail = TRUE,
+  digits = NULL,
+  interpolation = NULL,
+  asplitAvail = NULL,
   ...
 )
 }
@@ -19,16 +19,15 @@
 \item{data}{optional \code{data.frame} containing variables with which to
 predict. In-sample predictions are returned if this is omitted.}
 
-\item{digits}{number of decimal places for the predictive CDF.}
+\item{digits}{number of decimal places for the predictive CDF. Accepted for
+backwards compatibility but currently ignored (a warning is issued once
+per session); predictions are returned at full precision.}
 
-\item{interpolation}{interpolation method for univariate index Default is
-\code{"linear"}. Any other argument will select midpoint interpolation (see
-'Details' in \code{\link{predict.idrfit}}). Has no effect for multivariate
-index function.}
+\item{interpolation}{interpolation method for univariate index, ignored at
+this time. Only linear is supported for a univariate index, multivariate
+uses midpoint.}
 
-\item{asplitAvail}{use \code{\link[base]{asplit}} for splitting arrays
-(default is \code{TRUE}). Set to \code{FALSE} for R Versions < 3.6, where
-\code{asplit} is not available.}
+\item{asplitAvail}{kept for backwards compatibility, ignored.}
 
 \item{...}{further arguments passed to the index prediction function.}
 }

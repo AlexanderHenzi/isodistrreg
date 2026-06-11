@@ -7,11 +7,8 @@
 \method{plot}{idr}(
   x,
   index = 1,
-  bounds = TRUE,
   col.cdf = "black",
-  col.bounds = "blue",
   lty.cdf = 1,
-  lty.bounds = 3,
   xlab = "Threshold",
   ylab = "CDF",
   main = "IDR predictive CDF",
@@ -22,18 +19,12 @@
 \item{x}{object of class \code{idr} (output of
 \code{\link{predict.idrfit}}).}
 
-\item{index}{index of the prediction in \code{x} for which a plot is desired.}
-
-\item{bounds}{whether the bounds should be plotted or not (see
-\code{\link{predict.idrfit}} for details about the meaning of the bounds).}
+\item{index}{single index of the prediction in \code{x} for which a plot is
+desired.}
 
 \item{col.cdf}{color of the predictive CDF.}
 
-\item{col.bounds}{color of the bounds.}
-
 \item{lty.cdf}{linetype of the predictive CDF.}
-
-\item{lty.bounds}{linetype of the CDF bounds.}
 
 \item{xlab}{label for x axis.}
 
@@ -45,7 +36,7 @@
 \code{\link{plot}}.}
 }
 \value{
-The data based on which the plot is drawn (returned invisible).
+The plotted CDF values (returned invisible).
 }
 \description{
 Plot an IDR predictive CDF.
