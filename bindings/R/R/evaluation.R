@@ -584,17 +584,16 @@ pit.idr <- function(predictions,
   )
 
   if (randomize) {
-    # Randomization: Find small epsilon to compute left limit of CDF
-    eps <- if (length(fitted_thresholds) > 1) {
-      min(diff(fitted_thresholds))
-    } else {
-      1
+    # Left limits F(y-): with right = TRUE the stepfun is left-continuous, so
+    # it returns the value just before the jump when y is exactly at a jump
+    # point and F(y) everywhere else. The PIT is then only randomized at
+    # actual discontinuity points of the predictive CDF.
+    lower0 <- function(cdf, y) {
+      stats::stepfun(x = fitted_thresholds, y = c(0, cdf), right = TRUE)(y)
     }
-
-    # Left limits F(y-): evaluate at y - eps/2, row by row
     lowerPitVals <- vapply(
       seq_len(nrow(cdfs)),
-      function(i) pit0(cdfs[i, ], y[i] - eps / 2),
+      function(i) lower0(cdfs[i, ], y[i]),
       numeric(1)
     )
 
@@ -644,10 +643,12 @@ pit.data.frame <- function(predictions,
   # Update split(data.matrix(...)) to asplit
   pitVals <- mapply(pit0, data = pred, y = y)
   if (randomize) {
-    # Randomization: Find small epsilon to compute left limit of CDF
-    eps <- apply(predictions, 1, stats::dist, method = "manhattan")
-    eps <- min(c(eps[eps > 0], 1))
-    lowerPitVals <- mapply(pit0, data = pred, y = y - eps / 2)
+    # Exact left limits F(y-) of the empirical CDF, so the PIT is only
+    # randomized when y is at an actual jump (= a forecast value).
+    lower0 <- function(data, y) {
+      mean(data < y)
+    }
+    lowerPitVals <- mapply(lower0, data = pred, y = y)
     if (!is.null(seed)) {
       set.seed(seed)
     }
