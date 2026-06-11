@@ -25,6 +25,42 @@ pub fn preprocess_uncensored<X: Float, Y: Float, W: Float>(
     context
 }
 
+/// Finalize the in-progress (last) observation: store its narrowed weight and fold it into
+/// the current (last) covariate statistic.
+///
+/// A positive `W`-precision weight sum can narrow to exactly 0.0f32 (a `W = f64` weight
+/// below half the smallest f32 subnormal). Such an observation carries no representable
+/// mass in the f32 algorithm domain and is dropped here exactly like a zero-weight
+/// observation (see the `fit()` weight contract), keeping the "every weight in the context
+/// is positive" invariant intact.
+fn commit_observation<Y, S>(
+    observations: &mut Vec<Observation<usize, Y, S, f32>>,
+    covariate_statistics: &mut [CovariateStatistic],
+    finalized: f32,
+) {
+    if finalized > 0.0 {
+        observations.last_mut().unwrap().weight = finalized;
+        let statistic = covariate_statistics.last_mut().unwrap();
+        statistic.weight += finalized;
+        statistic.cumulative_weight += finalized;
+    } else {
+        observations.pop();
+    }
+}
+
+/// Close the covariate whose observations have all been committed: if every one of its
+/// observations was dropped (narrowed to 0.0f32), the covariate carries no mass and must not
+/// enter the grid — exactly like a covariate whose observations all have zero weight.
+fn close_covariate<X>(
+    covariate_statistics: &mut Vec<CovariateStatistic>,
+    unique_covariates: &mut Vec<X>,
+) {
+    if covariate_statistics.last().unwrap().weight == 0.0 {
+        covariate_statistics.pop();
+        unique_covariates.pop();
+    }
+}
+
 /// Build the algorithm context: observations sorted and deduplicated, covariate grid and
 /// per-covariate weight statistics.
 ///
@@ -34,6 +70,10 @@ pub fn preprocess_uncensored<X: Float, Y: Float, W: Float>(
 /// all have zero weight does not enter the grid. Downstream kernels divide by observation
 /// and covariate weights and rely on every weight in the context being positive. With all
 /// observations dropped, the returned context is empty (the empty fit).
+///
+/// Weights are narrowed to f32 here (see the `fit()` weight contract); positive weights
+/// that narrow to 0.0f32 are dropped like zero weights ([`commit_observation`]), with the
+/// covariate grid and threshold grid matching the post-drop subsample exactly.
 pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
     x: &[X],
     y: &[Y],
@@ -89,28 +129,34 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
         last_w_accum = weight[index];
         covariate_statistics.push(CovariateStatistic {
             weight: 0.0,
-            cumulative_weight: 0.0, // We update the cumulative weight once duplicates are handled
+            cumulative_weight: 0.0, // Accumulated as each observation's weight is committed
         });
         unique_covariates.push(x[index]);
     }
 
-    let mut current_statistic = &mut covariate_statistics[0];
     for index in covariate_sorted_indices {
         let covariate_equal = x[index] == *unique_covariates.last().unwrap();
-        let last_observation = observations.last_mut().unwrap();
-        let response_equal = y[index] == last_observation.y;
-        let censoring_equal = observed(index) == last_observation.observed;
+        let (response_equal, censoring_equal) = {
+            let last_observation = observations.last().unwrap();
+            (
+                y[index] == last_observation.y,
+                observed(index) == last_observation.observed,
+            )
+        };
 
         if covariate_equal && response_equal && censoring_equal {
             // At the same observation -> just accumulate observation weight in W precision
             last_w_accum = last_w_accum + weight[index];
         } else if covariate_equal {
             // New observation but same covariate -> finalize the previous observation's
-            // weight (narrow to f32), accumulate covariate weight from it, and start a new
-            // observation with a fresh W accumulator.
-            let finalized = last_w_accum.to_f32().unwrap();
-            last_observation.weight = finalized;
-            current_statistic.weight += finalized;
+            // weight (narrow to f32, dropping it if no mass survives the narrowing),
+            // accumulate covariate weight from it, and start a new observation with a
+            // fresh W accumulator.
+            commit_observation(
+                &mut observations,
+                &mut covariate_statistics,
+                last_w_accum.to_f32().unwrap(),
+            );
             observations.push(Observation {
                 x: unique_covariates.len() - 1, // we stay with the same covariate
                 y: y[index],
@@ -120,16 +166,21 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
             last_w_accum = weight[index];
         } else {
             // New observation and new covariate -> finalize the previous observation's
-            // weight, accumulate covariate weight from it, collect the cumulative covariate
-            // weight, push a new covariate statistic, push a new observation, and seed a
-            // fresh W accumulator.
-            let finalized = last_w_accum.to_f32().unwrap();
-            last_observation.weight = finalized;
-            current_statistic.weight += finalized;
-            current_statistic.cumulative_weight += current_statistic.weight;
+            // weight, accumulate covariate weight from it, close the finished covariate
+            // (dropping it if all its observations were dropped), push a new covariate
+            // statistic chaining the cumulative weight, push a new observation, and seed
+            // a fresh W accumulator.
+            commit_observation(
+                &mut observations,
+                &mut covariate_statistics,
+                last_w_accum.to_f32().unwrap(),
+            );
+            close_covariate(&mut covariate_statistics, &mut unique_covariates);
             let new_statistic = CovariateStatistic {
                 weight: 0.0,
-                cumulative_weight: current_statistic.cumulative_weight,
+                cumulative_weight: covariate_statistics
+                    .last()
+                    .map_or(0.0, |statistic| statistic.cumulative_weight),
             };
             covariate_statistics.push(new_statistic);
             observations.push(Observation {
@@ -140,15 +191,15 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
             });
             last_w_accum = weight[index];
             unique_covariates.push(x[index]);
-
-            current_statistic = covariate_statistics.last_mut().unwrap();
         }
     }
-    // Finalize the last in-progress observation.
-    let finalized = last_w_accum.to_f32().unwrap();
-    observations.last_mut().unwrap().weight = finalized;
-    current_statistic.weight += finalized;
-    current_statistic.cumulative_weight += current_statistic.weight;
+    // Finalize the last in-progress observation and close the last covariate.
+    commit_observation(
+        &mut observations,
+        &mut covariate_statistics,
+        last_w_accum.to_f32().unwrap(),
+    );
+    close_covariate(&mut covariate_statistics, &mut unique_covariates);
     // Could shrink to fit `observations`, `unique_covariates` and `covariate_statistics` here if
     // duplicates are common, and we care about memory usage
 
