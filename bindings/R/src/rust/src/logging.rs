@@ -1,5 +1,5 @@
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
-use extendr_api::print_r_output;
+use extendr_api::print_r_error;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
 use isodistrreg::ProgressTracker;
 use std::time::Duration;
@@ -14,8 +14,9 @@ unsafe extern "C" {
 /// stale lines, so we keep our rendered template comfortably under this limit.
 const R_CONSOLE_WIDTH: u16 = 80;
 
-/// Routes indicatif's draw calls through R's console output stream so the progress bar appears in
-/// plain terminal R, RStudio, knitr, and anywhere `Rprintf` lands — not just on stdout.
+/// Routes indicatif's draw calls through R's error/message stream (`REprintf` → stderr) so the
+/// progress bar appears in plain terminal R, RStudio, and knitr without polluting captured
+/// stdout — matching the `idr()` documentation, which promises the bar on stderr.
 ///
 /// This works because indicatif renders single-line bars by writing `\r` + content + padding +
 /// flush; the `move_cursor_*` calls reduce to no-ops with `n = 0`. RStudio's console is fine
@@ -40,18 +41,18 @@ impl TermLike for RTerm {
         Ok(())
     }
     fn write_line(&self, s: &str) -> std::io::Result<()> {
-        print_r_output(s);
-        print_r_output("\n");
+        print_r_error(s);
+        print_r_error("\n");
         Ok(())
     }
     fn write_str(&self, s: &str) -> std::io::Result<()> {
-        print_r_output(s);
+        print_r_error(s);
         Ok(())
     }
     fn clear_line(&self) -> std::io::Result<()> {
-        print_r_output("\r");
-        print_r_output(" ".repeat(R_CONSOLE_WIDTH as usize));
-        print_r_output("\r");
+        print_r_error("\r");
+        print_r_error(" ".repeat(R_CONSOLE_WIDTH as usize));
+        print_r_error("\r");
         Ok(())
     }
     fn flush(&self) -> std::io::Result<()> {
