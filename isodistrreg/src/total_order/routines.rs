@@ -75,7 +75,12 @@ fn pool_impl<D: Direction, F: Float, const ZERO_WEIGHT_BLOCKS: bool>(
 }
 
 /// Fast path for a single-threshold fit: a binary isotonic regression where each covariate's
-/// "response" is its share of uncensored weight.
+/// "response" is its share of event weight among the mass at risk at the threshold.
+///
+/// Censored preprocessing discards censored observations sorting before the (single) event
+/// threshold and keeps the rest at risk through it (the events-before-censorings tie
+/// convention), so every group's total weight is exactly its at-risk mass at the threshold
+/// and the share is the group's Kaplan-Meier CDF.
 pub fn single_response<D: Direction, Y>(
     observations: Vec<Observation<usize, Y, bool, f32>>,
     covariate_statistics: Vec<CovariateStatistic>,

@@ -4,10 +4,8 @@ use crate::prediction::{CovariateInterpolator, ResponseCoordinate, search_respon
 use crate::preprocessing::validate;
 use crate::routines::transpose;
 use crate::structures::{Increasing, Observation, StochasticOrder};
-use crate::total_order::hazard_rate_order::preprocess_censored as preprocess_hazard_rate_censored;
 use crate::total_order::prediction::{CovariateSearch, GridPredictorState, Interpolation};
-use crate::total_order::preprocessing::preprocess_uncensored;
-use crate::total_order::stochastic_dominance::preprocess_censored as preprocess_sd_censored;
+use crate::total_order::preprocessing::{preprocess_censored, preprocess_uncensored};
 use crate::total_order::weight_noise_floor;
 use crate::total_order::{hazard_rate_order, stochastic_dominance};
 use crate::{Decreasing, IntoCdfIterator, IsotonicDistributionalRegressionFit, ProgressTracker};
@@ -72,7 +70,7 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
         });
 
         // Preprocess once per case, then dispatch to the monomorphic f32 algorithm body. Each
-        // algorithm runs against its pre-built `AlgorithmContext` (or `CensoredSdContext`); the
+        // algorithm runs against its pre-built `AlgorithmContext` (or `CensoredContext`); the
         // `W` narrowing happens entirely inside `preprocess_*`.
         // Zero-weight observations are dropped during preprocessing (see the fit()
         // contract), so a censoring flag carried by a zero-weight observation must not
@@ -95,7 +93,7 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                                 .iter()
                                 .map(|&v| X::zero() - v)
                                 .collect::<Vec<_>>();
-                            let context = preprocess_sd_censored(
+                            let context = preprocess_censored(
                                 &negated_covariates,
                                 responses,
                                 indicators,
@@ -127,7 +125,7 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                                 thresholds,
                             }
                         } else {
-                            let context = preprocess_sd_censored(
+                            let context = preprocess_censored(
                                 covariates,
                                 responses,
                                 indicators,
@@ -152,12 +150,12 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                                 .iter()
                                 .map(|&v| X::zero() - v)
                                 .collect::<Vec<_>>();
-                            let context = preprocess_hazard_rate_censored(
+                            let context = preprocess_censored(
                                 &negated_covariates,
                                 responses,
                                 indicators,
                                 weights_to_use,
-                            );
+                            )?;
                             let mut cdfs =
                                 hazard_rate_order::censored::<Increasing, _, _>(&context, progress);
                             let mut unique_covariates = context.unique_covariates;
@@ -176,21 +174,21 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                             AlgorithmOutput {
                                 cdfs,
                                 unique_covariates,
-                                thresholds: context.unique_responses,
+                                thresholds: context.thresholds,
                             }
                         } else {
-                            let context = preprocess_hazard_rate_censored(
+                            let context = preprocess_censored(
                                 covariates,
                                 responses,
                                 indicators,
                                 weights_to_use,
-                            );
+                            )?;
                             let cdfs =
                                 hazard_rate_order::censored::<Increasing, _, _>(&context, progress);
                             AlgorithmOutput {
                                 cdfs,
                                 unique_covariates: context.unique_covariates,
-                                thresholds: context.unique_responses,
+                                thresholds: context.thresholds,
                             }
                         }
                     }
@@ -456,6 +454,44 @@ pub struct AlgorithmContext<X, Y, S> {
     pub unique_covariates: Vec<X>,
     /// Thresholds
     pub unique_responses: Vec<Y>,
+}
+
+/// Preprocessed input for the censored total-order algorithms (the stochastic-dominance
+/// kernels and the hazard-rate kernel).
+///
+/// Holds the deduplicated problem with f32 weights — preprocessing sums incoming weights
+/// and downcasts at its output boundary so the entire post-preprocessing algorithm body runs
+/// in f32. Covariate values stay in their input precision `X` and threshold keys in `Y`
+/// (they're only used for sort/compare).
+///
+/// `observations[i].y` is an index into `thresholds`, not a raw response value. Censored
+/// observations sorting before the first event are discarded and the remaining censored
+/// observations point to the latest threshold at or below their response (see
+/// [`crate::total_order::preprocessing::preprocess_censored`]), so every group's weight in
+/// `covariate_statistics` is exactly its at-risk mass at its first threshold.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CensoredContext<X, Y> {
+    /// Holds `n` items sorted by response from low to high, uncensored < censored (and covariate
+    /// for stable tests).
+    pub observations: Vec<Observation<usize, usize, bool, f32>>,
+    /// Holds information about each covariate
+    pub covariate_statistics: Vec<CovariateStatistic>,
+    /// Unique covariate values, sorted increasing.
+    pub unique_covariates: Vec<X>,
+    /// Only thresholds that have at least one uncensored observation, sorted increasing.
+    pub thresholds: Vec<Y>,
+}
+
+impl<X, Y> CensoredContext<X, Y> {
+    pub fn n(&self) -> usize {
+        self.observations.len()
+    }
+    pub fn n_covariate(&self) -> usize {
+        self.covariate_statistics.len()
+    }
+    pub fn n_threshold(&self) -> usize {
+        self.thresholds.len()
+    }
 }
 
 pub fn allocate_and_sort<S, R, I: Into<Observation<f64, R, S>>>(

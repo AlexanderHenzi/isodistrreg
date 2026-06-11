@@ -15,36 +15,88 @@ impl Partition {
     }
 }
 
-/// Preprocessed input for the censored stochastic-dominance fast algorithm.
+/// Combinatorial oracle for "is the interval Kaplan-Meier survival over the covariate
+/// interval `[r, s]` exactly 0 once observations `..=data_index` are consumed?", in O(1)
+/// per query.
 ///
-/// Holds the deduplicated problem with f32 weights — preprocessing sums incoming weights
-/// and downcasts at its output boundary so the entire post-preprocessing algorithm body runs
-/// in f32. Covariate values stay in their input precision `X` and threshold keys in `Y`
-/// (they're only used for sort/compare).
+/// Derivation: an interval Kaplan-Meier survival is exactly 0 iff the interval's last
+/// positive-weight observation (response order, events before censorings at ties) is an
+/// EVENT — only then is some factor exactly `1 - w/w`. Clipping preserves this: for any
+/// split, the side containing that observation is itself exactly 0 by induction over the
+/// span, so the clip interval's lower edge is 0. The condition is purely combinatorial —
+/// immune to f32 drift — and monotone in `data_index`: once the interval's last
+/// observation is consumed, it holds forever. CDF values that are mathematically exactly
+/// 1.0 must come out as exactly 1.0 (downstream consumers like `prediction::mean`'s
+/// proper-CDF gate test `== 1.0`), which the estimator cells achieve by consulting this
+/// oracle on every write.
 ///
-/// `observations[i].y` is an index into `thresholds`, not a raw response value.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CensoredSdContext<X, Y> {
-    /// Holds `n` items sorted by response from low to high, uncensored < censored (and covariate
-    /// for stable tests).
-    pub observations: Vec<Observation<usize, usize, bool, f32>>,
-    /// Holds information about each covariate
-    pub covariate_statistics: Vec<CovariateStatistic>,
-    /// Unique covariate values, sorted increasing.
-    pub unique_covariates: Vec<X>,
-    /// Only thresholds that have at least one uncensored observation, sorted increasing.
-    pub thresholds: Vec<Y>,
+/// Representation: per covariate `x`, `m[x] = (t[x] << 1) | e[x]`, where `t[x]` is the
+/// 1-based index into the response-sorted observations of x's last observation (0 = none)
+/// and `e[x]` is whether that observation is an event. The `t` values are distinct across
+/// covariates (each observation index belongs to exactly one covariate), so a range-max
+/// over `m` is achieved by the max-`t` covariate and a single query yields both "which
+/// observation is the interval's last" and "is it an event". A sparse table over `m`
+/// answers inclusive range-max queries in O(1) after an O(C log C) build.
+#[derive(Debug)]
+pub struct CompletionIndex {
+    /// Sparse table; `levels[k][i]` is the max of `m[i..i + 2^k]`, so `levels[0]` is `m`
+    /// itself and `levels[k]` has `n_covariate + 1 - 2^k` entries.
+    levels: Vec<Vec<u32>>,
 }
 
-impl<X, Y> CensoredSdContext<X, Y> {
-    pub fn n(&self) -> usize {
-        self.observations.len()
+impl CompletionIndex {
+    pub fn new(observations: &[Observation<usize, usize, bool, f32>], n_covariate: usize) -> Self {
+        // `t` is stored in the upper 31 bits of a u32; data sizes anywhere near that
+        // limit are unrepresentable long before this point (the O(C²) estimator triangle).
+        debug_assert!(observations.len() < (u32::MAX >> 1) as usize);
+
+        // Last observation per covariate: 1-based index and event bit. Preprocessing
+        // guarantees every observation in the context has positive weight (zero-weight
+        // observations are dropped) and every covariate has at least one observation.
+        let mut m = vec![0u32; n_covariate];
+        for (index, observation) in observations.iter().enumerate() {
+            debug_assert!(observation.weight > 0.0);
+            m[observation.x] = ((index as u32 + 1) << 1) | u32::from(observation.observed);
+        }
+
+        let mut levels = vec![m];
+        let mut width = 1;
+        while 2 * width <= n_covariate {
+            let prev = levels.last().unwrap();
+            let next = (0..=n_covariate - 2 * width)
+                .map(|i| prev[i].max(prev[i + width]))
+                .collect();
+            levels.push(next);
+            width *= 2;
+        }
+        Self { levels }
     }
-    pub fn n_covariate(&self) -> usize {
-        self.covariate_statistics.len()
+
+    /// Inclusive range-max of `m` over covariates `[r, s]`.
+    #[inline(always)]
+    fn range_max(&self, r: usize, s: usize) -> u32 {
+        debug_assert!(r <= s);
+        let len = s - r + 1;
+        let level = (usize::BITS - 1 - len.leading_zeros()) as usize; // floor(log2(len))
+        let row = &self.levels[level];
+        row[r].max(row[s + 1 - (1 << level)])
     }
-    pub fn n_threshold(&self) -> usize {
-        self.thresholds.len()
+
+    /// Is the interval Kaplan-Meier survival over covariates `[r, s]` exactly 0 once
+    /// observations `..=data_index` are consumed? True iff the interval's last
+    /// observation is an event that has already been consumed. (`m == 0` ⇒ no
+    /// observation ⇒ false via the event-bit check.)
+    #[inline(always)]
+    pub fn completes(&self, r: usize, s: usize, data_index: usize) -> bool {
+        let m = self.range_max(r, s);
+        (m & 1) == 1 && ((m >> 1) as usize) <= data_index + 1
+    }
+
+    /// [`Self::completes`] with every observation consumed: true iff the interval's last
+    /// observation is an event.
+    #[inline(always)]
+    pub fn completes_with_all_data(&self, r: usize, s: usize) -> bool {
+        self.range_max(r, s) & 1 == 1
     }
 }
 
@@ -81,10 +133,14 @@ pub struct Estimates {
     pub values: Vec<f32>,
     /// Cold half of each (r, s). Indexed identically to `values`.
     pub cold: Vec<SurvivalComputationCold>,
+    /// Exact-0 completion oracle. Consulted on every cell write so that intervals whose
+    /// survival is mathematically exactly 0 are pinned to exactly 0 the moment they
+    /// complete, immune to the f32 drift of the running Kaplan-Meier bookkeeping.
+    pub completion: CompletionIndex,
 }
 
 impl Estimates {
-    pub fn new(n: usize, start_count: usize) -> Self {
+    pub fn new(n: usize, start_count: usize, completion: CompletionIndex) -> Self {
         let total = n * (n + 1) / 2;
         let values = vec![1.0; total];
         let mut cold = vec![
@@ -109,6 +165,7 @@ impl Estimates {
             len: n,
             values,
             cold,
+            completion,
         }
     }
     /// Index into the array - `r` is inclusive, `s` is inclusive
@@ -148,11 +205,12 @@ impl Estimates {
         consumed_weight: BITree<f32>,
         covariate_statistics: &[CovariateStatistic],
         start_count: usize,
+        completion: CompletionIndex,
     ) -> Self {
         let len = consumed_weight.len();
         debug_assert_eq!(covariate_statistics.len(), len);
 
-        let mut estimates = Estimates::new(len, start_count);
+        let mut estimates = Estimates::new(len, start_count, completion);
 
         let consumed_weight_plain: Vec<f32> = Vec::from(consumed_weight);
 
@@ -190,14 +248,29 @@ impl Estimates {
                     curr_cold.raw_value = prev_value;
                 }
                 debug_assert!(curr_cold.raw_value.is_finite());
+                // Bridge values come from f32 ratio/cumulative-weight arithmetic and a
+                // bridged partition can survive untouched to the final row, so completed
+                // intervals are pinned to exactly 0 here too. The uncensored prefix is
+                // all-observed (`accelerated_pava` stops at the first censored
+                // observation), so whenever the interval's last observation lies inside
+                // the consumed prefix its event bit holds automatically.
+                if estimates.completion.completes(r, s, start_count - 1) {
+                    curr_cold.raw_value = 0.0;
+                }
                 *curr_value = curr_cold.raw_value;
             }
             index += s;
 
-            // Diagonal item last
-            let share = weight_consumed / covariate_statistics[s].weight;
+            // Diagonal item last; pinned to exactly 0 when complete, like the
+            // off-diagonal cells above (`weight_consumed` is a BIT-reconstructed f32 sum
+            // and need not equal the covariate's total weight bitwise).
+            let diag_raw = if estimates.completion.completes(s, s, start_count - 1) {
+                0.0
+            } else {
+                1.0 - weight_consumed / covariate_statistics[s].weight
+            };
             let diag_cold = &mut estimates.cold[index];
-            diag_cold.raw_value = 1.0 - share;
+            diag_cold.raw_value = diag_raw;
             diag_cold.weight = weight_consumed;
             estimates.values[index] = diag_cold.raw_value;
             index += 1;
