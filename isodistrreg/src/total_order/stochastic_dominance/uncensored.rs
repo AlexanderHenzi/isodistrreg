@@ -18,6 +18,11 @@ pub fn algorithm<D: Direction, X: Float, Y: Float>(
     } = context;
     progress.set_total(unique_responses.len());
 
+    if observations.is_empty() {
+        // Preprocessing dropped every observation (all had zero weight): the empty
+        // fit, with no thresholds and no covariates.
+        return Vec::with_capacity(0);
+    }
     if unique_responses.len() == 1 {
         // Single threshold -> all one's
         return vec![1.0; unique_covariates.len()];

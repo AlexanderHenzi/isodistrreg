@@ -54,6 +54,11 @@ pub trait IsotonicDistributionalRegressionFit: Sized {
     /// caller can pass `f32` or `f64`-typed weights regardless of `X`/`Y`. The implementation
     /// narrows once on read to whatever precision its algorithm operates in (`f32` for the
     /// total-order kernels, `f64` for the OSQP-backed partial-order solver).
+    ///
+    /// Zero weights are allowed; such observations are dropped during preprocessing, so the
+    /// fit equals the fit on the positive-weight subsample — including the threshold grid
+    /// and covariate set. With every weight zero, the result is the empty fit (a sub-CDF
+    /// that is 0 everywhere).
     #[allow(clippy::too_many_arguments)]
     fn fit<W: Float>(
         x: &[Self::X],

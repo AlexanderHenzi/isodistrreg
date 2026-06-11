@@ -51,18 +51,18 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     let mut cdfs = Vec::with_capacity(unique_responses.len() * n_covariate);
     let mut partitions: Vec<WeightedPartition> = Vec::with_capacity(n_covariate);
 
-    // Index (+1; 0 = none) of each covariate's last positive-weight observation. Once
-    // it is consumed no mass remains in the group, so the raw Kaplan-Meier estimator
-    // (when it is an event) respectively the at-risk mass (when censored) is exactly
-    // 0 — a purely combinatorial fact. Pin those cases below: the running f32 weight
+    // Index (+1; 0 = none) of each covariate's last observation — preprocessing
+    // guarantees every observation in the context has positive weight. Once it is
+    // consumed no mass remains in the group, so the raw Kaplan-Meier estimator (when
+    // it is an event) respectively the at-risk mass (when censored) is exactly 0 — a
+    // purely combinatorial fact. Pin those cases below: the running f32 weight
     // bookkeeping drifts a few ulps off the exact zero otherwise. Whether the last
     // observation is an event decides DEATH (CDF pinned at 1) versus FROZEN (all mass
     // censored away, estimator stays positive, CDF stays below 1).
     let mut last_positive = vec![0usize; n_covariate];
     for (d, o) in observations.iter().enumerate() {
-        if o.weight > 0.0 {
-            last_positive[o.x] = d + 1;
-        }
+        debug_assert!(o.weight > 0.0);
+        last_positive[o.x] = d + 1;
     }
 
     let mut data_index = 0;
@@ -95,12 +95,8 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         // Compute hazard rates in a sparse way
         let first_observation = &observations[data_index];
         assert!(first_observation.observed);
-        // Zero-weight events carry no mass (and would divide 0/0 against an exactly
-        // pinned at-risk mass).
-        if first_observation.weight > 0.0 {
-            estimators[first_observation.x] -=
-                first_observation.weight / at_risk[first_observation.x];
-        }
+        estimators[first_observation.x] -=
+            first_observation.weight / at_risk[first_observation.x];
         if data_index + 1 == last_positive[first_observation.x] {
             // This event consumes the group's whole remaining mass — death, exactly.
             estimators[first_observation.x] = 0.0;
@@ -118,9 +114,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             let previous = &observations[data_index - 1];
             let observation = &observations[data_index];
 
-            if observation.weight > 0.0 {
-                estimators[observation.x] -= observation.weight / at_risk[observation.x];
-            }
+            estimators[observation.x] -= observation.weight / at_risk[observation.x];
             if data_index + 1 == last_positive[observation.x] {
                 // This event consumes the group's whole remaining mass — death, exactly.
                 estimators[observation.x] = 0.0;
@@ -172,15 +166,12 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         let observation = observations[data_index];
         debug_assert!(!observation.observed);
 
-        // Zero-weight observations carry no mass (and could divide 0/0 when the
-        // covariate's remaining mass is already exhausted).
-        if observation.weight > 0.0 {
-            at_risk[observation.x] *=
-                1.0 - observation.weight / covariate_statistics[observation.x].weight;
-            covariate_statistics[observation.x].weight -= observation.weight;
-            if data_index + 1 == last_positive[observation.x] {
-                at_risk[observation.x] = 0.0;
-            }
+        at_risk[observation.x] *=
+            1.0 - observation.weight / covariate_statistics[observation.x].weight;
+        covariate_statistics[observation.x].weight -= observation.weight;
+        if data_index + 1 == last_positive[observation.x] {
+            // Fully censored away: the remaining at-risk mass is exactly 0.
+            at_risk[observation.x] = 0.0;
         }
         data_index += 1;
     }
@@ -236,14 +227,10 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             {
                 let observation = &observations[data_index];
 
-                // Zero-weight events carry no mass (and would divide 0/0 once the
-                // group's remaining mass is exactly pinned to 0).
-                if observation.weight > 0.0 {
-                    let share_of_remaining =
-                        observation.weight / covariate_statistics[observation.x].weight;
-                    estimators[observation.x] *= 1.0 - share_of_remaining;
-                    covariate_statistics[observation.x].weight -= observation.weight;
-                }
+                let share_of_remaining =
+                    observation.weight / covariate_statistics[observation.x].weight;
+                estimators[observation.x] *= 1.0 - share_of_remaining;
+                covariate_statistics[observation.x].weight -= observation.weight;
                 if data_index + 1 == last_positive[observation.x] {
                     // This event consumes the group's whole remaining mass — death,
                     // exactly.
@@ -280,15 +267,12 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             let observation = observations[data_index];
             debug_assert!(!observation.observed);
 
-            // Zero-weight observations carry no mass (and could divide 0/0 when the
-            // covariate's remaining mass is already exhausted).
-            if observation.weight > 0.0 {
-                at_risk[observation.x] *=
-                    1.0 - observation.weight / covariate_statistics[observation.x].weight;
-                covariate_statistics[observation.x].weight -= observation.weight;
-                if data_index + 1 == last_positive[observation.x] {
-                    at_risk[observation.x] = 0.0;
-                }
+            at_risk[observation.x] *=
+                1.0 - observation.weight / covariate_statistics[observation.x].weight;
+            covariate_statistics[observation.x].weight -= observation.weight;
+            if data_index + 1 == last_positive[observation.x] {
+                // Fully censored away: the remaining at-risk mass is exactly 0.
+                at_risk[observation.x] = 0.0;
             }
             data_index += 1;
         }

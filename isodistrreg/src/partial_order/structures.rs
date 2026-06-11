@@ -217,6 +217,25 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
         let uncensored_case = |covariate_order| -> Self {
             let mut algorithm_context =
                 preprocess_uncensored(x, y, weight_to_use, &covariate_order);
+            if algorithm_context.thresholds.is_empty() {
+                // Every observation was dropped as zero-weight: nothing to fit — the
+                // empty fit (sub-CDF ≡ 0 everywhere).
+                return Fit {
+                    increasing: !decreasing,
+                    cdfs: Vec::with_capacity(0),
+                    global_cdf: Vec::with_capacity(0),
+
+                    covariate_groups: covariate_order,
+                    covariates: Vec::with_capacity(0),
+                    ordering_info: OrderingInfo::empty(),
+
+                    thresholds: Vec::with_capacity(0),
+                    quality_indicators: QualityIndicators {
+                        precision: 0.0,
+                        convergence_fraction: 0.0,
+                    },
+                };
+            }
             // Upcast once at the algorithm boundary — OSQP runs in f64.
             let algorithm_context_f64 = algorithm_context.to_f64();
             let algo_result = match response_order {
@@ -283,9 +302,11 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                 StochasticOrder::StochasticDominance => {
                     let algorithm_context =
                         preprocess_censored(x, y, indicators, weight_to_use, &covariate_order);
-                    // All observations censored: zero events, so the Kaplan-Meier sub-CDF
-                    // has no jump points anywhere — the empty fit (sub-CDF ≡ 0).
-                    if indicators.iter().all(|&b| !b) {
+                    // No thresholds means zero (positive-weight) events — every
+                    // observation is censored or was dropped as zero-weight — so the
+                    // Kaplan-Meier sub-CDF has no jump points anywhere: the empty fit
+                    // (sub-CDF ≡ 0).
+                    if algorithm_context.thresholds.is_empty() {
                         let empty = Fit {
                             increasing: !decreasing,
                             cdfs: Vec::with_capacity(0),

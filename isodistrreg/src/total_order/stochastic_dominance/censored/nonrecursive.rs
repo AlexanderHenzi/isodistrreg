@@ -44,7 +44,9 @@ pub fn algorithm(
         n_threshold,
     } = format_censored(x, y, observed, weight)?;
 
-    let n = y.len();
+    // Zero-weight observations were dropped by `format_censored`; everything below
+    // runs on the filtered length.
+    let n = covariate.len();
 
     // Contains: (x index, y index, observed, weight), sorted by y index
     let data: Vec<_> = izip!(covariate, response, observed_sorted, weight_sorted).collect();
@@ -62,15 +64,14 @@ pub fn algorithm(
 
             // Weighted Kaplan-Meier over the covariate cell [r, s]: the survival drops
             // at OBSERVED events by the event's share of the still-at-risk weight;
-            // censored observations only leave the at-risk set. Zero-weight
-            // observations carry no mass (factor exactly 1, and skipping them avoids
-            // 0/0 when the at-risk weight is already exhausted).
+            // censored observations only leave the at-risk set. All weights are
+            // positive (zero-weight observations are dropped in `format_censored`).
             let mut remaining_weight: f64 = data_sub_filter.iter().map(|&(_, _, _, w)| w).sum();
             let mut survival = 1.0;
             let survival_y = data_sub_filter
                 .iter()
                 .map(|&(_, j, o, w)| {
-                    if o && w > 0.0 {
+                    if o {
                         survival *= 1.0 - w / remaining_weight;
                     }
                     remaining_weight -= w;
@@ -202,16 +203,32 @@ fn format_censored(
     observed: &[bool],
     weights: &[f64],
 ) -> Result<AlgorithmInput, Error> {
-    let n = validate(
+    validate(
         covariate.chunks_exact(1),
         response,
         Some(observed),
         Some(weights),
     )?;
 
+    // Zero-weight observations carry no statistical information — drop them before
+    // anything is aggregated, so neither their responses nor their covariates enter
+    // the output. `validate` has rejected negative and non-finite weights, so `> 0`
+    // is exactly "nonzero".
     let mut x_sorted_xywo = izip!(covariate, response, weights, observed)
         .map(|(&x, &y, &w, &o)| (x, y, w, o))
+        .filter(|&(_, _, w, _)| w > 0.0)
         .collect::<Vec<_>>();
+    let n = x_sorted_xywo.len();
+    if n == 0 {
+        return Ok(AlgorithmInput {
+            y: Vec::with_capacity(0),
+            x: Vec::with_capacity(0),
+            observed: Vec::with_capacity(0),
+            weight: Vec::with_capacity(0),
+            n_covariate: 0,
+            n_threshold: 0,
+        });
+    }
     x_sorted_xywo.sort_unstable_by(|l, r| {
         l.0.partial_cmp(&r.0)
             .unwrap()
@@ -372,11 +389,22 @@ fn format_censored_single(
     observed: &[bool],
     weights: &[f64],
 ) -> Result<PreprocessingResult, Error> {
-    let n = validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
+    validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
 
+    // Zero-weight observations are dropped before anything is aggregated — same
+    // contract as `format_censored`.
     let mut x_sorted_xycw = izip!(x, y, observed, weights)
         .map(|(&x, &y, &c, &w)| (x, y, c, w))
+        .filter(|&(_, _, _, w)| w > 0.0)
         .collect::<Vec<_>>();
+    let n = x_sorted_xycw.len();
+    if n == 0 {
+        return Ok(PreprocessingResult {
+            below_threshold: Vec::with_capacity(0),
+            from_covariate_index_to_data_index: Vec::with_capacity(0),
+            cumulative_weight: Vec::with_capacity(0),
+        });
+    }
     x_sorted_xycw.sort_unstable_by(|&(x_l, _, _, _), &(x_r, _, _, _)| x_l.total_cmp(&x_r));
 
     let mut below_threshold = vec![];

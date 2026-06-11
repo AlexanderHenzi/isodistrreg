@@ -349,15 +349,15 @@ fn pin_completed_mass<D: Direction, X, Y>(input: &CensoredSdContext<X, Y>, cdf: 
         return;
     }
 
-    // Last positive-weight observation per covariate: index (+1; 0 = none) and
-    // whether it is an event.
+    // Last observation per covariate: index (+1; 0 = none) and whether it is an
+    // event. Preprocessing guarantees every observation in the context has positive
+    // weight.
     let mut t = vec![0usize; n_covariate];
     let mut e = vec![false; n_covariate];
     for (index, observation) in input.observations.iter().enumerate() {
-        if observation.weight > 0.0 {
-            t[observation.x] = index + 1;
-            e[observation.x] = observation.observed;
-        }
+        debug_assert!(observation.weight > 0.0);
+        t[observation.x] = index + 1;
+        e[observation.x] = observation.observed;
     }
     // A decreasing fit is the increasing fit on the mirrored covariate order.
     if !D::IS_INCREASING {

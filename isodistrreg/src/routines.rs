@@ -63,11 +63,20 @@ pub fn transpose<T: Copy>(matrix: &mut Vec<T>, m: usize, n: usize) {
     *matrix = out;
 }
 
-pub fn argsort_unstable_by<D: Direction, F>(mut cmp: F, n: usize) -> Vec<usize>
+pub fn argsort_unstable_by<D: Direction, F>(cmp: F, n: usize) -> Vec<usize>
 where
     F: FnMut(usize, usize) -> Ordering,
 {
-    let mut idx: Vec<usize> = (0..n).collect();
+    argsort_indices_unstable_by::<D, F>(cmp, (0..n).collect())
+}
+
+/// [`argsort_unstable_by`] over a caller-built index vector, which need not be
+/// contiguous — e.g. pre-filtered to positive-weight observations, so dropped elements
+/// are never even compared.
+pub fn argsort_indices_unstable_by<D: Direction, F>(mut cmp: F, mut idx: Vec<usize>) -> Vec<usize>
+where
+    F: FnMut(usize, usize) -> Ordering,
+{
     idx.sort_unstable_by(|&i, &j| {
         let ord = cmp(i, j);
         if D::IS_INCREASING { ord } else { ord.reverse() }
