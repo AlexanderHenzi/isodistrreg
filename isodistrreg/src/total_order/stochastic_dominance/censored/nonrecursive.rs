@@ -6,7 +6,7 @@ use itertools::{izip, multiunzip};
 use rayon::prelude::*;
 use std::cmp::Ordering;
 
-/// Assume all unique, no duplicates, equal weights
+/// Assume all unique, no duplicates
 pub fn algorithm(
     x: &[f64],
     y: &[f64],
@@ -38,41 +38,47 @@ pub fn algorithm(
     let AlgorithmInput {
         y: response,
         x: covariate,
-        observed: censoring,
+        observed: observed_sorted,
+        weight: weight_sorted,
         n_covariate,
         n_threshold,
-        ..
     } = format_censored(x, y, observed, weight)?;
 
     let n = y.len();
 
-    // Contains: (x index, y index, censoring), sorted by y index
-    let data: Vec<_> = izip!(covariate, response, censoring).collect();
+    // Contains: (x index, y index, observed, weight), sorted by y index
+    let data: Vec<_> = izip!(covariate, response, observed_sorted, weight_sorted).collect();
     let compute_survival_r = |r: usize| {
         let mut data_sub_filter = data
             .iter()
             .copied()
-            .filter(|&(i, _, _)| i >= r)
+            .filter(|&(i, _, _, _)| i >= r)
             .collect::<Vec<_>>();
-        debug_assert!(data_sub_filter.iter().all(|&(i, _, _)| i >= r));
+        debug_assert!(data_sub_filter.iter().all(|&(i, _, _, _)| i >= r));
 
         let mut survival_sy = Vec::with_capacity(n - r);
         for s in (r..n).rev() {
-            debug_assert!(data_sub_filter.iter().all(|&(i, _, _)| i <= s));
-            let n_rs = s - r + 1;
+            debug_assert!(data_sub_filter.iter().all(|&(i, _, _, _)| i <= s));
 
+            // Weighted Kaplan-Meier over the covariate cell [r, s]: the survival drops
+            // at OBSERVED events by the event's share of the still-at-risk weight;
+            // censored observations only leave the at-risk set. Zero-weight
+            // observations carry no mass (factor exactly 1, and skipping them avoids
+            // 0/0 when the at-risk weight is already exhausted).
+            let mut remaining_weight: f64 = data_sub_filter.iter().map(|&(_, _, _, w)| w).sum();
+            let mut survival = 1.0;
             let survival_y = data_sub_filter
                 .iter()
-                .enumerate()
-                .scan(1.0, |s, (i_rs, &(_, j, c))| {
-                    if !c {
-                        *s *= (n_rs - i_rs - 1) as f64 / (n_rs - i_rs) as f64;
+                .map(|&(_, j, o, w)| {
+                    if o && w > 0.0 {
+                        survival *= 1.0 - w / remaining_weight;
                     }
-                    Some((j, *s))
+                    remaining_weight -= w;
+                    (j, survival)
                 })
                 .collect::<Vec<_>>();
             survival_sy.push(survival_y);
-            data_sub_filter.retain(|&(i, _, _)| i != s);
+            data_sub_filter.retain(|&(i, _, _, _)| i != s);
         }
         survival_sy
     };
@@ -179,8 +185,10 @@ struct AlgorithmInput {
     y: Vec<usize>,
     /// Size n, indices in `0..n_covariate` sorted by response.
     x: Vec<usize>,
-    /// Size n, sorted by covariate.
+    /// Size n, sorted by response.
     observed: Vec<bool>,
+    /// Size n, sorted by response.
+    weight: Vec<f64>,
 
     /// Number of unique covariate values.
     n_covariate: usize,
@@ -230,10 +238,10 @@ fn format_censored(
     debug_assert_eq!(from_covariate_index_to_data_index.len(), n_covariate);
 
     let mut y_sorted_xywo = izip!(x_sorted_xywo, x)
-        .map(|((_, y, _w, o), x_index)| (x_index, y, o))
+        .map(|((_, y, w, o), x_index)| (x_index, y, w, o))
         .collect::<Vec<_>>();
     y_sorted_xywo.sort_by(|l, r| l.1.partial_cmp(&r.1).unwrap());
-    let (response_groups, response_float, censoring): (Vec<_>, Vec<f64>, _) =
+    let (response_groups, response_float, weight, observed): (Vec<_>, Vec<f64>, Vec<f64>, _) =
         multiunzip(y_sorted_xywo);
 
     let mut y_index = 0;
@@ -250,7 +258,8 @@ fn format_censored(
     Ok(AlgorithmInput {
         y: response,
         x: response_groups,
-        observed: censoring,
+        observed,
+        weight,
         n_covariate,
         n_threshold,
     })
