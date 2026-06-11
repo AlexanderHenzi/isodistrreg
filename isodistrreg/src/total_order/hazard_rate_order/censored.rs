@@ -1,7 +1,9 @@
 use crate::progress::ProgressTracker;
 use crate::routines::kaplan_meier;
 use crate::structures::{Decreasing, Direction, Increasing};
-use crate::total_order::routines::{pool_partitions_from_right_zero_weight_blocks, single_response};
+use crate::total_order::routines::{
+    pool_partitions_from_right_zero_weight_blocks, single_response,
+};
 use crate::total_order::structures::{AlgorithmContext, WeightedPartition};
 use itertools::Itertools;
 use std::iter::{repeat, repeat_n};
@@ -95,8 +97,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         // Compute hazard rates in a sparse way
         let first_observation = &observations[data_index];
         assert!(first_observation.observed);
-        estimators[first_observation.x] -=
-            first_observation.weight / at_risk[first_observation.x];
+        estimators[first_observation.x] -= first_observation.weight / at_risk[first_observation.x];
         if data_index + 1 == last_positive[first_observation.x] {
             // This event consumes the group's whole remaining mass — death, exactly.
             estimators[first_observation.x] = 0.0;
@@ -154,8 +155,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     // Groups whose last observation is censored and that sit outside any dying span
     // keep a positive estimator and survival: they are frozen, not dead, and their
     // CDF must stay below 1 — neither check ever fires for them.
-    while zero_count < n_covariate
-        && (estimators[zero_count] == 0.0 || survival[zero_count] == 0.0)
+    while zero_count < n_covariate && (estimators[zero_count] == 0.0 || survival[zero_count] == 0.0)
     {
         zero_count += 1;
     }
@@ -415,7 +415,10 @@ mod test {
             cdfs.len(),
             context.unique_responses.len() * context.unique_covariates.len()
         );
-        assert!(cdfs.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+        assert!(
+            cdfs.iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        );
     }
 
     #[test]
