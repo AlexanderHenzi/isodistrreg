@@ -67,8 +67,9 @@ use std::sync::{Mutex, OnceLock};
 ///     Specifies the partial order on the covariate space. Each entry is
 ///     a tuple ``(kind, column_indices)`` where *kind* is one of
 ///     ``"comp"`` (componentwise), ``"sd"`` (stochastic dominance), or
-///     ``"icx"`` (increasing convex). Only used for multivariate
-///     covariates.
+///     ``"icx"`` (increasing convex). Intended for multivariate
+///     covariates; note that supplying it selects the partial-order
+///     solver even when the covariates are univariate.
 /// y_order : str, optional
 ///     Stochastic order on the response: ``"sd"`` for stochastic dominance
 ///     (default) or ``"hazard"`` for hazard rate order.
@@ -969,15 +970,16 @@ impl IDR {
 
     /// Evaluate the predicted CDF on a grid of sorted covariates and sorted thresholds.
     ///
-    /// This is a fast path for univariate (squeezed, 1-D) models that evaluates the CDF for every
-    /// combination of covariate and threshold value.
+    /// This is a fast path for univariate (total-order) models that evaluates the CDF for
+    /// every combination of covariate and threshold value. Both inputs must be sorted in
+    /// non-decreasing order (this is validated).
     ///
     /// Parameters
     /// ----------
     /// X : array_like, shape (m,)
-    ///     Covariate values (1-D).
+    ///     Covariate values (1-D), sorted in non-decreasing order.
     /// y : array_like, shape (k,)
-    ///     Response (threshold) values (1-D).
+    ///     Response (threshold) values (1-D), sorted in non-decreasing order.
     ///
     /// Returns
     /// -------
@@ -987,7 +989,8 @@ impl IDR {
     /// Raises
     /// ------
     /// ValueError
-    ///     If the model was fitted on multivariate covariates.
+    ///     If the model was fitted on multivariate covariates, if an input
+    ///     contains NaN, or if an input is not sorted.
     fn cdf_grid<'py>(
         &self,
         py: Python<'py>,
@@ -1588,15 +1591,15 @@ fn parse_config(
 /// **Case 2** — 1-D covariate. Observations are paired with covariate values;
 /// equal covariates pool, and the output is in sorted-covariate order:
 ///
-///     >>> isotonic_regression([4.0, 3.0, 2.0], covariates=[2.0, 1.0, 1.0])
+///     >>> isotonic_regression([4.0, 3.0, 2.0], X=[2.0, 1.0, 1.0])
 ///     array([2.5, 4. ])
 ///
-/// **Case 3** — multidimensional covariate. Each row of `covariates` is a
+/// **Case 3** — multidimensional covariate. Each row of `X` is a
 /// ``d``-dim point, compared componentwise; outputs follow lexicographic order
 /// of unique rows:
 ///
-///     >>> covariates = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
-///     >>> isotonic_regression([1.0, 2.0, 3.0, 4.0], covariates=covariates)
+///     >>> X = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+///     >>> isotonic_regression([1.0, 2.0, 3.0, 4.0], X=X)
 ///     array([1., 3., 2., 4.])
 ///
 /// **Case 4** — explicit partial order. Here, the single edge ``1 -> 0`` forces
@@ -1616,8 +1619,8 @@ fn parse_config(
 /// Outer axes can come from any input; the result takes the broadcast shape:
 ///
 ///     >>> isotonic_regression(
-///     ...     responses=np.arange(12).reshape(3, 4),
-///     ...     weights=np.arange(1, 13).reshape(1, 1, 3, 4),
+///     ...     np.arange(12).reshape(3, 4),
+///     ...     sample_weight=np.arange(1, 13).reshape(1, 1, 3, 4),
 ///     ... ).shape
 ///     (1, 1, 3, 4)
 ///
@@ -1627,8 +1630,8 @@ fn parse_config(
 /// stack into a rectangular array, the call is rejected:
 ///
 ///     >>> responses = np.arange(12).reshape(3, 4)
-///     >>> covariates = np.stack([np.arange(4), np.ones(4), np.arange(4)])
-///     >>> isotonic_regression(responses, covariates=covariates)
+///     >>> X = np.stack([np.arange(4), np.ones(4), np.arange(4)])
+///     >>> isotonic_regression(responses, X=X)
 ///     Traceback (most recent call last):
 ///         ...
 ///     ValueError: not all regression results have the same length
@@ -2185,6 +2188,27 @@ fn kaplan_meier_jumps<T: TimeValue>(
     }
 }
 
+/// Compute the (weighted) Kaplan-Meier estimator of a right-censored sample.
+///
+/// Parameters
+/// ----------
+/// y : array_like, shape (n,)
+///     Event or censoring times. Any float or integer dtype; NaN is rejected.
+/// y_observed : array_like, shape (n,)
+///     Event indicators: ``True``/``1`` for an observed event, ``False``/``0``
+///     for a right-censored observation. Must be a boolean array or a
+///     numeric array containing only 0 and 1.
+/// weight : array_like, shape (n,), optional
+///     Non-negative, finite observation weights. Default is equal weights.
+///
+/// Returns
+/// -------
+/// times : numpy.ndarray
+///     The sorted distinct event times at which the survival curve jumps,
+///     with the same dtype as ``y``.
+/// survival : numpy.ndarray
+///     The Kaplan-Meier survival probabilities just after each time in
+///     ``times``.
 #[allow(clippy::type_complexity)]
 #[pyfunction(
     signature = (
