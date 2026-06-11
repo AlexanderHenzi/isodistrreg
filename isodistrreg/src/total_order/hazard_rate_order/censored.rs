@@ -136,14 +136,22 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             .drain(..)
             .scan(0, |start_index, partition| {
                 let previous_index = mem::replace(start_index, partition.index);
-                Some(repeat_n(partition.value, partition.index - previous_index))
+                // The raw first-threshold hazard can drift above 1 (the at-risk mass is
+                // an f32 subtraction while the event weight is accumulated directly, e.g.
+                // 0.2 / (10.2 - 10.0) = 1.000001); clamp into [0, 1] before repeating.
+                // This is the earliest safe point: clamping at push time would feed
+                // altered values into the pooling averages.
+                Some(repeat_n(
+                    partition.value.clamp(0.0, 1.0),
+                    partition.index - previous_index,
+                ))
             })
             .flatten()
             .chain(repeat(0.0))
             .take(n_covariate);
         cdfs.extend(values);
         progress.increment();
-        cdfs.iter().map(|v| 1.0 - v.clamp(0.0, 1.0)).collect()
+        cdfs.iter().map(|v| 1.0 - v).collect()
     };
     // Pin every leading group that can no longer hold mass — exactly, no epsilon:
     // - `estimators == 0.0` marks groups whose last positive observation was an event
@@ -241,10 +249,13 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
                 // each push (mirrors the uncensored kernel). Pushing the cursor and the
                 // event covariate separately would double-push when the event sits at
                 // the cursor, skipping the next covariate and corrupting the row.
+                // The least-squares weight of the ratio regression is w·S(t-)²
+                // (mirroring the uncensored kernel); `at_risk` already carries one
+                // factor of the fitted survival, so multiply in the second.
                 while i <= observation.x {
                     partitions.push(WeightedPartition {
                         index: i + 1,
-                        weight: at_risk[i],
+                        weight: at_risk[i] * survival[i],
                         value: estimators[i] / survival[i],
                     });
                     pool_partitions_from_right_zero_weight_blocks::<Increasing, _>(&mut partitions);
@@ -256,7 +267,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             while i < n_covariate {
                 partitions.push(WeightedPartition {
                     index: i + 1,
-                    weight: at_risk[i],
+                    weight: at_risk[i] * survival[i],
                     value: estimators[i] / survival[i],
                 });
                 pool_partitions_from_right_zero_weight_blocks::<Increasing, _>(&mut partitions);
@@ -282,11 +293,17 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             cdfs.extend(repeat_n(1.0, zero_count));
             let mut start_index = zero_count;
             for partition in partitions.drain(..) {
+                // A pooled ratio target can exceed 1 (a group's raw Kaplan-Meier
+                // survival sits above its pooled fitted survival after a neighbouring
+                // group died, and zero-at-risk blocks don't pull it back). Survival
+                // never increases, so cap the applied step at 1 — the exact solution
+                // of the ratio regression under its θ ≤ 1 bound.
+                let step = partition.value.min(1.0);
                 for index in start_index..partition.index {
                     // Previous iteration update
-                    at_risk[index] *= partition.value;
+                    at_risk[index] *= step;
                     // Current iteration update
-                    survival[index] *= partition.value;
+                    survival[index] *= step;
                     // Write out result, clamp to ensure numerical noise doesn't get us out of
                     // [0, 1]
                     cdfs.push(1.0 - survival[index].clamp(0.0, 1.0));
@@ -453,6 +470,9 @@ mod test {
         );
     }
 
+    /// Fully observed data must match the uncensored kernel (same sequential
+    /// least-squares problem, ratio-regression weights w·S(t-)²): the expected
+    /// values are the uncensored `test_mixed_tonicity_3` / doctest values.
     #[test]
     fn test_mixed_tonicity_3() {
         execute_test(
@@ -460,10 +480,16 @@ mod test {
             [3.0, 1.0, 2.0],
             [true; 3],
             [1.0; 3],
-            [[0.5, 0.5, 0.0], [0.75, 0.75, 0.5], [1.0, 1.0, 1.0]],
+            [
+                [0.5, 0.5, 0.0],
+                [5.0 / 6.0, 5.0 / 6.0, 2.0 / 3.0],
+                [1.0, 1.0, 1.0],
+            ],
         );
     }
 
+    /// Fully observed data must match the uncensored kernel: the expected values
+    /// are the uncensored `test_mixed_tonicity_6` values.
     #[test]
     fn test_mixed_tonicity_6() {
         execute_test(
@@ -474,22 +500,29 @@ mod test {
             [
                 [1.0 / 5.0, 1.0 / 5.0, 1.0 / 5.0, 1.0 / 5.0, 1.0 / 5.0, 0.0],
                 [1.0 / 2.0, 1.0 / 2.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0],
-                [7.0 / 10.0, 7.0 / 10.0, 3.0 / 5.0, 1.0 / 2.0, 1.0 / 2.0, 0.0],
                 [
-                    17.0 / 20.0,
-                    17.0 / 20.0,
-                    4.0 / 5.0,
-                    3.0 / 4.0,
-                    3.0 / 4.0,
+                    25.0 / 34.0,
+                    25.0 / 34.0,
+                    11.0 / 17.0,
+                    1.0 / 2.0,
+                    1.0 / 2.0,
                     0.0,
                 ],
                 [
-                    37.0 / 40.0,
-                    37.0 / 40.0,
-                    9.0 / 10.0,
-                    7.0 / 8.0,
-                    7.0 / 8.0,
-                    0.5,
+                    803.0 / 884.0,
+                    803.0 / 884.0,
+                    194.0 / 221.0,
+                    43.0 / 52.0,
+                    43.0 / 52.0,
+                    0.0,
+                ],
+                [
+                    846499.0 / 853060.0,
+                    846499.0 / 853060.0,
+                    211078.0 / 213265.0,
+                    49451.0 / 50180.0,
+                    49451.0 / 50180.0,
+                    884.0 / 965.0,
                 ],
                 [1.0; 6],
             ],
@@ -515,6 +548,30 @@ mod test {
             [false, false, true, false, false],
             [1.0; 5],
             [[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0, 0.0]],
+        );
+    }
+
+    /// A pooled ratio can exceed 1 in exact arithmetic, so the θ ≤ 1 cap on the
+    /// applied step is part of the estimator, not noise cleanup. At t=1 the
+    /// hazard 10/30 pools across both groups (fitted survival [2/3, 2/3] while
+    /// the first group's raw Kaplan-Meier survival is still 1); the second
+    /// group's remaining mass is then fully censored away (at-risk mass exactly
+    /// 0, estimator frozen at 1/2). At t=2 the first group's raw ratio is
+    /// 0.9 / (2/3) = 27/20 with positive weight, the frozen group's is 3/4 with
+    /// weight 0 — pooling cannot pull the block back under 1. The cap clips the
+    /// step to 1, so the t=2 row repeats the t=1 row; unclipped, survival would
+    /// rise to 0.9 and the CDF would fall from 1/3 to 0.1, no longer a
+    /// distribution. (The uncensored kernel never needs this: with constant
+    /// weights the pooled ratios stay ≤ 1 in exact arithmetic; only censoring's
+    /// non-uniform at-risk shrinkage breaks that bound.)
+    #[test]
+    fn test_frozen_group_ratio_above_one() {
+        execute_test(
+            [0.0, 0.0, 1.0, 1.0],
+            [2.0, 3.0, 1.0, 1.0],
+            [true, true, true, false],
+            [1.0, 9.0, 10.0, 10.0],
+            [[1.0 / 3.0, 1.0 / 3.0], [1.0 / 3.0, 1.0 / 3.0], [1.0, 0.5]],
         );
     }
 }
