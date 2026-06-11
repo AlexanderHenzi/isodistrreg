@@ -2,7 +2,7 @@ use crossbeam_channel::RecvTimeoutError;
 use extendr_api::scalar::Rbool;
 use extendr_api::symbol::class_symbol;
 use extendr_api::{
-    Attributes, IntoRobj, List, Nullable, Operators, RColumn, RMatrix, Robj, extendr,
+    Attributes, IntoRobj, List, Nullable, Operators, RColumn, RMatrix, Rinternals, Robj, extendr,
     extendr_module,
 };
 use isodistrreg::functionals::{ClippingWrapper, KaplanMeier};
@@ -30,7 +30,7 @@ extendr_module! {
     fn plain_survival_isotonic_distributional_regression;
     fn plain_survival_isotonic_distributional_regression_threshold;
     // utility
-    fn isotonic_regression;
+    fn isotonic_regression_impl;
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -78,7 +78,8 @@ impl IDR {
         n_jobs: Nullable<usize>,
         show_progress: Nullable<bool>,
     ) -> Self {
-        debug_assert_eq!(
+        assert!(!y.is_empty(), "'y' must not be empty");
+        assert_eq!(
             X.len() % y.len(),
             0,
             "Covariates and responses shapes are not compatible",
@@ -98,17 +99,23 @@ impl IDR {
             x_order.into_iter().map(|(name, value)| {
                 let members = value
                     .as_integer_vector()
-                    .unwrap()
+                    .expect("covariate group indices must be integers")
                     .into_iter()
-                    // R indexing starts with 1
-                    .map(|i| i as usize - 1);
+                    .map(|i| {
+                        assert!(
+                            i != i32::MIN && i >= 1,
+                            "covariate group indices must be positive integers without NA",
+                        );
+                        // R indexing starts with 1
+                        i as usize - 1
+                    });
                 (name, members)
             }),
             x_dimension,
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
-        let y_order_parsed = StochasticOrder::from_str(y_order).unwrap();
+        let y_order_parsed = StochasticOrder::from_str(y_order).unwrap_or_else(|e| panic!("{e}"));
         let config = subagging::Config::parse(
             subsamples.into_option(),
             subsample_size.into_option().map(Either::Right),
@@ -151,7 +158,7 @@ impl IDR {
                         (config, Default::default()),
                         progress,
                     )
-                    .expect("input validation should happen on the r side");
+                    .unwrap_or_else(|e| panic!("invalid input: {e}"));
                     IDR::Total(fit)
                 }
                 _ => {
@@ -166,7 +173,7 @@ impl IDR {
                         (config, partial_order::Config { osqp_settings }),
                         progress,
                     )
-                    .expect("input validation should happen on the r side");
+                    .unwrap_or_else(|e| panic!("invalid input: {e}"));
                     IDR::Partial(fit)
                 }
             }
@@ -352,17 +359,44 @@ impl IDR {
 }
 
 fn parse_settings(user_settings: List, mut existing: osqp::Settings) -> osqp::Settings {
-    if let Ok(value) = user_settings.dollar("verbose") {
-        existing = existing.verbose(value.as_bool().unwrap());
+    // Missing keys (`$` yields NULL) keep the defaults; present-but-invalid values must
+    // produce a clear error here rather than an unwrap panic or an OSQP setup failure.
+    if let Ok(value) = user_settings.dollar("verbose")
+        && !value.is_null()
+    {
+        let v = value
+            .as_bool()
+            .expect("'pars$verbose' must be TRUE or FALSE");
+        existing = existing.verbose(v);
     }
-    if let Ok(value) = user_settings.dollar("eps_abs") {
-        existing = existing.eps_abs(value.as_real().unwrap());
+    if let Ok(value) = user_settings.dollar("eps_abs")
+        && !value.is_null()
+    {
+        let v = value
+            .as_real()
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .expect("'pars$eps_abs' must be a finite non-negative number");
+        existing = existing.eps_abs(v);
     }
-    if let Ok(value) = user_settings.dollar("eps_rel") {
-        existing = existing.eps_rel(value.as_real().unwrap());
+    if let Ok(value) = user_settings.dollar("eps_rel")
+        && !value.is_null()
+    {
+        let v = value
+            .as_real()
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .expect("'pars$eps_rel' must be a finite non-negative number");
+        existing = existing.eps_rel(v);
     }
-    if let Ok(value) = user_settings.dollar("max_iter") {
-        existing = existing.max_iter(value.as_integer().unwrap() as u32);
+    if let Ok(value) = user_settings.dollar("max_iter")
+        && !value.is_null()
+    {
+        let v = value
+            .as_integer()
+            .map(f64::from)
+            .or_else(|| value.as_real())
+            .filter(|v| v.fract() == 0.0 && *v >= 1.0 && *v <= f64::from(u32::MAX))
+            .expect("'pars$max_iter' must be a positive integer");
+        existing = existing.max_iter(v as u32);
     }
 
     existing
@@ -370,31 +404,29 @@ fn parse_settings(user_settings: List, mut existing: osqp::Settings) -> osqp::Se
 
 /// Compute the isotonic regression for the mean for totally ordered covariates.
 ///
-/// @description
-/// Computes isotonic mean regression for numeric responses. When covariates are supplied
-/// they determine the ordering; when omitted the responses are assumed pre-sorted (regression on
-/// the index). When weights are omitted every observation receives weight 1.
+/// Internal wrapper; user-facing input validation happens in the R function
+/// `isotonic_regression()` (R/modeling.R). The asserts here are backstops with clear
+/// messages for anyone calling the wrapper directly.
 ///
+/// @description Internal method that is used by R code to pass into Rust code.
 /// @param y Double vector of response values.
 /// @param X Double vector of covariate values, or NULL if responses are pre-sorted.
 /// @param weights Double vector of non-negative weights, or NULL for equal weights.
 /// @param decreasing Bool indicating direction (default FALSE is increasing, TRUE is decreasing).
 /// @returns Numeric vector of isotonic fitted means.
-/// @examples
-/// isotonic_regression(c(2, 3, 1, 4, 5), X = as.double(1:5))
-/// isotonic_regression(c(3, 2, 4, 1), X = as.double(1:4), weights = c(1, 2, 1, 1))
-/// isotonic_regression(sort(c(3, 1, 2, 5)))
-/// isotonic_regression(sort(c(2, 1, 3)), weights = c(1, 2, 1))
-/// @export
 #[allow(non_snake_case)]
 #[extendr]
-fn isotonic_regression(
+fn isotonic_regression_impl(
     y: &[f64],
     #[extendr(default = "NULL")] X: Nullable<&[f64]>,
     #[extendr(default = "NULL")] weights: Nullable<&[f64]>,
     #[extendr(default = "FALSE")] decreasing: bool,
 ) -> Vec<f64> {
     let n = y.len();
+    assert!(
+        y.iter().all(|v| v.is_finite()),
+        "'y' must contain only finite values",
+    );
 
     macro_rules! tonic {
         ($func:ident, $data:expr) => {
@@ -405,20 +437,35 @@ fn isotonic_regression(
         };
     }
 
+    if let Nullable::NotNull(c) = X {
+        assert_eq!(c.len(), n, "'X' and 'y' must have equal length");
+        assert!(
+            c.iter().all(|v| v.is_finite()),
+            "'X' must contain only finite values",
+        );
+    }
+    if let Nullable::NotNull(w) = weights {
+        assert_eq!(w.len(), n, "'weights' and 'y' must have equal length");
+        assert!(
+            w.iter().all(|v| v.is_finite() && *v >= 0.0),
+            "'weights' must contain only finite non-negative values",
+        );
+        assert!(
+            n == 0 || w.iter().any(|&v| v > 0.0),
+            "at least one weight must be positive",
+        );
+    }
+
     let partition_iterator = match (X, weights) {
         (Nullable::NotNull(c), Nullable::NotNull(w)) => {
-            assert_eq!(c.len(), n);
-            assert_eq!(w.len(), n);
             let data = izip!(c.iter().copied(), y.iter().copied(), w.iter().copied());
             tonic!(tonic_regression, data)
         }
         (Nullable::NotNull(c), Nullable::Null) => {
-            assert_eq!(c.len(), n);
             let data = izip!(c.iter().copied(), y.iter().copied(), repeat(1.0));
             tonic!(tonic_regression, data)
         }
         (Nullable::Null, Nullable::NotNull(w)) => {
-            assert_eq!(w.len(), n);
             let data = y.iter().copied().zip(w.iter().copied());
             tonic!(tonic_regression_pre_sorted, data)
         }
@@ -457,6 +504,32 @@ fn survival_isotonic_distributional_regression_threshold(
     weights: &[f64],
     #[extendr(default = "FALSE")] decreasing: bool,
 ) -> RColumn<f64> {
+    assert!(!y.is_empty(), "'y' must not be empty");
+    assert_eq!(X.len(), y.len(), "'X' and 'y' must have equal length");
+    assert_eq!(
+        y_observed.len(),
+        y.len(),
+        "'y_observed' and 'y' must have equal length",
+    );
+    assert_eq!(
+        weights.len(),
+        y.len(),
+        "'weights' and 'y' must have equal length",
+    );
+    assert!(threshold.is_finite(), "'threshold' must be finite");
+    assert!(
+        X.iter().chain(y).chain(weights).all(|v| v.is_finite()),
+        "'X', 'y' and 'weights' must contain only finite values",
+    );
+    assert!(
+        weights.iter().all(|&w| w >= 0.0),
+        "'weights' must be non-negative",
+    );
+    assert!(
+        y_observed.iter().all(|&c| c != i32::MIN),
+        "'y_observed' must not contain NA",
+    );
+
     let data = izip!(
         X.iter().copied(),
         y.iter().copied(),
@@ -510,7 +583,7 @@ fn plain_survival_isotonic_distributional_regression(
     let observed: Vec<_> = y_observed.iter().map(|&c| c > 0).collect();
     let ((n_covariate, n_threshold), result) =
         total_order::stochastic_dominance::censored_nonrecursive(X, y, &observed, weights)
-            .expect("input validation should happen on the r side");
+            .unwrap_or_else(|e| panic!("invalid input: {e}"));
 
     RMatrix::new_matrix(n_covariate, n_threshold, |covariate, response| {
         result[response * n_covariate + covariate]
@@ -569,7 +642,7 @@ fn plain_survival_isotonic_distributional_regression_threshold(
             Parallel,
         >(threshold, X, y, &observed, weights),
     }
-    .expect("input validation should happen on the r side");
+    .unwrap_or_else(|e| panic!("invalid input: {e}"));
 
     RColumn::new_column(result.len(), |i| result[i])
 }
