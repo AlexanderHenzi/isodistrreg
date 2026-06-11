@@ -307,6 +307,42 @@ mod test {
     use crate::partial_order::{Config, CovariateGroups, Csr, OrderingInfo};
     use crate::structures::StochasticOrder;
 
+    /// Per-step survival ratios are nondecreasing along the covariate order. Same
+    /// data and expectation as the total-order HRO kernel's doctest; the t=7 values
+    /// are the KKT solution with both ratio constraints active.
+    #[test]
+    fn hazard_rate_ratio_constraint_orientation() {
+        let fit: Fit<f64, f64> = Fit::fit::<f64>(
+            &[1.0, 2.0, 3.0],
+            &[8.0, 6.0, 7.0],
+            None,
+            None,
+            CovariateGroups::empty(1),
+            StochasticOrder::HazardRateOrder,
+            false,
+            Config {
+                osqp_settings: osqp::Settings::default()
+                    .verbose(false)
+                    .eps_abs(1e-8)
+                    .eps_rel(1e-8)
+                    .max_iter(20_000),
+            },
+            &crate::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(fit.thresholds(), &[6.0, 7.0, 8.0]);
+        #[rustfmt::skip]
+        let expected = [
+            0.5, 5.0 / 6.0, 1.0, // x = 1
+            0.5, 5.0 / 6.0, 1.0, // x = 2
+            0.0, 2.0 / 3.0, 1.0, // x = 3
+        ];
+        for (got, want) in fit.cdfs.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-3, "{:?}", fit.cdfs);
+        }
+    }
+
     #[test]
     fn multivariate_sd_case() {
         // 6 observations that collapse to 3 unique rows under SD preparation

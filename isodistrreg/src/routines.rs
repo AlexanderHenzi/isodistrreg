@@ -501,6 +501,54 @@ mod test {
     use super::*;
     use crate::structures::{Decreasing, Increasing};
 
+    /// One Kaplan-Meier value per unique response; within a tie, deaths apply before
+    /// censorings leave the at-risk set.
+    #[test]
+    fn kaplan_meier_tied_responses() {
+        let obs = |y: f64, observed: bool| Observation {
+            x: (),
+            y,
+            observed,
+            weight: 1.0f32,
+        };
+
+        // death@1, censor@1, death@2: S(1) = 2/3, S(2) = 2/3 * 0 -> CDF [1/3, 1].
+        let cdf = kaplan_meier(
+            [obs(1.0, true), obs(1.0, false), obs(2.0, true)].into_iter(),
+            3.0,
+        );
+        assert_eq!(cdf.len(), 2);
+        assert!((cdf[0] - 1.0 / 3.0).abs() < 1e-6, "{cdf:?}");
+        assert!((cdf[1] - 1.0).abs() < 1e-6, "{cdf:?}");
+
+        // Tied deaths fold into their group's value: ECDF of {1, 1, 2} = [2/3, 1].
+        let cdf = kaplan_meier(
+            [obs(1.0, true), obs(1.0, true), obs(2.0, true)].into_iter(),
+            3.0,
+        );
+        assert_eq!(cdf.len(), 2);
+        assert!((cdf[0] - 2.0 / 3.0).abs() < 1e-6, "{cdf:?}");
+        assert!((cdf[1] - 1.0).abs() < 1e-6, "{cdf:?}");
+    }
+
+    /// The final cumulative value is total/total: exactly 1.0, independent of
+    /// accumulation round-off.
+    #[test]
+    fn empirical_cdf_ends_at_exactly_one() {
+        let weights = [1.0f32, 1.5, 0.75, 0.5, 1.5, 0.75];
+        let cdf = empirical_cdf(
+            weights.iter().map(|&weight| Observation {
+                x: (),
+                y: (),
+                observed: (),
+                weight,
+            }),
+            weights.iter().sum(),
+        );
+        assert_eq!(*cdf.last().unwrap(), 1.0);
+        assert!(cdf.windows(2).all(|w| w[0] <= w[1]));
+    }
+
     #[test]
     fn transpose_degenerate() {
         // Empty matrix: no-op

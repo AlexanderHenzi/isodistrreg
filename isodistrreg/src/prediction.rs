@@ -366,3 +366,45 @@ pub enum ResponseCoordinate {
     StrictlyBelowAll,
     AboveOrAtIndex(usize),
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Upper quantile when the CDF is flat at exactly `probability` through the last
+    /// grid index: at p = 1 the supremum of the support (first index attaining 1);
+    /// below 1 the missing mass lies beyond the grid, so +∞ — and q⁻(p) ≤ q⁺(p).
+    #[test]
+    fn upper_quantile_flat_terminal_value() {
+        // Point mass at 5: support supremum, not the last threshold.
+        assert_eq!(quantile(&[1.0f32, 1.0], 1.0, true, &[5.0, 10.0]), 5.0);
+
+        // All-zero sub-CDF: all mass beyond the grid.
+        let lower = quantile(&[0.0f32, 0.0], 0.0, false, &[1.0f64, 2.0]);
+        let upper = quantile(&[0.0f32, 0.0], 0.0, true, &[1.0f64, 2.0]);
+        assert!(upper.is_infinite() && upper > 0.0);
+        assert!(lower <= upper);
+    }
+
+    /// The empty grid (empty fit: sub-CDF ≡ 0) has all mass beyond every threshold;
+    /// every quantile is +∞.
+    #[test]
+    fn quantile_on_empty_grid_is_infinite() {
+        let empty: [f32; 0] = [];
+        let q = quantile(&empty, 0.5, false, &[] as &[f64]);
+        assert!(q.is_infinite() && q > 0.0);
+        let q = quantile(&empty, 0.5, true, &[] as &[f64]);
+        assert!(q.is_infinite() && q > 0.0);
+    }
+
+    /// Proper CDFs end at exactly 1.0 (every producer pins it); any strictly
+    /// smaller last value is a sub-CDF with undefined mean.
+    #[test]
+    fn mean_requires_exact_unit_mass() {
+        let m: f64 = mean([0.5f32, 1.0], [0.0f64, 1.0]);
+        assert_eq!(m, 0.5);
+
+        let m: f64 = mean([0.5f32, 1.0 - f32::EPSILON], [0.0f64, 1.0]);
+        assert!(m.is_nan());
+    }
+}

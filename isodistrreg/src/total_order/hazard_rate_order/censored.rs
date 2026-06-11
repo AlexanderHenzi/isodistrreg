@@ -329,6 +329,95 @@ mod test {
         );
     }
 
+    /// An event at the covariate the PAVA cursor points to: each covariate is
+    /// pushed exactly once per row. All observed, no pooling required, so the rows
+    /// are plain conditional-survival bookkeeping.
+    #[test]
+    fn test_event_at_cursor() {
+        execute_test(
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 2.0, 9.0, 9.0],
+            [true; 4],
+            [1.0; 4],
+            [[1.0 / 3.0, 0.0], [2.0 / 3.0, 0.0], [1.0, 1.0]],
+        );
+    }
+
+    /// Censored-only response values are not thresholds: the single-covariate
+    /// Kaplan-Meier fast path restricts its curve to `unique_responses`.
+    /// KM: F(1) = 1/3; censor@2 leaves the at-risk set; F(3) = 1.
+    #[test]
+    fn test_censored_only_threshold_single_covariate() {
+        execute_test(
+            [5.0, 5.0, 5.0],
+            [1.0, 2.0, 3.0],
+            [true, false, true],
+            [1.0; 3],
+            [[1.0 / 3.0], [1.0]],
+        );
+    }
+
+    /// Censored-only thresholds get no CDF row: the matrix is exactly
+    /// `unique_responses.len() x unique_covariates.len()`.
+    #[test]
+    fn test_censored_only_threshold_shape() {
+        let context = preprocess_censored(
+            &[0.0, 1.0, 2.0],
+            &[1.0, 2.0, 3.0],
+            &[true, false, true],
+            &[1.0; 3],
+        );
+        let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        assert_eq!(context.unique_responses.len(), 2);
+        assert_eq!(
+            cdfs.len(),
+            context.unique_responses.len() * context.unique_covariates.len()
+        );
+        assert!(cdfs.iter().all(|v| (0.0..=1.0).contains(v)));
+    }
+
+    /// Hazard-rate order implies stochastic dominance: every row's CDF is
+    /// nonincreasing in the covariate, including rows with several events where
+    /// pooling must run after every partition push.
+    #[test]
+    fn test_covariate_ordering_invariant() {
+        let context = preprocess_censored(
+            &[2.0, 0.0, 1.0, 1.0, 1.0],
+            &[2.0, 4.0, 1.0, 2.0, 1.0],
+            &[true; 5],
+            &[2.0, 2.0, 2.0, 1.0, 1.0],
+        );
+        let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        let n_cov = context.unique_covariates.len();
+        assert_eq!(cdfs.len(), context.unique_responses.len() * n_cov);
+        for (t, row) in cdfs.chunks_exact(n_cov).enumerate() {
+            for c in 1..n_cov {
+                assert!(
+                    row[c] <= row[c - 1] + 1e-6,
+                    "threshold {t}: CDF increases with the covariate: {row:?}"
+                );
+            }
+        }
+    }
+
+    /// Groups whose remaining mass is fully censored away (at-risk weight 0) still
+    /// yield finite CDF values in [0, 1].
+    #[test]
+    fn test_zero_at_risk_groups() {
+        let context = preprocess_censored(
+            &[0.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+            &[9.0, 1.0, 2.0, 2.0, 1.0, 3.0],
+            &[true, false, true, false, true, true],
+            &[1.0; 6],
+        );
+        let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        assert_eq!(
+            cdfs.len(),
+            context.unique_responses.len() * context.unique_covariates.len()
+        );
+        assert!(cdfs.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    }
+
     #[test]
     fn test_weighted_duplicate() {
         execute_test(

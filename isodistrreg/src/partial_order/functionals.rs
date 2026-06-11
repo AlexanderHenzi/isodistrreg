@@ -277,6 +277,19 @@ mod test {
         assert_eq!(result, expected);
     }
 
+    /// Feasible input is its own projection, also when Kahn's topological order of
+    /// the edge DAG is not an involution (here [0, 1, 4, 2, 3]): observations and
+    /// outputs are keyed by node, positions only internally.
+    #[test]
+    fn feasible_input_is_identity_under_relabeling() {
+        let result = algorithm_pre_sorted::<Increasing, _, _>(
+            [0.0, 0.0, 1.0, 2.0, 3.0].into_iter(),
+            &[(0, 4), (1, 2), (2, 3)],
+            &Average,
+        );
+        assert_eq!(result, vec![0.0, 0.0, 1.0, 2.0, 3.0]);
+    }
+
     #[test]
     fn chain_antitone() {
         // 0 <= 1 <= 2 <= 3, strictly decreasing, all pool to the mean 2.5

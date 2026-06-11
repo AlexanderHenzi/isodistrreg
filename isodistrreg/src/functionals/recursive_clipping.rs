@@ -239,3 +239,28 @@ fn dfs<
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::functionals::{CauchyMeanValueFunctional, ClippingWrapper, Variance};
+    use crate::structures::Observation;
+
+    /// A split with an undefined (NaN) side imposes no clipping constraint: the raw
+    /// merged value passes through. Var{5,1,2} = 13/3 over groups {5} (undefined)
+    /// and {1, 2}.
+    #[test]
+    fn merge_skips_undefined_splits() {
+        let obs = |y: f64| Observation {
+            x: (),
+            y,
+            observed: (),
+            weight: 1.0f64,
+        };
+        let groups = [vec![obs(5.0)], vec![obs(1.0), obs(2.0)]];
+        let get_data = |g: usize| groups[g].clone().into_iter();
+
+        let functional = ClippingWrapper::new(Variance::new());
+        let got = functional.evaluate_total_order(0..2, &get_data);
+        assert!((got - 13.0 / 3.0).abs() < 1e-12, "{got}");
+    }
+}
