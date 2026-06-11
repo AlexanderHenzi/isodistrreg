@@ -58,10 +58,15 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
             raise ValueError(f"decreasing must be True or False, got {decreasing!r}")
         subsamples = kwargs.pop("subsamples", None)
         subsample_size = kwargs.pop("subsample_size", None)
+        replace = kwargs.pop("replace", False)
+        settings = kwargs.pop("settings", None)
+        seed = kwargs.pop("seed", None)
+        n_jobs = kwargs.pop("n_jobs", 1)
 
         if kwargs:
-            # Unused arguments
-            logging.info(f"Unused kwargs {list(kwargs.keys())}")
+            raise TypeError(
+                f"fit() got unexpected keyword arguments: {sorted(kwargs)}"
+            )
 
         self._fit = IDR(
             y,
@@ -73,6 +78,10 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
             decreasing,
             subsamples,
             subsample_size,
+            replace,
+            settings,
+            seed,
+            n_jobs,
         )
         self.X_ = self._fit.X
         self.thresholds_ = self._fit.thresholds
@@ -84,8 +93,9 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         targets = validate_data(self, X, reset=False)
 
         if kwargs:
-            # Unused arguments
-            logging.info(f"Unused kwargs {list(kwargs.keys())}")
+            raise TypeError(
+                f"predict() got unexpected keyword arguments: {sorted(kwargs)}"
+            )
 
         return self._fit.predict(targets)
 
@@ -94,8 +104,9 @@ class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
         targets = validate_data(self, X, reset=False)
 
         if kwargs:
-            # Unused arguments
-            logging.info(f"Unused kwargs {list(kwargs.keys())}")
+            raise TypeError(
+                f"cdf() got unexpected keyword arguments: {sorted(kwargs)}"
+            )
 
         return self._fit.cdf(targets)
 

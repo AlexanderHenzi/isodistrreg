@@ -91,7 +91,10 @@ impl Config {
         seed: Option<u64>,
         n_jobs: usize,
     ) -> Self {
-        debug_assert!(n_jobs >= 1, "n_jobs must be at least 1");
+        debug_assert_ne!(n_subsamples, 0);
+        debug_assert_ne!(subsample_size, 0);
+        debug_assert_ne!(n_jobs, 0);
+
         Self {
             n_subsamples,
             subsample_size,
@@ -137,16 +140,32 @@ impl Config {
             return Err(BadParam("n_jobs must be at least 1"));
         }
 
-        // Simplify by recognizing default values. Full size is only equivalent to "no
-        // subsampling" when drawing WITHOUT replacement: a full-size draw with
-        // replacement is the classic bootstrap and must keep its explicit size.
-        let subsample_size = match subsample_size {
-            Some(Left(count)) if count == n && !replace => None,
-            Some(Right(1.0)) if !replace => None,
-            other => other,
-        };
+        fn count_from_share(share: f64, n: usize) -> usize {
+            usize::max((share * n as f64).ceil() as usize, 1)
+        }
+
+        // A full-size draw WITHOUT replacement is a permutation of the training data, so
+        // every such "subsample" reproduces the plain fit. (A full-size draw WITH
+        // replacement is the classic bootstrap and is meaningful.)
+        let full_without_replacement = !replace
+            && match subsample_size {
+                Some(Left(count)) => count == n,
+                Some(Right(share)) => count_from_share(share, n) == n,
+                None => false,
+            };
 
         match (subsamples, subsample_size) {
+            // Explicitly requesting the full sample without replacement is equivalent to
+            // no subsampling at all; aggregating several identical fits would only waste
+            // compute, so more than one subsample is rejected rather than silently
+            // collapsed.
+            (None | Some(1), Some(_)) if full_without_replacement => {
+                Ok(Self::new(1, n, false, seed, n_jobs))
+            }
+            (Some(_), Some(_)) if full_without_replacement => Err(BadParam(
+                "a full-size subsample without replacement reproduces the plain fit; \
+                 choose a smaller subsample_size or set replace to sample with replacement",
+            )),
             (None, Some(_)) => Err(BadParam(
                 "specify the number of subsamples when specifying a subsample size",
             )),
@@ -155,15 +174,16 @@ impl Config {
             )),
             // No (su)bagging
             (None, None) => Ok(Self::new(1, n, false, seed, n_jobs)),
-            // Active (su)bagging
-            (Some(k), _) => {
-                let spec = subsample_size.unwrap_or(match replace {
-                    false => Left(n),
-                    true => Right(0.5),
+            // Active (su)bagging. Defaults: half the data for subagging (without
+            // replacement), the full sample size for bootstrapping (with replacement).
+            (Some(k), spec) => {
+                let spec = spec.unwrap_or(match replace {
+                    false => Right(0.5),
+                    true => Right(1.0),
                 });
                 let size = match spec {
                     Left(count) => count,
-                    Right(share) => usize::max((share * n as f64).round() as usize, 1),
+                    Right(share) => count_from_share(share, n),
                 };
                 Ok(Self::new(k, size, replace, seed, n_jobs))
             }
@@ -455,17 +475,26 @@ macro_rules! impl_idr_fit_for {
                     }
                 };
 
-                let covariates = unique_covariates(x, dimension);
-
-                let mut thresholds: Vec<Y> = match y_observed {
-                    Some(observed) => y
-                        .iter()
-                        .zip(observed)
-                        .filter(|&(_, &o)| o)
-                        .map(|(&r, _)| r)
-                        .collect(),
-                    None => Vec::from(y),
+                // Per the fit() contract zero-weight observations are inert: the
+                // aggregate's covariate set and threshold grid must equal those of the
+                // positive-weight subsample (the inner fits already guarantee this for
+                // their own grids).
+                let covariates = match weight {
+                    None => unique_covariates(x, dimension),
+                    Some(w) => {
+                        let filtered: Vec<X> = (0..n)
+                            .filter(|&i| w[i] > W::zero())
+                            .flat_map(|i| x[i * dimension..(i + 1) * dimension].iter().copied())
+                            .collect();
+                        unique_covariates(&filtered, dimension)
+                    }
                 };
+
+                let mut thresholds: Vec<Y> = (0..n)
+                    .filter(|&i| weight.is_none_or(|w| w[i] > W::zero()))
+                    .filter(|&i| y_observed.is_none_or(|o| o[i]))
+                    .map(|i| y[i])
+                    .collect();
                 thresholds.sort_unstable_by(|a, b| crate::functionals::TotalCmp::total_cmp(a, b));
                 thresholds.dedup();
                 let threshold_map = derive_threshold_map(&thresholds, &fits);
@@ -799,6 +828,41 @@ mod test {
             "p = 1.0 must give subsamples of size n = 10 (got {})",
             config.subsample_size
         );
+    }
+
+    /// Without an explicit size, subagging (no replacement) defaults to half the data
+    /// and bootstrapping (with replacement) to the full sample size.
+    #[test]
+    fn parse_default_sizes() {
+        let subagged = Config::parse(Some(7), None, false, 10, None, 1).unwrap();
+        assert_eq!(subagged.n_subsamples, 7);
+        assert!(!subagged.replace);
+        assert_eq!(subagged.subsample_size, 5);
+
+        let bootstrap = Config::parse(Some(7), None, true, 10, None, 1).unwrap();
+        assert_eq!(bootstrap.n_subsamples, 7);
+        assert!(bootstrap.replace);
+        assert_eq!(bootstrap.subsample_size, 10);
+    }
+
+    /// A full-size subsample without replacement is a permutation of the data: every
+    /// subfit equals the plain fit, so aggregating more than one is rejected, while a
+    /// single one collapses to the plain configuration.
+    #[test]
+    fn parse_full_size_without_replacement() {
+        for spec in [Either::Left(10), Either::Right(1.0)] {
+            assert!(Config::parse(Some(7), Some(spec), false, 10, None, 1).is_err());
+
+            let single = Config::parse(Some(1), Some(spec), false, 10, None, 1).unwrap();
+            assert_eq!(single.n_subsamples, 1);
+            assert_eq!(single.subsample_size, 10);
+            assert!(!single.replace);
+
+            // Without a subsample count this remains the documented "no subagging" form.
+            let plain = Config::parse(None, Some(spec), false, 10, None, 1).unwrap();
+            assert_eq!(plain.n_subsamples, 1);
+            assert_eq!(plain.subsample_size, 10);
+        }
     }
 
     #[test]
