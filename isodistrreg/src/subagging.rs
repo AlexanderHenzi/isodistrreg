@@ -656,11 +656,11 @@ fn derive_threshold_map<F: IsotonicDistributionalRegressionFit>(
 
 #[cfg(test)]
 mod test {
-    use itertools::Either;
     use crate::partial_order::CovariateGroups;
     use crate::structures::{Increasing, StochasticOrder};
     use crate::subagging::{Config, Fit};
     use crate::{IsotonicDistributionalRegressionFit, partial_order, total_order};
+    use itertools::Either;
 
     #[test]
     fn test_sd_symmetry_through_subagging() {

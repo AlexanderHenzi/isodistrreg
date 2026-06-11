@@ -85,7 +85,10 @@ pub fn single_response<D: Direction, Y>(
     let mut uncensored_per_covariate = vec![0.0f32; n_covariate];
     let mut any_censored = vec![false; n_covariate];
     for o in observations {
-        debug_assert!(o.weight > 0.0, "preprocessing drops zero-weight observations");
+        debug_assert!(
+            o.weight > 0.0,
+            "preprocessing drops zero-weight observations"
+        );
         if o.observed {
             uncensored_per_covariate[o.x] += o.weight;
         } else {
