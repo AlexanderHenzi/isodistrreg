@@ -646,7 +646,13 @@ mod differential {
                     .map(|_| rng.random_range(0..100) >= censored_percent)
                     .collect(),
                 weights: (0..n)
-                    .map(|_| if random_weights { random_weight(rng) } else { 1.0 })
+                    .map(|_| {
+                        if random_weights {
+                            random_weight(rng)
+                        } else {
+                            1.0
+                        }
+                    })
                     .collect(),
             }
         }
@@ -686,9 +692,11 @@ mod differential {
                 instance.x.push(x);
                 instance.y.push(quantize(y, response_levels));
                 instance.observed.push(!censored);
-                instance
-                    .weights
-                    .push(if random_weights { random_weight(rng) } else { 1.0 });
+                instance.weights.push(if random_weights {
+                    random_weight(rng)
+                } else {
+                    1.0
+                });
             }
             instance
         }
@@ -766,7 +774,8 @@ mod differential {
         let mut failures = Vec::new();
         for n in 3..=8 {
             for attempt in 0usize..2000 {
-                let instance = Instance::integer_grid(&mut rng, n, 4, 3, 40, !attempt.is_multiple_of(2));
+                let instance =
+                    Instance::integer_grid(&mut rng, n, 4, 3, 40, !attempt.is_multiple_of(2));
                 failures.extend(instance.check().err());
             }
         }
@@ -824,4 +833,42 @@ mod differential {
         };
         instance.check().unwrap();
     }
+}
+
+/// `preprocess` merges an *uncensored* observation into an immediately preceding
+/// *censored* observation at the same covariate (`is_following_censored` in
+/// preprocessing.rs), converting the event into censoring mass at a lower response and
+/// silently dropping its response value from `thresholds`.
+///
+/// Derivation (single covariate, so S-IDR must reduce to the standard weighted
+/// Kaplan-Meier estimator; there is no isotonicity constraint to satisfy):
+///   data at the one covariate: event@0 (w=1), censored@1 (w=1), event@2 (w=1)
+///   thresholds = unique uncensored responses = [0, 2]
+///   (also per the `preprocess` doc: "Thresholds contain all unique response values,
+///    discarding thresholds containing only censored observations" — y=2 is uncensored)
+///   K-M: S(0) = 1 - 1/3 = 2/3            => CDF(0) = 1/3
+///        S(2) = 2/3 * (1 - 1/1) = 0      => CDF(2) = 1
+///   (risk set at time 2 is only the event itself: the censored point left at t=1)
+///   expected output: thresholds [0, 2], cdfs [1/3, 1]
+#[test]
+fn preprocess_merges_event_into_censored_same_covariate() {
+    let context = preprocess(
+        &[1.0, 1.0, 1.0],
+        &[0.0, 1.0, 2.0],
+        &[true, false, true],
+        &[1.0; 3],
+    )
+    .unwrap();
+    let cdfs = fast::algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+    assert_eq!(
+        context.thresholds,
+        vec![0.0, 2.0],
+        "uncensored response 2.0 must be a threshold"
+    );
+    assert_eq!(cdfs.len(), 2);
+    assert!(
+        (cdfs[0] - 1.0 / 3.0).abs() < 1e-6,
+        "CDF(0) = 1/3, got {cdfs:?}"
+    );
+    assert!((cdfs[1] - 1.0).abs() < 1e-6, "CDF(2) = 1, got {cdfs:?}");
 }

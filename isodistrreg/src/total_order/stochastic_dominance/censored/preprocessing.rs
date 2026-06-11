@@ -72,9 +72,12 @@ pub fn preprocess<X: Float, Y: Float, W: Float>(
             let covariate_equal = x[data_index] == last_observation.x;
 
             let is_duplicate = response_equal && censoring_equal && covariate_equal;
-            let is_following_censored =
-                observed[data_index] && !last_observation.observed && covariate_equal;
-            if is_duplicate || is_following_censored {
+            // Adjacent (in response order) censored observations at the same covariate
+            // have no event between them, so they share the threshold index and only
+            // their combined weight matters for every interval Kaplan-Meier estimator.
+            let is_mergeable_censored =
+                !observed[data_index] && !last_observation.observed && covariate_equal;
+            if is_duplicate || is_mergeable_censored {
                 last_w_accum = last_w_accum + weights[data_index];
             } else {
                 // Finalize the previous in-progress observation: narrow once.
