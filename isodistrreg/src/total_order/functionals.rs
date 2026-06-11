@@ -89,16 +89,24 @@ pub fn algorithm_pre_sorted<
             let before_last_idx = last_idx - 1;
             let bl_value = functional.block_value(&stack[before_last_idx].1);
             let last_value = functional.block_value(&stack[last_idx].1);
-            // TODO: Verify
-            //
             // A NaN block value means the functional is undefined on that block (e.g.
             // Variance of a singleton group). Such a block has no value of its own to
-            // satisfy or violate the ordering with — pool it unconditionally so the
-            // merged span gets a defined value, mirroring how the max-min definition
-            // skips NaN cells instead of constraining on them.
+            // satisfy or violate the ordering with, and no local stack rule reproduces
+            // how the max-min definition skips NaN cells (its resolution depends on
+            // spans far from the boundary). Delegate the whole fit to the functional's
+            // definition-based resolution if it has one; otherwise pool unconditionally
+            // so the merged span eventually gets a defined value.
             let must_merge = match bl_value.partial_cmp(&last_value) {
                 Some(ordering) => ordering == D::FORBIDDEN_ORDERING,
-                None => true,
+                None => {
+                    if let Some(fit) =
+                        functional.undefined_blocks_fit::<D, _, _>(n_groups, &get_data)
+                    {
+                        debug_assert_eq!(fit.len(), n_groups);
+                        return fit;
+                    }
+                    true
+                }
             };
             if !must_merge {
                 break;
