@@ -104,6 +104,55 @@ impl<F: Functional> CauchyMeanValueFunctional for ClippingWrapper<F> {
         *block
     }
 
+    fn undefined_blocks_fit<D: crate::structures::Direction, G, I>(
+        &self,
+        n_groups: usize,
+        get_data: &G,
+    ) -> Option<Vec<Self::Value>>
+    where
+        G: Fn(usize) -> I + Clone,
+        I: Iterator<Item = Observation<(), Self::Response, Self::Censoring>> + Clone,
+    {
+        // Reconstruct the grouped data with the group index as covariate and run the
+        // max-min definition with the *inner* functional — the definition performs the
+        // clipping itself, so a `ClippingWrapper(F)` fast fit is defined to match
+        // `algorithm_pre_sorted_definition(F)`. Only reached when a block value is NaN,
+        // so the O(n³) triangle never burdens the NaN-free production path.
+        let data: Vec<Observation<usize, Self::Response, Self::Censoring>> = (0..n_groups)
+            .flat_map(|g| {
+                get_data(g).map(move |o| Observation {
+                    x: g,
+                    y: o.y,
+                    observed: o.observed,
+                    weight: o.weight,
+                })
+            })
+            .collect();
+        Some(
+            crate::total_order::functionals::algorithm_pre_sorted_definition::<D, F, usize>(
+                data, &self.0,
+            ),
+        )
+    }
+
+    /// The recursively clipped value RKM_S of the evaluation set S = `elements`:
+    ///
+    /// ```text
+    /// RKM_S = clamp( F(S), max_{(L,U) ∈ P_S} min(RKM_L, RKM_U),
+    ///                      min_{(L,U) ∈ P_S} max(RKM_L, RKM_U) )
+    /// ```
+    ///
+    /// where P_S are the two-block partitions of S into a (globally extendable) lower
+    /// part and upper part. `dfs` enumerates the induced lower sets A of S; the pairs
+    /// (A, S∖A) are exactly the nondegenerate P_S by the canonical-witness lemma: a
+    /// global pair (L, U) with S∩L = A, S∩U = S∖A exists iff down(A) ∩ up(S∖A) = ∅,
+    /// which holds for every induced lower set (witnesses L₀ = down(A), U₀ = up(S∖A)).
+    /// The empty/full skip inside `dfs` is the RKM_∅-undefined convention shared with
+    /// the chain reference (`total_order::stochastic_dominance::censored::definition`);
+    /// the recursion runs on clipped (RKM) values via the cache, and NaN sides impose
+    /// no constraint. The literal u64-mask implementation of the same recursion lives
+    /// in `partial_order::algorithm::definition` and is differentially compared in
+    /// `partial_order::algorithm::test`.
     #[cfg(feature = "partial-order")]
     fn evaluate_partial_order<
         const B: usize,

@@ -9,6 +9,14 @@ use std::iter::once;
 ///   max_{U upper, i∈U} min_{L lower, i∈L} M_{L∩U}
 ///
 /// Uses only the oracle `mean` and pooling-betweenness pruning for the inner minimization.
+///
+/// The implementation constructs the solution by greedy extreme-lower-set peeling
+/// (`algorithm_pre_sorted_inner`) rather than evaluating the min-max formula directly;
+/// the equivalence of the two — including the min-max/max-min saddle equality it rests
+/// on — is checked differentially against the literal formula implementation
+/// (`partial_order::algorithm::definition`, which asserts the saddle equality on every
+/// evaluation) in `partial_order::algorithm::test` for general posets and in
+/// `total_order::stochastic_dominance::censored::test::differential` for chains.
 pub fn algorithm_pre_sorted<
     D: Direction,
     F: CauchyMeanValueFunctional,

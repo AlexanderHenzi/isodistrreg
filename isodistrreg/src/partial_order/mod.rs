@@ -7,6 +7,8 @@ mod routines;
 mod structures;
 
 pub use algorithm::censored::algorithm as censored;
+#[cfg(test)]
+pub(crate) use algorithm::definition::algorithm as censored_definition;
 pub use algorithm::uncensored::algorithm as uncensored;
 pub use bit_set::BitSet;
 pub use functionals::algorithm_pre_sorted as tonic_regression_pre_sorted;

@@ -1,3 +1,36 @@
+//! Total-order reference implementation: the chain specialization of the general
+//! partial-order estimator
+//!
+//! ```text
+//! F̂_{ξ_i}(y) = min_{U ∈ 𝓤: i ∈ U}  max_{L ∈ 𝓛: i ∈ L}  RKM_{L ∩ U}(y)
+//! RKM_S(y)   = clamp( KM_S(y),
+//!                     max_{(L,U) ∈ P_S} min(RKM_{S∩L}, RKM_{S∩U}),
+//!                     min_{(L,U) ∈ P_S} max(RKM_{S∩L}, RKM_{S∩U}) )
+//! P_S        = { (S∩L, S∩U) : L ∈ 𝓛, U ∈ 𝓤, L ∪ U ⊇ S, L ∩ U = ∅ }
+//! ```
+//!
+//! (see `partial_order::algorithm::definition` for the literal poset implementation).
+//! On a totally ordered covariate grid the lower sets 𝓛 are the prefixes, the upper
+//! sets 𝓤 the suffixes, every L ∩ U is an interval `[r, s]`, and the nondegenerate
+//! pairs of P_{[r,s]} are exactly the split points `k ∈ r..s` — the degenerate pairs
+//! (S, ∅)/(∅, S) are excluded since RKM_∅ is undefined, here implicitly, in the poset
+//! implementations explicitly.
+//!
+//! This module computes in SURVIVAL space, where `1 − x` swaps min ↔ max:
+//! - the clip bounds `max_k min(..) / min_k max(..)` below are the `1 − x` image of
+//!   the spec's clamp bounds;
+//! - clipping in span-ascending order makes every clip input an already-clipped value,
+//!   i.e. the recursion on RKM (not raw KM) values, mirrored by popcount-ascending
+//!   memoization in the poset spec;
+//! - the outer reduction (Increasing: inner `min` over interval ends `s ≥ i` = the
+//!   CDF-space `max_L` over prefixes, outer `max` over interval starts `r ≤ i` = the
+//!   CDF-space `min_U` over suffixes) matches the spec's nesting order exactly — the
+//!   correspondence is syntactic, no minimax/saddle interchange is involved.
+//!
+//! The correspondence is enforced by the differential suites in `super::test` (the
+//! partial-order solver and the literal spec run on chain instances against this
+//! module) and `partial_order::algorithm::test` (general posets).
+
 use crate::structures::Direction;
 use crate::total_order::stochastic_dominance::censored::structures::CensoredSdContext;
 

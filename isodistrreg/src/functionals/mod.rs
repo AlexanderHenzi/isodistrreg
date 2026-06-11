@@ -65,6 +65,25 @@ pub trait CauchyMeanValueFunctional {
     /// Read the current value of a block (used by the algorithm for ordering checks).
     fn block_value(&self, block: &Self::Block) -> Self::Value;
 
+    /// Resolve the full fit when some block value is undefined (NaN), in which case the
+    /// pool-adjacent-violators stack has no sound ordering decision to make.
+    ///
+    /// Returns one value per group matching the max-min definition
+    /// ([`crate::total_order::functionals::algorithm_pre_sorted_definition`]), or `None`
+    /// if the functional has no definition-based resolution — the caller then falls back
+    /// to pooling undefined blocks into their left neighbour unconditionally.
+    fn undefined_blocks_fit<D: crate::structures::Direction, G, I>(
+        &self,
+        _n_groups: usize,
+        _get_data: &G,
+    ) -> Option<Vec<Self::Value>>
+    where
+        G: Fn(usize) -> I + Clone,
+        I: Iterator<Item = Observation<(), Self::Response, Self::Censoring>> + Clone,
+    {
+        None
+    }
+
     /// Convenience: evaluate over a contiguous range by sequentially merging singletons.
     /// Used by external callers; the PAV algorithm drives the primitives directly.
     fn evaluate_total_order<G, I>(&self, elements: Range<usize>, get_data: &G) -> Self::Value
