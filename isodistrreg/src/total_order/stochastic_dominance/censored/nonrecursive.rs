@@ -72,7 +72,10 @@ pub fn algorithm(
                 .iter()
                 .map(|&(_, j, o, w)| {
                     if o {
-                        survival *= 1.0 - w / remaining_weight;
+                        // `remaining_weight` is maintained by repeated subtraction, so it
+                        // can drift a few ulps below `w` for the last at-risk observation;
+                        // the true factor is then exactly 0, never negative.
+                        survival *= (1.0 - w / remaining_weight).max(0.0);
                     }
                     remaining_weight -= w;
                     (j, survival)
@@ -323,7 +326,10 @@ pub fn algorithm_single<D: Direction, EM: ExecutionMode>(
 
                 data_subset.iter().fold(1.0, |mut s, &(_, o, w)| {
                     if o {
-                        s *= 1.0 - w / total_weight;
+                        // `total_weight` comes from a cumulative-sum difference and is
+                        // further maintained by repeated subtraction, so it can drift a
+                        // few ulps below `w`; the true factor is then exactly 0.
+                        s *= (1.0 - w / total_weight).max(0.0);
                     }
                     total_weight -= w;
                     s
