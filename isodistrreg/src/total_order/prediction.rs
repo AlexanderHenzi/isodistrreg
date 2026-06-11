@@ -21,6 +21,11 @@ impl<'a> Interpolation<'a> {
     }
     #[must_use]
     pub fn from_coordinate(target: CovariateCoordinate, cdfs: (&'a [f32], usize)) -> Self {
+        if cdfs.0.is_empty() {
+            // The empty fit: a sub-CDF that stays at 0.0, represented by an empty CDF
+            // slice (every response then resolves to `StrictlyBelowAll` -> 0.0).
+            return Self::Exact { cdf: cdfs.0 };
+        }
         match target {
             CovariateCoordinate::Exact(index) => Self::Exact {
                 cdf: Self::get_cdf(index, cdfs),
@@ -203,12 +208,16 @@ pub struct CovariateSearch<'a, X> {
 impl<'a, X: Float> CovariateSearch<'a, X> {
     #[must_use]
     pub fn new(references: &'a [X]) -> Self {
-        assert!(!references.is_empty());
         Self { references, idx: 0 }
     }
 
     /// Advance the search with the next query value (must be provided in-order).
     pub fn advance(&mut self, q: X) -> CovariateCoordinate {
+        if self.references.is_empty() {
+            // The empty fit has no covariate grid; the coordinate is irrelevant because
+            // its (empty) CDF interpolates to 0.0 for every response.
+            return CovariateCoordinate::Exact(0);
+        }
         let last = self.references.len() - 1;
 
         if q <= self.references[0] {
