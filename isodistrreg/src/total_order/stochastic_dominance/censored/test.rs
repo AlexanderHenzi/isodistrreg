@@ -174,6 +174,35 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
     }
 }
 
+/// An event directly following a censored observation at the same covariate keeps
+/// its own threshold and event mass. Thresholds [0, 2]; the x=2 cell dies at t=2.
+#[test]
+fn test_event_after_censored_same_covariate() {
+    execute_test(
+        [1.0, 2.0, 2.0],
+        [0.0, 1.0, 2.0],
+        [1.0; 3],
+        [true, false, true],
+        [[1.0, 0.0], [1.0, 1.0]],
+    );
+}
+
+/// Kaplan-Meier factors are weight ratios, so the fit is invariant under scaling
+/// all weights by a positive constant — including scales far below 1.
+#[test]
+fn test_weight_scale_invariance() {
+    let expected = [[0.5, 0.0], [1.0, 0.0], [1.0, 1.0]];
+    for scale in [1.0, 1e-6] {
+        execute_test(
+            [1.0, 1.0, 2.0, 2.0],
+            [1.0, 2.0, 1.5, 3.0],
+            [scale; 4],
+            [true, true, false, true],
+            expected,
+        );
+    }
+}
+
 #[test]
 fn test_shortcuts_first_censored() {
     execute_test(

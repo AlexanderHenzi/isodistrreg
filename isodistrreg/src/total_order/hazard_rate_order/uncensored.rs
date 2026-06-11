@@ -274,6 +274,19 @@ mod test {
         );
     }
 
+    /// Two adjacent groups dying at the first threshold form two equal-valued
+    /// (never pooled) partitions; both must be marked dead. No pooling occurs, so
+    /// the expectation is plain conditional-survival bookkeeping.
+    #[test]
+    fn test_adjacent_dead_groups() {
+        execute_test(
+            [0.0, 1.0, 2.0, 2.0],
+            [1.0, 1.0, 2.0, 3.0],
+            [1.0; 4],
+            [[1.0, 1.0, 0.0], [1.0, 1.0, 0.5], [1.0, 1.0, 1.0]],
+        );
+    }
+
     #[test]
     fn test_weighted_duplicate() {
         execute_test(

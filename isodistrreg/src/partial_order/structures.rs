@@ -846,3 +846,96 @@ pub struct QualityIndicators {
     pub precision: f64,
     pub convergence_fraction: f64,
 }
+
+#[cfg(test)]
+mod test {
+    use super::Fit;
+    use crate::partial_order::{Config, CovariateGroups};
+    use crate::structures::StochasticOrder;
+    use crate::{IsotonicDistributionalRegressionFit, NoProgress};
+
+    fn tight_config() -> Config {
+        Config {
+            osqp_settings: osqp::Settings::default()
+                .verbose(false)
+                .eps_abs(1e-8)
+                .eps_rel(1e-8)
+                .max_iter(20_000),
+        }
+    }
+
+    fn fit(covariates: &[f64], responses: &[f64], observed: Option<&[bool]>) -> Fit<f64, f64> {
+        Fit::fit::<f64>(
+            covariates,
+            responses,
+            observed,
+            None,
+            CovariateGroups::empty(2),
+            StochasticOrder::StochasticDominance,
+            false,
+            tight_config(),
+            &NoProgress,
+        )
+        .unwrap()
+    }
+
+    const COVARIATES: [f64; 8] = [
+        0.0, 0.0, //
+        0.0, 1.0, //
+        1.0, 0.0, //
+        1.0, 1.0, //
+    ];
+    const RESPONSES: [f64; 4] = [1.0, 2.0, 2.0, 3.0];
+
+    /// `y_observed = Some(all true)` and `y_observed = None` describe the same data
+    /// and dispatch to the same uncensored solver.
+    #[test]
+    fn test_all_observed_flags_match_unflagged_fit() {
+        let unflagged = fit(&COVARIATES, &RESPONSES, None);
+        let flagged = fit(&COVARIATES, &RESPONSES, Some(&[true; 4]));
+
+        assert_eq!(flagged.thresholds(), unflagged.thresholds());
+        assert_eq!(flagged.cdfs.len(), unflagged.cdfs.len());
+        for (a, b) in flagged.cdfs.iter().zip(unflagged.cdfs.iter()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    /// All-censored input has zero events, hence no thresholds: the empty fit.
+    #[test]
+    fn test_all_censored_yields_empty_fit() {
+        let fit = fit(&COVARIATES, &RESPONSES, Some(&[false; 4]));
+        assert!(fit.thresholds().is_empty());
+        assert!(fit.cdfs.is_empty());
+    }
+
+    /// `global_cdf` is the pooled Kaplan-Meier with one value per threshold —
+    /// duplicate responses across covariates fold into the same jump.
+    /// Pooled: t=1: n=5, d=2 → F=0.4; t=2: n=3, d=2 → F=0.8.
+    /// Per covariate (already isotone): A = [1/2, 1], B = [1/3, 2/3].
+    #[test]
+    fn test_censored_global_cdf_is_pooled_kaplan_meier() {
+        let covariates = [
+            0.0, 0.0, // A
+            0.0, 0.0, // A
+            1.0, 1.0, // B
+            1.0, 1.0, // B
+            1.0, 1.0, // B
+        ];
+        let responses = [1.0, 2.0, 1.0, 2.0, 2.0];
+        let observed = [true, true, true, true, false];
+        let fit = fit(&covariates, &responses, Some(&observed));
+
+        assert_eq!(fit.thresholds(), &[1.0, 2.0]);
+        let expected_cdfs = [0.5, 1.0, 1.0 / 3.0, 2.0 / 3.0];
+        assert_eq!(fit.cdfs.len(), expected_cdfs.len());
+        for (got, want) in fit.cdfs.iter().zip(expected_cdfs.iter()) {
+            assert!((got - want).abs() < 1e-5, "{:?}", fit.cdfs);
+        }
+
+        assert_eq!(fit.global_cdf.len(), fit.thresholds().len());
+        for (got, want) in fit.global_cdf.iter().zip([0.4, 0.8].iter()) {
+            assert!((got - want).abs() < 1e-6, "{:?}", fit.global_cdf);
+        }
+    }
+}

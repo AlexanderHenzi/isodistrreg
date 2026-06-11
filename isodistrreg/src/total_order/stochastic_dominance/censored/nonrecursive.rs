@@ -459,7 +459,20 @@ fn format_censored_single(
 #[cfg(test)]
 mod test {
     use crate::structures::{Decreasing, Serial};
-    use crate::total_order::stochastic_dominance::censored::nonrecursive::algorithm_single;
+    use crate::total_order::stochastic_dominance::censored::nonrecursive::{
+        algorithm, algorithm_single,
+    };
+
+    /// All-observed data reduces every cell's weighted K-M to 1 − (cell weight at or
+    /// below t)/(cell weight) — the classical uncensored IDR. With w = [1, 3]:
+    /// t=1: S₀₀=1, S₁₁=0, S₀₁=1/4 → fits (1/4, 1/4) → CDF row [3/4, 3/4]; t=2: [1, 1].
+    #[test]
+    fn test_all_observed_weighted() {
+        let ((n_covariate, n_threshold), cdf) =
+            algorithm(&[1.0, 2.0], &[2.0, 1.0], &[true, true], &[1.0, 3.0]).unwrap();
+        assert_eq!((n_covariate, n_threshold), (2, 2));
+        assert_eq!(cdf, vec![0.75, 0.75, 1.0, 1.0]);
+    }
 
     #[test]
     fn test_single() {

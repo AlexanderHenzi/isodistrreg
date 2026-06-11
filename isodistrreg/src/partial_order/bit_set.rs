@@ -349,4 +349,19 @@ mod test {
             assert_eq!(filled.len(), n);
         }
     }
+
+    /// `max` returns the largest contained index (for a singleton, min == max),
+    /// across word boundaries.
+    #[test]
+    fn test_min_max() {
+        let set = BitSet::<1>::singleton(5);
+        assert_eq!(set.min(), Some(5));
+        assert_eq!(set.max(), Some(5));
+
+        let set: BitSet<2> = [3_usize, 70].into_iter().collect();
+        assert_eq!(set.min(), Some(3));
+        assert_eq!(set.max(), Some(70));
+
+        assert_eq!(BitSet::<1>::new().max(), None);
+    }
 }

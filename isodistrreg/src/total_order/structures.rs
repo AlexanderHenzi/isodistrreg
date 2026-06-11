@@ -463,6 +463,108 @@ mod test {
     use crate::structures::{Increasing, StochasticOrder};
     use crate::total_order::{Config, Fit, QualityIndicators};
 
+    /// All-censored input dispatches to the censored algorithm: zero events means no
+    /// thresholds — the empty fit (sub-CDF ≡ 0).
+    #[test]
+    fn test_all_censored_yields_empty_fit() {
+        let fit = Fit::<f64, f64>::fit::<f64>(
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            Some(&[false, false, false]),
+            None,
+            Increasing,
+            StochasticOrder::StochasticDominance,
+            false,
+            Config,
+            &crate::NoProgress,
+        )
+        .unwrap();
+        assert!(fit.thresholds.is_empty());
+        assert!(fit.cdfs.is_empty());
+    }
+
+    /// `y_observed = Some(all true)` and `y_observed = None` describe the same data;
+    /// both dispatch to the uncensored kernel and give identical fits, for both
+    /// stochastic orders.
+    #[test]
+    fn test_all_observed_flags_match_unflagged_fit() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y = [6.0, 2.0, 3.0, 4.0, 1.0, 5.0];
+        let run = |observed: Option<&[bool]>, order| {
+            Fit::<f64, f64>::fit::<f64>(
+                &x,
+                &y,
+                observed,
+                None,
+                Increasing,
+                order,
+                false,
+                Config,
+                &crate::NoProgress,
+            )
+            .unwrap()
+        };
+        for order in [
+            StochasticOrder::StochasticDominance,
+            StochasticOrder::HazardRateOrder,
+        ] {
+            let unflagged = run(None, order);
+            let flagged = run(Some(&[true; 6]), order);
+            assert_eq!(unflagged.thresholds, flagged.thresholds);
+            assert_eq!(unflagged.cdfs, flagged.cdfs);
+        }
+    }
+
+    /// `decreasing = true` under the hazard rate order equals the increasing fit on
+    /// the negated covariates, mirrored back. Antitone data is interpolated exactly:
+    /// a point mass at each covariate's own response.
+    #[test]
+    fn test_hazard_rate_decreasing_uncensored() {
+        let fit = Fit::<f64, f64>::fit::<f64>(
+            &[1.0, 2.0, 3.0],
+            &[3.0, 2.0, 1.0],
+            None,
+            None,
+            Increasing,
+            StochasticOrder::HazardRateOrder,
+            true,
+            Config,
+            &crate::NoProgress,
+        )
+        .unwrap();
+        assert_eq!(fit.thresholds, vec![1.0, 2.0, 3.0]);
+        assert_eq!(fit.covariates, vec![1.0, 2.0, 3.0]);
+        let expected = [0.0f32, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        for (got, want) in fit.cdfs.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-6, "{:?}", fit.cdfs);
+        }
+    }
+
+    /// Censored decreasing hazard-rate fit, mirrored from the increasing problem on
+    /// −x. Thresholds are the observed responses [1, 3]; t=1 row [0, 0, 1]; at t=3
+    /// the {x=1, x=2} cell pools dead (at-risk 1, factor 0). Covariate-major.
+    #[test]
+    fn test_hazard_rate_decreasing_censored() {
+        let fit = Fit::<f64, f64>::fit::<f64>(
+            &[1.0, 2.0, 3.0],
+            &[3.0, 2.0, 1.0],
+            Some(&[true, false, true]),
+            None,
+            Increasing,
+            StochasticOrder::HazardRateOrder,
+            true,
+            Config,
+            &crate::NoProgress,
+        )
+        .unwrap();
+        assert_eq!(fit.thresholds, vec![1.0, 3.0]);
+        assert_eq!(fit.covariates, vec![1.0, 2.0, 3.0]);
+        let expected = [0.0f32, 1.0, 0.0, 1.0, 1.0, 1.0];
+        for (got, want) in fit.cdfs.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-6, "{:?}", fit.cdfs);
+        }
+    }
+
     #[test]
     fn test_predict() {
         let fit: Fit<f64, f64> = Fit {

@@ -553,6 +553,30 @@ mod test {
         )
     }
 
+    /// Blocks where the functional is undefined (NaN, e.g. Variance of a singleton
+    /// group) pool with their neighbor; the fit matches the max-min definition,
+    /// which skips NaN cells: both give [13/3, 13/3] here (T(0,1) = Var{5,1,2}).
+    #[test]
+    fn test_undefined_blocks_pool() {
+        let tuples = [(1.0, 5.0), (2.0, 1.0), (2.0, 2.0)];
+
+        let definition =
+            algorithm_definition::<Increasing, _, _>(tuples.iter().copied(), &Variance::new());
+        assert_eq!(definition.len(), 2);
+        for v in &definition {
+            assert!((v - 13.0 / 3.0).abs() < 1e-12, "{definition:?}");
+        }
+
+        let fast = algorithm_pre_sorted::<Increasing, _, _, _>(
+            tuples.iter().copied(),
+            &ClippingWrapper::new(Variance::new()),
+        );
+        assert_eq!(fast.len(), definition.len());
+        for (f, d) in fast.iter().zip(definition.iter()) {
+            assert!((f - d).abs() < 1e-12, "{fast:?} != {definition:?}");
+        }
+    }
+
     #[test]
     fn test_variance_two_groups_ordering_satisfied() {
         let functional = Variance::new();
