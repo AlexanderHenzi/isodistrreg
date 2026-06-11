@@ -426,10 +426,16 @@ pub type WeightedPartition = Partition<f32, f32>;
 /// Information that is aggregated per covariate, like the total weight of all observations for a
 /// covariate.
 ///
-/// Weights are stored as **f32** — the entire post-preprocessing algorithm runs in f32, and
-/// this struct is part of that domain. Preprocessing (which produces these) keeps its
+/// Everything is stored as **f32** — the entire post-preprocessing algorithm runs in f32,
+/// and this struct is part of that domain. Preprocessing (which produces these) keeps its
 /// per-observation sums in the caller's input weight precision `W` and downcasts to f32 at
 /// the boundary, so `W = f64` inputs get f64-quality accumulation.
+///
+/// The kernels derive block totals as *differences* of `cumulative_weight`s and divide
+/// consumed mass by them; under extreme weight imbalance (a ratio around 2^24 between a
+/// covariate's weight and the mass before it) the f32 difference can cancel that weight
+/// away. Keeping weights within that imbalance bound is the caller's responsibility — see
+/// the weight contract on `fit()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CovariateStatistic {
     /// Total weight of this covariate, must be positive.
