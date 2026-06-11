@@ -183,6 +183,30 @@ fn cast_to_x<X: Float>(arr: ArrayViewD<'_, f64>) -> ArrayD<X> {
     arr.map(|&c| num_traits::NumCast::from(c).unwrap())
 }
 
+/// Reject NaN in prediction-time inputs. The core's prediction routines assume
+/// comparable values: NaN either panics (`partial_cmp().unwrap()` in the univariate
+/// searches) or is silently treated as incomparable (multivariate), yielding the
+/// climatological CDF without warning.
+fn ensure_no_nan<D: Dimension>(name: &str, arr: &ArrayView<'_, f64, D>) -> PyResult<()> {
+    if arr.iter().any(|v| v.is_nan()) {
+        return Err(PyValueError::new_err(format!(
+            "{name} must not contain NaN values"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject unsorted grid inputs. `predict_grid` scans forward only; unsorted input
+/// silently produces wrong CDF values rather than an error.
+fn ensure_sorted(name: &str, arr: &ArrayView1<'_, f64>) -> PyResult<()> {
+    if arr.windows(2).into_iter().any(|w| w[0] > w[1]) {
+        return Err(PyValueError::new_err(format!(
+            "{name} must be sorted in non-decreasing order"
+        )));
+    }
+    Ok(())
+}
+
 /// Body of `predict` (mean). Generic over the inner `Fit<X, Y>`. Returns an `ArrayD<Y>` —
 /// the output dtype matches the model's response precision. The inner trapezoidal sum is
 /// already accumulated in f64 inside `Fit::mean` and narrowed to `Y` at the return, so
@@ -402,6 +426,23 @@ where
             ));
         }
     }
+    // The prediction routines assume valid CDF rows: NaN panics in the quantile
+    // search and out-of-range or non-monotone values silently produce garbage
+    // quantiles and means.
+    for row in cdfs_array.rows() {
+        let mut prev = 0.0f32;
+        for &v in row {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                return Err(PyValueError::new_err(
+                    "CDF values must be finite and within [0, 1]",
+                ));
+            }
+            if v < prev {
+                return Err(PyValueError::new_err("each CDF row must be non-decreasing"));
+            }
+            prev = v;
+        }
+    }
 
     let cdfs_flat: Vec<f32> = cdfs_array.iter().copied().collect();
     let covariates_owned = covariates.slice.to_vec();
@@ -456,6 +497,15 @@ where
                         "global_cdf length ({}) must match number of thresholds ({n_thresh})",
                         gcdf_array.len(),
                     )));
+                }
+                let mut prev = 0.0f32;
+                for &v in gcdf_array.iter() {
+                    if !v.is_finite() || !(0.0..=1.0).contains(&v) || v < prev {
+                        return Err(PyValueError::new_err(
+                            "global_cdf must be a non-decreasing CDF with values in [0, 1]",
+                        ));
+                    }
+                    prev = v;
                 }
                 gcdf_array.iter().copied().collect()
             } else if covariates.n > 0 {
@@ -883,6 +933,7 @@ impl IDR {
         X: PyArrayLikeDyn<f64, AllowTypeChange>,
     ) -> PyResult<Either<Bound<'py, PyArrayDyn<f64>>, Bound<'py, PyArrayDyn<f32>>>> {
         let cov = X.as_array();
+        ensure_no_nan("X", &cov.view())?;
         match &self.inner {
             FitImpl::F32F64(_) | FitImpl::F64F64(_) => {
                 let array = py.detach(|| match &self.inner {
@@ -926,6 +977,7 @@ impl IDR {
         X: PyArrayLikeDyn<f64, AllowTypeChange>,
     ) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
         let cov = X.as_array();
+        ensure_no_nan("X", &cov.view())?;
         let array = py.detach(|| dispatch_dtype!(&self.inner, fit => cdf_of(fit, cov.view())));
         finalize(array, py)
     }
@@ -963,6 +1015,8 @@ impl IDR {
     ) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
         let cov = X.as_array();
         let thr = y.as_array();
+        ensure_no_nan("X", &cov.view())?;
+        ensure_no_nan("y", &thr.view())?;
         let result = py
             .detach(|| dispatch_dtype!(&self.inner, fit => cdf_at_of(fit, cov.view(), thr.view())));
         finalize(result, py)
@@ -999,20 +1053,41 @@ impl IDR {
     ) -> PyResult<Bound<'py, PyArray2<f32>>> {
         let cov = X.as_array();
         let thr = y.as_array();
+        ensure_no_nan("X", &cov.view())?;
+        ensure_no_nan("y", &thr.view())?;
+        ensure_sorted("X", &cov.view())?;
+        ensure_sorted("y", &thr.view())?;
+        // Multivariate models are rejected up front; for univariate models, detect fits
+        // without any (uncensored) training data, whose CDF is 0 everywhere.
+        let empty_total_fit = dispatch_dtype!(&self.inner, fit => match fit {
+            Fit::Total { fit, .. } => Some(fit.thresholds.is_empty() || fit.covariates.is_empty()),
+            Fit::Partial(_) => None,
+        });
+        let Some(empty_fit) = empty_total_fit else {
+            return Err(PyValueError::new_err(
+                "cdf_grid is only supported for models fitted on univariate covariates",
+            ));
+        };
+        // The core's grid scanner supports neither empty query grids nor empty fits;
+        // both have well-defined all-zero results.
+        if cov.is_empty() || empty_fit {
+            let result = Array2::zeros([cov.len(), thr.len()]);
+            return Ok(result.into_pyarray(py));
+        }
         let flat: Vec<f32> = match &self.inner {
-            FitImpl::F32F32(Fit::Total { fit, squeeze: true }) => fit
+            FitImpl::F32F32(Fit::Total { fit, .. }) => fit
                 .predict_grid(cov.iter().map(|&v| v as f32), thr.iter().map(|&v| v as f32))
                 .collect(),
-            FitImpl::F32F64(Fit::Total { fit, squeeze: true }) => fit
+            FitImpl::F32F64(Fit::Total { fit, .. }) => fit
                 .predict_grid(cov.iter().map(|&v| v as f32), thr.iter().copied())
                 .collect(),
-            FitImpl::F64F32(Fit::Total { fit, squeeze: true }) => fit
+            FitImpl::F64F32(Fit::Total { fit, .. }) => fit
                 .predict_grid(cov.iter().copied(), thr.iter().map(|&v| v as f32))
                 .collect(),
-            FitImpl::F64F64(Fit::Total { fit, squeeze: true }) => fit
+            FitImpl::F64F64(Fit::Total { fit, .. }) => fit
                 .predict_grid(cov.iter().copied(), thr.iter().copied())
                 .collect(),
-            _ => return Err(PyValueError::new_err(Error::OrderMismatch.to_string())),
+            _ => unreachable!("partial-order fits are rejected above"),
         };
         let result = Array2::from_shape_vec([cov.len(), thr.len()], flat).unwrap();
         Ok(result.into_pyarray(py))
@@ -1064,6 +1139,7 @@ impl IDR {
     ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
         let cov = X.as_array();
         let prb = q.as_array();
+        ensure_no_nan("X", &cov.view())?;
         // The core `quantile` asserts this range; raise a proper ValueError instead of
         // surfacing a Rust panic.
         if let Some(&bad) = prb.iter().find(|p| !(0.0..=1.0).contains(*p)) {
@@ -1478,19 +1554,27 @@ fn parse_config(
                 "eps_abs" => {
                     let v = value
                         .extract::<f64>(py)
-                        .map_err(|_| Error::ConfigParseError("eps_abs should be a float"))?;
+                        .ok()
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .ok_or(Error::ConfigParseError(
+                            "eps_abs should be a finite non-negative float",
+                        ))?;
                     settings = settings.eps_abs(v);
                 }
                 "eps_rel" => {
                     let v = value
                         .extract::<f64>(py)
-                        .map_err(|_| Error::ConfigParseError("eps_rel should be a float"))?;
+                        .ok()
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .ok_or(Error::ConfigParseError(
+                            "eps_rel should be a finite non-negative float",
+                        ))?;
                     settings = settings.eps_rel(v);
                 }
                 "max_iter" => {
-                    let v = value.extract::<u32>(py).map_err(|_| {
-                        Error::ConfigParseError("max_iter should be a positive integer")
-                    })?;
+                    let v = value.extract::<u32>(py).ok().filter(|v| *v >= 1).ok_or(
+                        Error::ConfigParseError("max_iter should be a positive integer"),
+                    )?;
                     settings = settings.max_iter(v);
                 }
                 _ => {
@@ -1660,6 +1744,23 @@ fn isotonic_regression<'py>(
     }
 
     let responses = y.as_array();
+    // The core kernels assume comparable responses and non-negative weights: NaN panics
+    // in the pooling comparators, and a negative weight inside a positive-sum pool is
+    // silently folded into the weighted mean.
+    ensure_no_nan("y", &responses.view())?;
+    if let Some(w) = sample_weight.as_ref() {
+        let w_arr = w.as_array();
+        if w_arr.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return Err(PyValueError::new_err(
+                "sample_weight must contain only finite non-negative values",
+            ));
+        }
+        if !w_arr.is_empty() && !w_arr.iter().any(|v| *v > 0.0) {
+            return Err(PyValueError::new_err(
+                "sample_weight must contain at least one positive value",
+            ));
+        }
+    }
     let unit_weight = ArrayD::ones(IxDyn(&[1]));
     let weights = sample_weight
         .as_ref()
@@ -1668,6 +1769,7 @@ fn isotonic_regression<'py>(
 
     if let Some(covariates_like) = X.as_ref() {
         let covariates = covariates_like.as_array();
+        ensure_no_nan("X", &covariates.view())?;
         // First try to broadcast all three arrays together (covariate treated as 1-D).
         // On failure, treat the covariate's last axis as the covariate dimension.
         if let Some(shape) =
@@ -1784,6 +1886,45 @@ fn isotonic_constrained<'py>(
         .outer_iter()
         .map(|row| (row[0], row[1]))
         .collect();
+
+    // The core asserts edge validity (index bounds, DAG); raise ValueErrors here instead
+    // of surfacing Rust panics.
+    let n = shape.last().copied().unwrap_or(1);
+    for &(i, j) in &edges {
+        if i >= n || j >= n {
+            return Err(PyValueError::new_err(format!(
+                "constraint edge ({i}, {j}) is out of bounds for {n} observations"
+            )));
+        }
+        if i == j {
+            return Err(PyValueError::new_err(format!(
+                "constraint edge ({i}, {j}) is a self-loop; constraints must form an acyclic partial order"
+            )));
+        }
+    }
+    // Kahn's algorithm to detect cycles.
+    let mut indegree = vec![0usize; n];
+    let mut adjacency = vec![Vec::new(); n];
+    for &(i, j) in &edges {
+        adjacency[i].push(j);
+        indegree[j] += 1;
+    }
+    let mut queue: Vec<usize> = (0..n).filter(|&v| indegree[v] == 0).collect();
+    let mut visited = 0;
+    while let Some(v) = queue.pop() {
+        visited += 1;
+        for &w in &adjacency[v] {
+            indegree[w] -= 1;
+            if indegree[w] == 0 {
+                queue.push(w);
+            }
+        }
+    }
+    if visited != n {
+        return Err(PyValueError::new_err(
+            "constraints contain a cycle; they must form an acyclic partial order",
+        ));
+    }
 
     match decreasing {
         false => run::<Increasing>(&mut output, responses, weights, &edges, axis),
@@ -1992,7 +2133,8 @@ fn write_lane<I: IntoIterator<Item = f64>>(mut out: ArrayViewMut1<'_, f64>, iter
     }
     assert_eq!(
         written, expected,
-        "write_lane: iterator yielded {written} elements, lane has {expected}"
+        "a regression lane produced {written} fitted values but {expected} were expected; \
+         this typically means all sample weights in one lane are zero"
     );
 }
 
@@ -2220,12 +2362,13 @@ fn kaplan_meier_jumps<T: TimeValue>(
 fn kaplan_meier<'py>(
     py: Python<'py>,
     y: &Bound<'py, PyAny>,
-    y_observed: PyArrayLike1<'py, bool, AllowTypeChange>,
+    y_observed: &Bound<'py, PyAny>,
     weight: Option<PyArrayLike1<'py, f64, AllowTypeChange>>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyArray1<f64>>)> {
     // Normalize the input into a numpy array without coercing its dtype, so
     // the returned event-time array can match the dtype of `y`.
-    let y_array: Bound<'py, PyAny> = py.import("numpy")?.getattr("asarray")?.call1((y,))?;
+    let numpy_asarray = py.import("numpy")?.getattr("asarray")?;
+    let y_array: Bound<'py, PyAny> = numpy_asarray.call1((y,))?;
 
     let (y_dtype, n) = {
         let untyped = y_array.cast::<PyUntypedArray>()?;
@@ -2236,6 +2379,37 @@ fn kaplan_meier<'py>(
             )));
         }
         (untyped.dtype(), untyped.len())
+    };
+    if y_dtype.is_equiv_to(&dtype::<f64>(py)) || y_dtype.is_equiv_to(&dtype::<f32>(py)) {
+        // NaN is not a meaningful event time; the sort below would silently
+        // place it last and emit it as a jump.
+        let as_f64: PyArrayLike1<f64, AllowTypeChange> = y_array.extract()?;
+        if as_f64.as_array().iter().any(|v| v.is_nan()) {
+            return Err(PyValueError::new_err("y must not contain NaN values"));
+        }
+    }
+
+    // Validate the event indicators before the boolean cast: a plain forcecast
+    // would silently turn any nonzero value — or any non-empty string — into
+    // an event.
+    let observed_array: Bound<'py, PyAny> = numpy_asarray.call1((y_observed,))?;
+    let observed_kind = observed_array.cast::<PyUntypedArray>()?.dtype().kind();
+    let y_observed: PyArrayLike1<'py, bool, AllowTypeChange> = match observed_kind {
+        b'b' => observed_array.extract()?,
+        b'i' | b'u' | b'f' => {
+            let values: PyArrayLike1<f64, AllowTypeChange> = observed_array.extract()?;
+            if values.as_array().iter().any(|&v| v != 0.0 && v != 1.0) {
+                return Err(PyValueError::new_err(
+                    "y_observed must contain only 0/1 or boolean values",
+                ));
+            }
+            observed_array.extract()?
+        }
+        _ => {
+            return Err(PyValueError::new_err(
+                "y_observed must be a boolean or 0/1 numeric array",
+            ));
+        }
     };
 
     if y_observed.len() != n || weight.as_ref().is_some_and(|w| w.len() != n) {
