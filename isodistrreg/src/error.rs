@@ -66,7 +66,7 @@ impl Display for Error {
                 Ok(())
             }
             NegativeWeights => write!(f, "at least one weight value was negative"),
-            NonFiniteFloats => write!(f, "some float values were infinite, nan or subnormal"),
+            NonFiniteFloats => write!(f, "some float values were infinite or nan"),
             NotImplemented(message) => f.write_str(message),
             OrderMismatch => write!(
                 f,
