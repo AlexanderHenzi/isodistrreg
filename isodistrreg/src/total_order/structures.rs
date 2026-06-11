@@ -83,115 +83,29 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                     .zip(weights_to_use)
                     .any(|(&b, &w)| !b && w > W::zero()) =>
             {
-                match response_order {
-                    StochasticOrder::StochasticDominance => {
-                        if decreasing {
-                            // TODO: Running the censoring algorithm in reverse is not yet properly
-                            //  supported, so we reverse manually here. The negation happens on the
-                            //  raw `&[X]` before preprocessing.
-                            let negated_covariates = covariates
-                                .iter()
-                                .map(|&v| X::zero() - v)
-                                .collect::<Vec<_>>();
-                            let context = preprocess_censored(
-                                &negated_covariates,
-                                responses,
-                                indicators,
-                                weights_to_use,
-                            )?;
-                            let mut cdfs = stochastic_dominance::censored::<Increasing, _, _>(
-                                &context, progress,
-                            );
-                            let mut unique_covariates = context.unique_covariates;
-                            let thresholds = context.thresholds;
-                            for c in unique_covariates.iter_mut() {
-                                *c = X::zero() - *c;
-                            }
-                            unique_covariates.reverse();
-                            debug_assert!(unique_covariates.windows(2).all(|w| {
-                                w[0].partial_cmp(&w[1]).unwrap() != std::cmp::Ordering::Greater
-                            }));
-                            let n_covariate = unique_covariates.len();
-                            // An empty context (e.g. every observation dropped as zero-weight)
-                            // has no rows to mirror — and `chunks_exact_mut(0)` would panic.
-                            if n_covariate > 0 {
-                                for threshold in cdfs.chunks_exact_mut(n_covariate) {
-                                    threshold.reverse();
-                                }
-                            }
-                            AlgorithmOutput {
-                                cdfs,
-                                unique_covariates,
-                                thresholds,
-                            }
-                        } else {
-                            let context = preprocess_censored(
-                                covariates,
-                                responses,
-                                indicators,
-                                weights_to_use,
-                            )?;
-                            let cdfs = stochastic_dominance::censored::<Increasing, _, _>(
-                                &context, progress,
-                            );
-                            AlgorithmOutput {
-                                cdfs,
-                                unique_covariates: context.unique_covariates,
-                                thresholds: context.thresholds,
-                            }
+                let fit_increasing = |covariates: &[X]| -> Result<AlgorithmOutput<X, Y>, Error> {
+                    let context =
+                        preprocess_censored(covariates, responses, indicators, weights_to_use)?;
+                    let cdfs = match response_order {
+                        StochasticOrder::StochasticDominance => {
+                            stochastic_dominance::censored::<Increasing, _, _>(&context, progress)
                         }
-                    }
-                    StochasticOrder::HazardRateOrder => {
-                        if decreasing {
-                            // The censored hazard-rate kernel only supports the increasing
-                            // direction; a decreasing fit is the increasing fit on the
-                            // negated covariates, mirrored back.
-                            let negated_covariates = covariates
-                                .iter()
-                                .map(|&v| X::zero() - v)
-                                .collect::<Vec<_>>();
-                            let context = preprocess_censored(
-                                &negated_covariates,
-                                responses,
-                                indicators,
-                                weights_to_use,
-                            )?;
-                            let mut cdfs =
-                                hazard_rate_order::censored::<Increasing, _, _>(&context, progress);
-                            let mut unique_covariates = context.unique_covariates;
-                            for c in unique_covariates.iter_mut() {
-                                *c = X::zero() - *c;
-                            }
-                            unique_covariates.reverse();
-                            let n_covariate = unique_covariates.len();
-                            // An empty context (e.g. every observation dropped as zero-weight)
-                            // has no rows to mirror — and `chunks_exact_mut(0)` would panic.
-                            if n_covariate > 0 {
-                                for threshold in cdfs.chunks_exact_mut(n_covariate) {
-                                    threshold.reverse();
-                                }
-                            }
-                            AlgorithmOutput {
-                                cdfs,
-                                unique_covariates,
-                                thresholds: context.thresholds,
-                            }
-                        } else {
-                            let context = preprocess_censored(
-                                covariates,
-                                responses,
-                                indicators,
-                                weights_to_use,
-                            )?;
-                            let cdfs =
-                                hazard_rate_order::censored::<Increasing, _, _>(&context, progress);
-                            AlgorithmOutput {
-                                cdfs,
-                                unique_covariates: context.unique_covariates,
-                                thresholds: context.thresholds,
-                            }
+                        StochasticOrder::HazardRateOrder => {
+                            hazard_rate_order::censored::<Increasing, _, _>(&context, progress)
                         }
-                    }
+                    };
+                    Ok(AlgorithmOutput {
+                        cdfs,
+                        unique_covariates: context.unique_covariates,
+                        thresholds: context.thresholds,
+                    })
+                };
+                if decreasing {
+                    // TODO: Running the censored kernels in reverse is not yet properly
+                    //  supported, so we mirror the increasing fit instead.
+                    fit_decreasing_mirrored(covariates, fit_increasing)?
+                } else {
+                    fit_increasing(covariates)?
                 }
             }
             _ => match response_order {
@@ -209,45 +123,25 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                     }
                 }
                 StochasticOrder::HazardRateOrder => {
+                    let fit_increasing =
+                        |covariates: &[X]| -> Result<AlgorithmOutput<X, Y>, Error> {
+                            let context =
+                                preprocess_uncensored(covariates, responses, weights_to_use);
+                            let cdfs = hazard_rate_order::uncensored::<Increasing, _, _>(
+                                &context, progress,
+                            );
+                            Ok(AlgorithmOutput {
+                                cdfs,
+                                unique_covariates: context.unique_covariates,
+                                thresholds: context.unique_responses,
+                            })
+                        };
                     if decreasing {
                         // The uncensored hazard-rate kernel only supports the increasing
-                        // direction; a decreasing fit is the increasing fit on the
-                        // negated covariates, mirrored back.
-                        let negated_covariates = covariates
-                            .iter()
-                            .map(|&v| X::zero() - v)
-                            .collect::<Vec<_>>();
-                        let context =
-                            preprocess_uncensored(&negated_covariates, responses, weights_to_use);
-                        let mut cdfs =
-                            hazard_rate_order::uncensored::<Increasing, _, _>(&context, progress);
-                        let mut unique_covariates = context.unique_covariates;
-                        for c in unique_covariates.iter_mut() {
-                            *c = X::zero() - *c;
-                        }
-                        unique_covariates.reverse();
-                        let n_covariate = unique_covariates.len();
-                        // An empty context (e.g. every observation dropped as zero-weight)
-                        // has no rows to mirror — and `chunks_exact_mut(0)` would panic.
-                        if n_covariate > 0 {
-                            for threshold in cdfs.chunks_exact_mut(n_covariate) {
-                                threshold.reverse();
-                            }
-                        }
-                        AlgorithmOutput {
-                            cdfs,
-                            unique_covariates,
-                            thresholds: context.unique_responses,
-                        }
+                        // direction.
+                        fit_decreasing_mirrored(covariates, fit_increasing)?
                     } else {
-                        let context = preprocess_uncensored(covariates, responses, weights_to_use);
-                        let cdfs =
-                            hazard_rate_order::uncensored::<Increasing, _, _>(&context, progress);
-                        AlgorithmOutput {
-                            cdfs,
-                            unique_covariates: context.unique_covariates,
-                            thresholds: context.unique_responses,
-                        }
+                        fit_increasing(covariates)?
                     }
                 }
             },
@@ -323,6 +217,47 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                 .all(|cdf| cdf.is_sorted())
         );
     }
+}
+
+/// Compute a decreasing fit through `fit_increasing`, a preprocess-and-solve pipeline whose
+/// kernel only supports the increasing direction: run it against the negated covariates, then
+/// mirror the output back by negating the covariate grid and reversing it together with each
+/// threshold-major CDF row. The negation happens on the raw `&[X]` before preprocessing.
+fn fit_decreasing_mirrored<X: Float, Y>(
+    covariates: &[X],
+    fit_increasing: impl FnOnce(&[X]) -> Result<AlgorithmOutput<X, Y>, Error>,
+) -> Result<AlgorithmOutput<X, Y>, Error> {
+    let negated_covariates = covariates
+        .iter()
+        .map(|&v| X::zero() - v)
+        .collect::<Vec<_>>();
+    let AlgorithmOutput {
+        mut cdfs,
+        mut unique_covariates,
+        thresholds,
+    } = fit_increasing(&negated_covariates)?;
+    for c in unique_covariates.iter_mut() {
+        *c = X::zero() - *c;
+    }
+    unique_covariates.reverse();
+    debug_assert!(
+        unique_covariates
+            .windows(2)
+            .all(|w| w[0].partial_cmp(&w[1]).unwrap() != std::cmp::Ordering::Greater)
+    );
+    let n_covariate = unique_covariates.len();
+    // An empty output (e.g. every observation dropped as zero-weight) has no rows to
+    // mirror — and `chunks_exact_mut(0)` would panic.
+    if n_covariate > 0 {
+        for threshold in cdfs.chunks_exact_mut(n_covariate) {
+            threshold.reverse();
+        }
+    }
+    Ok(AlgorithmOutput {
+        cdfs,
+        unique_covariates,
+        thresholds,
+    })
 }
 
 pub struct GridPredictor<'a, X, I> {
