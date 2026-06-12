@@ -82,6 +82,19 @@ impl ExecutionMode for Parallel {
     const PARALLEL: bool = cfg!(feature = "parallel");
 }
 
+/// Maximum number of observations an algorithm run may carry: every per-observation or
+/// per-covariate index must fit in the 31-bit payload of a `u32`.
+///
+/// The binding consumers are the censored stochastic-dominance kernels, which pack indices
+/// into `u32`s with one bit reserved for a flag (`CompletionIndex` markers store
+/// `index << 1 | event_bit`, `Estimates::walk_x` stores the covariate with
+/// `WALK_OBSERVED_BIT` in the top bit, and `SurvivalComputationCold::count` holds an
+/// observation count). Individual algorithms may be less restrictive in isolation (a plain
+/// `u32` index allows up to `u32::MAX`), but the crate standardizes on this single bound.
+/// Sizes anywhere near it are unrepresentable in practice — the O(C²) estimator triangles
+/// exhaust memory long before.
+pub const MAX_OBSERVATIONS: usize = (1 << 31) - 1;
+
 /// The data for which we compute the algorithm, closely related to the data provided by the caller
 ///
 /// `W` is the floating-point precision of the weight. Defaults to `f64` so existing callers are

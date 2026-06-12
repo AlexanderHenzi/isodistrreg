@@ -1,4 +1,4 @@
-use crate::structures::Observation;
+use crate::structures::{MAX_OBSERVATIONS, Observation};
 use crate::total_order;
 use crate::total_order::structures::CovariateStatistic;
 use bitree::BITree;
@@ -61,9 +61,9 @@ pub struct CompletionIndex {
 
 impl CompletionIndex {
     pub fn new(observations: &[Observation<usize, usize, bool, f32>], n_covariate: usize) -> Self {
-        // `t` is stored in the upper 31 bits of a u32; data sizes anywhere near that
-        // limit are unrepresentable long before this point (the O(C²) estimator triangle).
-        debug_assert!(observations.len() < (u32::MAX >> 1) as usize);
+        // `t` is stored in the upper 31 bits of a u32, which `MAX_OBSERVATIONS` guarantees
+        // suffices (the largest index is `len - 1`).
+        debug_assert!(observations.len() <= MAX_OBSERVATIONS);
 
         // Last observation per covariate: index and event bit.
         let mut m = vec![0u32; n_covariate];
@@ -117,9 +117,8 @@ pub struct SurvivalComputationCold {
     pub raw_value: f32,
     /// Sum of weight of included observations.
     pub weight: f32,
-    /// Number of samples included in the computation of the raw value. `u32` suffices:
-    /// the observation count is bounded far below that by the O(C²) estimator triangle
-    /// (and `CompletionIndex` packs observation indices into 31 bits already).
+    /// Number of samples included in the computation of the raw value. `u32` suffices by
+    /// the crate-wide [`MAX_OBSERVATIONS`] bound.
     pub count: u32,
 }
 
@@ -189,7 +188,9 @@ impl Estimates {
             let idx = Self::compute_index((i, i), n);
             bounds[idx] = (f32::NAN, f32::NAN);
         }
-        debug_assert!(observations.len() < WALK_OBSERVED_BIT as usize);
+        // Covariate indices share their u32 with the flag in the top bit; `MAX_OBSERVATIONS`
+        // keeps them below it (the largest covariate index is at most `observations.len() - 1`).
+        debug_assert!(observations.len() <= MAX_OBSERVATIONS);
         let walk_x = observations
             .iter()
             .map(|o| o.x as u32 | if o.observed { WALK_OBSERVED_BIT } else { 0 })
