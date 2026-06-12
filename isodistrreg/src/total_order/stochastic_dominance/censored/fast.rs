@@ -130,6 +130,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             context.covariate_statistics.as_slice(),
             data_index,
             completion,
+            &context.observations,
         );
         let index_only_partitions: Vec<_> = partitions
             .into_iter()
@@ -140,7 +141,12 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         // Initialize directly for the more general algorithm
 
         // Set the start count already to the value that will be appropriate after initialization
-        let mut estimates = Estimates::new(context.n_covariate(), data_index, completion);
+        let mut estimates = Estimates::new(
+            context.n_covariate(),
+            data_index,
+            completion,
+            &context.observations,
+        );
         let mut partitions = Vec::with_capacity(context.n_covariate());
 
         // First uncensored threshold (fast initialization only)
@@ -564,7 +570,7 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             for s in ultimate_start..ultimate_end {
                 let marker_max = left_marker_max.max(marker_buf[s - ultimate_start]);
                 estimates.propagate_bounds_with_row::<K>(r, s, row_buf);
-                estimates.update_value(data_index, r, s, input, epsilon, marker_max);
+                estimates.update_value::<K, _, _>(data_index, r, s, input, epsilon, marker_max);
                 // Reflect the freshly written `values[(r, s)]` back into the row buffer so
                 // subsequent iterations (with larger `s`) see the updated value.
                 let idx = Estimates::compute_index((r, s), estimates.len());
@@ -575,7 +581,7 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
 }
 
 impl Estimates {
-    fn update_value<X: crate::Float, Y: crate::Float>(
+    fn update_value<K: Kernel, X: crate::Float, Y: crate::Float>(
         &mut self,
         data_index: usize,
         covariate_start_index: usize, // inclusive
@@ -592,6 +598,7 @@ impl Estimates {
             self.completion
                 .range_max(covariate_start_index, covariate_end_index),
         );
+        let idx = Self::compute_index((covariate_start_index, covariate_end_index), self.len());
         // Exact-0 pinning, checked before anything else: once the interval's last
         // observation has been consumed (an event — see `CompletionIndex`), the interval
         // Kaplan-Meier survival is mathematically exactly 0 and must be stored as exactly
@@ -602,13 +609,12 @@ impl Estimates {
         // condition is monotone in `data_index`), so the stale bookkeeping is never read
         // again.
         if CompletionIndex::completes_marker(marker_max, data_index) {
-            let (value, cold) = self.entry_mut(covariate_start_index, covariate_end_index);
-            cold.raw_value = 0.0;
-            *value = 0.0;
+            self.cold[idx].raw_value = 0.0;
+            self.values[idx] = 0.0;
             return;
         }
 
-        let (value, cold) = self.entry_mut(covariate_start_index, covariate_end_index);
+        let cold = &mut self.cold[idx];
 
         // `cold.count` may already be `data_index + 1` when the cell was touched earlier in the
         // same run of tied uncensored observations (the walk consumes the whole run at once).
@@ -623,7 +629,7 @@ impl Estimates {
             "Bounds should only be NAN if this is a diagonal value",
         );
         if cold.lower_bound >= cold.upper_bound {
-            *value = f32::midpoint(cold.lower_bound, cold.upper_bound);
+            self.values[idx] = f32::midpoint(cold.lower_bound, cold.upper_bound);
             return;
         }
 
@@ -633,19 +639,17 @@ impl Estimates {
         } else {
             input.covariate_statistics[covariate_end_index].cumulative_weight
         };
-        let mut remaining_weight = total_weight - cold.weight;
+        let remaining_weight = total_weight - cold.weight;
         if remaining_weight < epsilon {
             // There is no more weight to process, so the raw Kaplan-Meier value is final — but
             // the bounds may have just been re-propagated from fresh neighbor values, so the
             // clip still has to be reapplied. Skipping it would leave a value clipped against
             // bounds that no longer exist.
-            *value = cold.raw_value.max(cold.lower_bound).min(cold.upper_bound);
+            self.values[idx] = cold.raw_value.max(cold.lower_bound).min(cold.upper_bound);
             return;
         }
 
-        let mut raw_value = cold.raw_value;
-
-        // Walk the response-sorted `observations` slice forward from `cold.count`, up to and
+        // Walk the response-sorted packed walk arrays forward from `cold.count`, up to and
         // including the observation currently being processed — and no further. Observations
         // are sorted by (response asc, uncensored first, covariate asc), so everything in this
         // range is at or below the current threshold and must be folded in. Reading *ahead* of
@@ -653,21 +657,28 @@ impl Estimates {
         // allowed: `cold.count` could then no longer describe what was consumed, and the cell's
         // raw value would run ahead of the neighbor cells its bounds are computed from.
         // No sort or temp buffer is needed: items are already in K-M apply order.
-        for obs in &input.observations[cold.count..=data_index] {
-            if obs.x < covariate_start_index || obs.x > covariate_end_index {
-                continue;
-            }
-            if obs.observed {
-                raw_value *= 1.0 - obs.weight / remaining_weight;
-            }
-            remaining_weight -= obs.weight;
-        }
+        //
+        // The filter reads only the 4-byte `walk_x` stream; the weight is loaded just for
+        // items that pass. `K::walk_scan` vectorizes the range test where SIMD masks are
+        // available — the walk is usually filter-dominated, with only a few percent of
+        // items passing.
+        let from = cold.count;
+        let to = data_index + 1;
+        let (raw_value, remaining_weight) = K::walk_scan(
+            &self.walk_x[from..to],
+            &self.walk_w[from..to],
+            covariate_start_index as u32,
+            (covariate_end_index - covariate_start_index) as u32,
+            cold.raw_value,
+            remaining_weight,
+        );
 
+        let cold = &mut self.cold[idx];
         cold.raw_value = raw_value;
         cold.weight = total_weight - remaining_weight;
         cold.count = data_index + 1;
 
-        *value = raw_value.max(cold.lower_bound).min(cold.upper_bound);
+        self.values[idx] = raw_value.max(cold.lower_bound).min(cold.upper_bound);
     }
 }
 
@@ -693,7 +704,7 @@ impl Estimates {
             if r < observation.x {
                 self.propagate_bounds::<K>(r, observation.x);
             }
-            self.update_value(data_index, r, observation.x, input, epsilon, marker_max);
+            self.update_value::<K, _, _>(data_index, r, observation.x, input, epsilon, marker_max);
         }
     }
 

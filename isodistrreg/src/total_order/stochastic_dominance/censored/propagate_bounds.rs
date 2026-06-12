@@ -40,11 +40,56 @@
 //! `llvm.maxnum` and emit a `vcmpunordps`-based cleanup after every op; in our benchmarks the
 //! cleanup overhead exceeded the width gain.
 
+use crate::total_order::stochastic_dominance::censored::structures::WALK_OBSERVED_BIT;
+
 /// Compile-time selector for the inner reduction kernel. Implementors are zero-sized; the
-/// associated function is statically dispatched, so monomorphizing the algorithm tree over
-/// `K: Kernel` inlines `K::apply` into every `propagate_bounds*` callsite.
+/// associated functions are statically dispatched, so monomorphizing the algorithm tree over
+/// `K: Kernel` inlines them into every callsite.
 pub trait Kernel {
     fn apply(row: &[f32], col: &[f32]) -> (f32, f32);
+
+    /// The K-M walk of `update_value`: fold all items whose covariate (low 31 bits of
+    /// `xs[i]`) lies in `[start, start + span]` into `(raw_value, remaining_weight)`;
+    /// the high bit of `xs[i]` marks an observed (uncensored) item, `ws[i]` its weight.
+    /// Items must be folded in slice order — the K-M product is order-sensitive.
+    #[inline(always)]
+    fn walk_scan(
+        xs: &[u32],
+        ws: &[f32],
+        start: u32,
+        span: u32,
+        raw_value: f32,
+        remaining_weight: f32,
+    ) -> (f32, f32) {
+        walk_scan_scalar(xs, ws, start, span, raw_value, remaining_weight)
+    }
+}
+
+/// Scalar walk: one wrapping-subtraction range test per item (as unsigned,
+/// `x - start > span` exactly when `x` is outside `[start, start + span]`); weights are
+/// only read for items that pass.
+#[inline]
+fn walk_scan_scalar(
+    xs: &[u32],
+    ws: &[f32],
+    start: u32,
+    span: u32,
+    mut raw_value: f32,
+    mut remaining_weight: f32,
+) -> (f32, f32) {
+    debug_assert_eq!(xs.len(), ws.len());
+    for (i, &x_flagged) in xs.iter().enumerate() {
+        let x = x_flagged & !WALK_OBSERVED_BIT;
+        if x.wrapping_sub(start) > span {
+            continue;
+        }
+        let weight = ws[i];
+        if x_flagged & WALK_OBSERVED_BIT != 0 {
+            raw_value *= 1.0 - weight / remaining_weight;
+        }
+        remaining_weight -= weight;
+    }
+    (raw_value, remaining_weight)
 }
 
 /// Portable scalar / SLP-vectorized fallback. Always usable.
@@ -124,6 +169,108 @@ impl Kernel for Avx2Kernel {
         // after `is_x86_feature_detected!("avx2")` returned true.
         unsafe { propagate_bounds_kernel_avx2(row, col) }
     }
+
+    #[inline(always)]
+    fn walk_scan(
+        xs: &[u32],
+        ws: &[f32],
+        start: u32,
+        span: u32,
+        raw_value: f32,
+        remaining_weight: f32,
+    ) -> (f32, f32) {
+        // SAFETY: see `apply`.
+        unsafe { walk_scan_avx2(xs, ws, start, span, raw_value, remaining_weight) }
+    }
+}
+
+/// AVX2 walk: test 8 covariates per compare and 32 per round (four compare-masks merged
+/// into one u32, one test+branch for the common no-hit case), then fold only the set mask
+/// bits in index order — the K-M product is order-sensitive. The walk is usually
+/// filter-dominated (a few percent of items pass), so vectorizing the range test removes
+/// most of its cost.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,avx2")]
+unsafe fn walk_scan_avx2(
+    xs: &[u32],
+    ws: &[f32],
+    start: u32,
+    span: u32,
+    mut raw_value: f32,
+    mut remaining_weight: f32,
+) -> (f32, f32) {
+    use core::arch::x86_64::{
+        _mm256_and_si256, _mm256_castsi256_ps, _mm256_cmpeq_epi32, _mm256_loadu_si256,
+        _mm256_min_epu32, _mm256_movemask_ps, _mm256_set1_epi32, _mm256_sub_epi32,
+    };
+
+    debug_assert_eq!(xs.len(), ws.len());
+    let n = xs.len();
+    let mut k = 0;
+
+    // SAFETY: AVX/AVX2 enabled by function-level `target_feature`; loads stay in-bounds
+    // because each block tests the remaining length first, and mask-bit indices stay below
+    // the block length.
+    unsafe {
+        let start_v = _mm256_set1_epi32(start as i32);
+        let span_v = _mm256_set1_epi32(span as i32);
+        let clear_v = _mm256_set1_epi32(!WALK_OBSERVED_BIT as i32);
+
+        #[inline(always)]
+        unsafe fn range_mask_8(
+            xs: *const u32,
+            clear_v: core::arch::x86_64::__m256i,
+            start_v: core::arch::x86_64::__m256i,
+            span_v: core::arch::x86_64::__m256i,
+        ) -> u32 {
+            // SAFETY: caller guarantees 8 readable lanes at `xs`.
+            unsafe {
+                let v = _mm256_loadu_si256(xs.cast());
+                let x = _mm256_and_si256(v, clear_v);
+                // Unsigned `x - start <= span` via min: t <= span  <=>  min(t, span) == t.
+                let t = _mm256_sub_epi32(x, start_v);
+                let in_range = _mm256_cmpeq_epi32(_mm256_min_epu32(t, span_v), t);
+                _mm256_movemask_ps(_mm256_castsi256_ps(in_range)) as u32
+            }
+        }
+
+        while k + 32 <= n {
+            let p = xs.as_ptr().add(k);
+            let m0 = range_mask_8(p, clear_v, start_v, span_v);
+            let m1 = range_mask_8(p.add(8), clear_v, start_v, span_v);
+            let m2 = range_mask_8(p.add(16), clear_v, start_v, span_v);
+            let m3 = range_mask_8(p.add(24), clear_v, start_v, span_v);
+            let mut mask = m0 | (m1 << 8) | (m2 << 16) | (m3 << 24);
+            while mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                let x_flagged = *xs.get_unchecked(k + j);
+                let weight = *ws.get_unchecked(k + j);
+                if x_flagged & WALK_OBSERVED_BIT != 0 {
+                    raw_value *= 1.0 - weight / remaining_weight;
+                }
+                remaining_weight -= weight;
+                mask &= mask - 1;
+            }
+            k += 32;
+        }
+
+        while k + 8 <= n {
+            let mut mask = range_mask_8(xs.as_ptr().add(k), clear_v, start_v, span_v);
+            while mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                let x_flagged = *xs.get_unchecked(k + j);
+                let weight = *ws.get_unchecked(k + j);
+                if x_flagged & WALK_OBSERVED_BIT != 0 {
+                    raw_value *= 1.0 - weight / remaining_weight;
+                }
+                remaining_weight -= weight;
+                mask &= mask - 1;
+            }
+            k += 8;
+        }
+    }
+
+    walk_scan_scalar(&xs[k..], &ws[k..], start, span, raw_value, remaining_weight)
 }
 
 /// Bare-AVX2 inner kernel — 8-wide f32, two independent accumulator pairs for ILP, masked
@@ -218,6 +365,106 @@ impl Kernel for Avx512Kernel {
         // after `is_x86_feature_detected!("avx512f")` returned true.
         unsafe { propagate_bounds_kernel_avx512(row, col) }
     }
+
+    #[inline(always)]
+    fn walk_scan(
+        xs: &[u32],
+        ws: &[f32],
+        start: u32,
+        span: u32,
+        raw_value: f32,
+        remaining_weight: f32,
+    ) -> (f32, f32) {
+        // SAFETY: see `apply`.
+        unsafe { walk_scan_avx512(xs, ws, start, span, raw_value, remaining_weight) }
+    }
+}
+
+/// AVX-512 walk: test 16 covariates per compare (native unsigned compare-to-mask) and 64
+/// per round, then fold only the set mask bits in index order. See the AVX2 variant for
+/// the rationale.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn walk_scan_avx512(
+    xs: &[u32],
+    ws: &[f32],
+    start: u32,
+    span: u32,
+    mut raw_value: f32,
+    mut remaining_weight: f32,
+) -> (f32, f32) {
+    use core::arch::x86_64::{
+        _mm512_and_si512, _mm512_cmple_epu32_mask, _mm512_loadu_si512, _mm512_set1_epi32,
+        _mm512_sub_epi32,
+    };
+
+    debug_assert_eq!(xs.len(), ws.len());
+    let n = xs.len();
+    let mut k = 0;
+
+    // SAFETY: AVX-512F enabled by function-level `target_feature`; loads stay in-bounds
+    // because each block tests the remaining length first, and mask-bit indices stay below
+    // the block length.
+    unsafe {
+        let start_v = _mm512_set1_epi32(start as i32);
+        let span_v = _mm512_set1_epi32(span as i32);
+        let clear_v = _mm512_set1_epi32(!WALK_OBSERVED_BIT as i32);
+
+        #[inline(always)]
+        unsafe fn range_mask_16(
+            xs: *const u32,
+            clear_v: core::arch::x86_64::__m512i,
+            start_v: core::arch::x86_64::__m512i,
+            span_v: core::arch::x86_64::__m512i,
+        ) -> u16 {
+            // SAFETY: caller guarantees 16 readable lanes at `xs`.
+            unsafe {
+                let v = _mm512_loadu_si512(xs.cast());
+                let x = _mm512_and_si512(v, clear_v);
+                let t = _mm512_sub_epi32(x, start_v);
+                _mm512_cmple_epu32_mask(t, span_v)
+            }
+        }
+
+        // 64 items per round: four compare-masks combined into one u64, one test+branch
+        // for the (common) no-hit case, and hits processed in index order off the bits.
+        while k + 64 <= n {
+            let p = xs.as_ptr().add(k);
+            let m0 = range_mask_16(p, clear_v, start_v, span_v) as u64;
+            let m1 = range_mask_16(p.add(16), clear_v, start_v, span_v) as u64;
+            let m2 = range_mask_16(p.add(32), clear_v, start_v, span_v) as u64;
+            let m3 = range_mask_16(p.add(48), clear_v, start_v, span_v) as u64;
+            let mut mask = m0 | (m1 << 16) | (m2 << 32) | (m3 << 48);
+            while mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                let x_flagged = *xs.get_unchecked(k + j);
+                let weight = *ws.get_unchecked(k + j);
+                if x_flagged & WALK_OBSERVED_BIT != 0 {
+                    raw_value *= 1.0 - weight / remaining_weight;
+                }
+                remaining_weight -= weight;
+                mask &= mask - 1;
+            }
+            k += 64;
+        }
+
+        while k + 16 <= n {
+            let mut mask = range_mask_16(xs.as_ptr().add(k), clear_v, start_v, span_v) as u32;
+            while mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                let x_flagged = *xs.get_unchecked(k + j);
+                let weight = *ws.get_unchecked(k + j);
+                if x_flagged & WALK_OBSERVED_BIT != 0 {
+                    raw_value *= 1.0 - weight / remaining_weight;
+                }
+                remaining_weight -= weight;
+                mask &= mask - 1;
+            }
+            k += 16;
+        }
+    }
+
+    walk_scan_scalar(&xs[k..], &ws[k..], start, span, raw_value, remaining_weight)
 }
 
 /// AVX-512F inner kernel — 16-wide f32, two independent accumulator pairs for ILP, native
@@ -341,6 +588,46 @@ mod test {
                 }
                 if is_x86_feature_detected!("avx512f") {
                     assert_eq!(Avx512Kernel::apply(&row, &col), expected, "avx512, n={n}");
+                }
+            }
+        }
+    }
+
+    /// The SIMD walk scans must fold exactly the same items in the same order as the scalar
+    /// walk, so all implementations return bit-identical (raw_value, remaining_weight).
+    #[test]
+    fn walk_scans_agree() {
+        let mut state = 0xa11c;
+        for n in 0..=130 {
+            // Covariate indices in a small range so the filter passes a meaningful share;
+            // ~half the items observed.
+            let xs: Vec<u32> = (0..n)
+                .map(|_| {
+                    let x = (lcg_f32(&mut state) * 40.0) as u32;
+                    let observed = lcg_f32(&mut state) > 0.5;
+                    x | if observed { WALK_OBSERVED_BIT } else { 0 }
+                })
+                .collect();
+            let ws: Vec<f32> = (0..n).map(|_| lcg_f32(&mut state) + 0.5).collect();
+
+            for (start, span) in [(0u32, 40u32), (10, 5), (35, 0), (12, 13)] {
+                let expected = ScalarKernel::walk_scan(&xs, &ws, start, span, 1.0, n as f32 + 50.0);
+                #[cfg(target_arch = "x86_64")]
+                {
+                    if is_x86_feature_detected!("avx2") {
+                        assert_eq!(
+                            Avx2Kernel::walk_scan(&xs, &ws, start, span, 1.0, n as f32 + 50.0),
+                            expected,
+                            "avx2, n={n} start={start} span={span}",
+                        );
+                    }
+                    if is_x86_feature_detected!("avx512f") {
+                        assert_eq!(
+                            Avx512Kernel::walk_scan(&xs, &ws, start, span, 1.0, n as f32 + 50.0),
+                            expected,
+                            "avx512, n={n} start={start} span={span}",
+                        );
+                    }
                 }
             }
         }
