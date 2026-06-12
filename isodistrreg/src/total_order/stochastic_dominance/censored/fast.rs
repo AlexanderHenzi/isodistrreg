@@ -449,7 +449,14 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     // Pooling left part of partitions (direction is the same, because we're working with survival
     // quantities, not the CDF)
     pool::<_, _, D, K, _, _>(
-        data_index, estimates, partitions, input, epsilon, row_buf, marker_buf,
+        data_index,
+        observation.x,
+        estimates,
+        partitions,
+        input,
+        epsilon,
+        row_buf,
+        marker_buf,
     );
 
     // Accelerated extension and pooling
@@ -457,7 +464,14 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         partitions.push(Partition::new(i + 1));
         // Direction is the same, because we're working with survival quantities, not the CDF)
         pool::<_, _, D, K, _, _>(
-            data_index, estimates, partitions, input, epsilon, row_buf, marker_buf,
+            data_index,
+            observation.x,
+            estimates,
+            partitions,
+            input,
+            epsilon,
+            row_buf,
+            marker_buf,
         );
     }
 
@@ -467,6 +481,7 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
 
 fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     data_index: usize,
+    split_x: usize,
     estimates: &mut Estimates,
     partitions: &mut Vec<structures::Partition<W, V>>,
     input: &CensoredContext<X, Y>,
@@ -498,6 +513,20 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         // Perform pooling
         let ultimate_boundary = partitions.pop().unwrap();
         *partitions.last_mut().unwrap() = ultimate_boundary;
+
+        if penultimate_start > split_x {
+            // Both merged blocks lie strictly right of the covariate that triggered this
+            // update, so every cross cell (r, s) satisfies split_x < r <= s. The new
+            // observation at split_x is outside [r, s], and both blocks are sub-intervals
+            // of the block that was just split — whose interior cells were all current
+            // before the split (censored arrivals never change stored values, and an
+            // uncensored arrival inside would have split it earlier). Values, bounds, and
+            // clips are therefore already exactly what the loop below would recompute,
+            // and the completion state cannot newly fire either: a completing event with
+            // x in [r, s] and index <= data_index would itself have split the block.
+            // Keep the merge, skip the no-op cell updates.
+            continue;
+        }
 
         // The completion range-max over a cell `[r, s]` splits at the partition boundary
         // (`ultimate_start == penultimate_end` in both match arms above): the left part
