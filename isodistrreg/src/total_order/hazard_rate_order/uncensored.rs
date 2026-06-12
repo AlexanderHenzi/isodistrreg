@@ -277,6 +277,32 @@ mod test {
         );
     }
 
+    /// Every emitted value lies in [0, 1]: a pooled ratio that is exactly 1 in exact
+    /// arithmetic can round one f32 ulp above 1, so the survival update is capped at
+    /// 1 before the CDF write. On this instance the x = 7 column otherwise picks up
+    /// a value of -2^-23.
+    #[test]
+    fn test_pooled_unit_ratio_stays_in_bounds() {
+        let x = [
+            0.0, 0.0, 2.0, 0.0, 3.0, 2.0, 5.0, 2.0, 2.0, 6.0, 1.0, 1.0, 6.0, 5.0, 0.0, 7.0, 5.0,
+            5.0, 5.0, 1.0,
+        ];
+        let y = [
+            0.5, 1.0, 1.5, 2.0, 0.0, 2.0, 2.5, 1.0, 0.0, 1.0, 0.5, 1.0, 0.5, 0.0, 1.5, 2.5, 0.5,
+            0.0, 2.5, 1.5,
+        ];
+        let w = [
+            0.5, 1.0, 2.0, 1.0, 0.5, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 1.0, 2.0, 2.0, 1.0, 1.0, 2.0,
+            2.0, 2.0, 1.0,
+        ];
+        let context = preprocess_uncensored(&x, &y, &w);
+        let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        assert!(
+            cdfs.iter().all(|v| (0.0..=1.0).contains(v)),
+            "all CDF values must lie in [0, 1]: {cdfs:?}",
+        );
+    }
+
     /// Two adjacent groups dying at the first threshold form two equal-valued
     /// (never pooled) partitions; both must be marked dead. No pooling occurs, so
     /// the expectation is plain conditional-survival bookkeeping.

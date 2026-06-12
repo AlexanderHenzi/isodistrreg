@@ -464,6 +464,124 @@ mod test {
         }
     }
 
+    fn fit_1d(
+        x: &[f64],
+        y: &[f64],
+        w: &[f64],
+        order: StochasticOrder,
+        decreasing: bool,
+    ) -> Fit<f64, f64> {
+        Fit::fit(
+            x,
+            y,
+            None,
+            Some(w),
+            CovariateGroups::empty(1),
+            order,
+            decreasing,
+            Config::default(),
+            &crate::NoProgress,
+        )
+        .unwrap()
+    }
+
+    /// HRO ratio constraints are oriented by the statically known edge direction. A
+    /// pooled block makes the previous fitted survivals tied up to solver round-off,
+    /// which must not decide the constraint direction: here t=0 pools all survivals
+    /// to 6/7, and at t=1 the ratio constraints reduce to plain isotonicity, pooling
+    /// to 4/7 — the same [1/7, 3/7, 1] the total-order kernel fits for every
+    /// covariate.
+    #[test]
+    fn hazard_rate_pooled_block_keeps_orientation() {
+        let fit = fit_1d(
+            &[0.0, 1.0, 2.0, 2.0],
+            &[1.5, 1.5, 0.0, 1.0],
+            &[1.0, 3.0, 1.0, 2.0],
+            StochasticOrder::HazardRateOrder,
+            false,
+        );
+        assert_eq!(fit.thresholds(), &[0.0, 1.0, 1.5]);
+        let expected = [1.0 / 7.0, 3.0 / 7.0, 1.0];
+        for xv in [0.0, 1.0, 2.0] {
+            let cdf: Vec<f32> = fit.cdf(&[xv]).collect();
+            for (got, want) in cdf.iter().zip(expected.iter()) {
+                assert!((got - want).abs() < 1e-3, "x = {xv}: {cdf:?}");
+            }
+        }
+    }
+
+    /// Decreasing direction with exactly tied fitted survivals: the static edge
+    /// orientation keeps the empirical CDFs (which already satisfy the decreasing
+    /// hazard order) as the fit.
+    #[test]
+    fn hazard_rate_decreasing_tied_survivals_keep_orientation() {
+        let fit = fit_1d(
+            &[1.0, 1.0, 2.0, 2.0],
+            &[1.0, 3.0, 1.0, 2.0],
+            &[1.0; 4],
+            StochasticOrder::HazardRateOrder,
+            true,
+        );
+        assert_eq!(fit.thresholds(), &[1.0, 2.0, 3.0]);
+        let expected_x1 = [0.5, 0.5, 1.0];
+        let expected_x2 = [0.5, 1.0, 1.0];
+        for (xv, expected) in [(1.0, expected_x1), (2.0, expected_x2)] {
+            let cdf: Vec<f32> = fit.cdf(&[xv]).collect();
+            for (got, want) in cdf.iter().zip(expected.iter()) {
+                assert!((got - want).abs() < 1e-3, "x = {xv}: {cdf:?}");
+            }
+        }
+    }
+
+    /// The QP is solved on power-of-two-normalized weights, so rescaling all weights
+    /// by a power of two solves the bitwise-identical problem: the fits are equal.
+    #[test]
+    fn sd_fit_invariant_under_weight_rescaling() {
+        let x = [1.0, 2.0, 3.0];
+        let y = [2.0, 1.0, 3.0];
+        let unit = fit_1d(
+            &x,
+            &y,
+            &[1.0; 3],
+            StochasticOrder::StochasticDominance,
+            false,
+        );
+        let scaled = fit_1d(
+            &x,
+            &y,
+            &[2f64.powi(-14); 3],
+            StochasticOrder::StochasticDominance,
+            false,
+        );
+        assert_eq!(unit.cdfs, scaled.cdfs);
+    }
+
+    /// Weight ratios within one fit must not degrade the solve: the QP runs in energy
+    /// coordinates (u = sqrt(w)·x), so per-coordinate optimality holds for the tiny
+    /// weight too. At z = 2 the empirical values [1, 1, 0] are already feasible, so
+    /// the fitted row is the data.
+    #[test]
+    fn sd_fit_accurate_under_weight_ratio() {
+        let fit = fit_1d(
+            &[1.0, 2.0, 3.0],
+            &[2.0, 1.0, 3.0],
+            &[1024.0, 1.0, 0.0009765625],
+            StochasticOrder::StochasticDominance,
+            false,
+        );
+        assert_eq!(fit.thresholds(), &[1.0, 2.0, 3.0]);
+        let x3: Vec<f32> = fit.cdf(&[3.0]).collect();
+        let expected = [0.0, 0.0, 1.0];
+        for (got, want) in x3.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-3, "x = 3: {x3:?}");
+        }
+        let f_x1_z1 = fit.cdf_at(&[1.0], 1.0);
+        assert!(
+            (f_x1_z1 - 1.0 / 1025.0).abs() < 1e-3,
+            "F(x=1, z=1) = {f_x1_z1}, want 1/1025"
+        );
+    }
+
     #[test]
     fn multivariate_sd_case() {
         // 6 observations that collapse to 3 unique rows under SD preparation

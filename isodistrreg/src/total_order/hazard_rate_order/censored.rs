@@ -320,6 +320,44 @@ mod test {
         );
     }
 
+    /// The single-threshold shortcut accounts for censoring TIMES: censored mass
+    /// strictly below the unique event time leaves the risk set before the event, so
+    /// the event consumes the whole remaining at-risk mass and F is exactly 1 — not
+    /// the event's share of the total group weight.
+    #[test]
+    fn test_single_threshold_respects_censoring_times() {
+        execute_test(
+            [0.0, 0.0, 1.0],
+            [1.0, 2.0, 2.0],
+            [false, true, true],
+            [2.0, 1.0, 1.0],
+            [[1.0, 1.0]],
+        );
+    }
+
+    /// Fitted survival never increases: every covariate's CDF column is nondecreasing
+    /// across thresholds, even when a neighbouring group dies and the surviving
+    /// group's pooled ratio target exceeds 1 (the applied step is capped at 1).
+    #[test]
+    fn test_threshold_monotone_after_group_death() {
+        let x = [7.0, 7.0, 5.0, 1.0];
+        let y = [0.0, 0.0, 2.0, 1.5];
+        let observed = [false, true, false, true];
+        let context = preprocess_censored(&x, &y, &observed, &[1.0; 4]).unwrap();
+        let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+        let n_covariate = context.unique_covariates.len();
+        let n_threshold = context.thresholds.len();
+        for covariate in 0..n_covariate {
+            let column: Vec<f32> = (0..n_threshold)
+                .map(|threshold| cdfs[threshold * n_covariate + covariate])
+                .collect();
+            assert!(
+                column.is_sorted(),
+                "column at covariate index {covariate} decreases in the threshold: {column:?}",
+            );
+        }
+    }
+
     /// An event at the covariate the PAVA cursor points to: each covariate is
     /// pushed exactly once per row. All observed, no pooling required, so the rows
     /// are plain conditional-survival bookkeeping.

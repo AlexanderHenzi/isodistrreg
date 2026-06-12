@@ -458,24 +458,95 @@ mod test {
     use crate::structures::{Increasing, StochasticOrder};
     use crate::total_order::{Config, Fit, QualityIndicators};
 
-    /// All-censored input dispatches to the censored algorithm: zero events means no
-    /// thresholds — the empty fit (sub-CDF ≡ 0).
-    #[test]
-    fn test_all_censored_yields_empty_fit() {
-        let fit = Fit::<f64, f64>::fit::<f64>(
-            &[1.0, 2.0, 3.0],
-            &[1.0, 2.0, 3.0],
-            Some(&[false, false, false]),
+    fn fit_sd(x: &[f64], y: &[f64], w: Option<&[f64]>) -> Fit<f64, f64> {
+        Fit::<f64, f64>::fit::<f64>(
+            x,
+            y,
             None,
+            w,
             Increasing,
             StochasticOrder::StochasticDominance,
             false,
             Config,
             &crate::NoProgress,
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    /// All-censored input dispatches to the censored algorithm: zero events means no
+    /// thresholds — the empty fit (sub-CDF ≡ 0), for both stochastic orders. The
+    /// empty fit is a legal `fit()` result: it passes the consistency check and every
+    /// prediction method reflects the all-zero sub-CDF.
+    #[test]
+    fn test_all_censored_yields_empty_fit() {
+        for order in [
+            StochasticOrder::StochasticDominance,
+            StochasticOrder::HazardRateOrder,
+        ] {
+            let fit = Fit::<f64, f64>::fit::<f64>(
+                &[1.0, 2.0, 3.0],
+                &[1.0, 2.0, 3.0],
+                Some(&[false, false, false]),
+                None,
+                Increasing,
+                order,
+                false,
+                Config,
+                &crate::NoProgress,
+            )
+            .unwrap();
+            assert!(fit.covariates.is_empty());
+            assert!(fit.thresholds.is_empty());
+            assert!(fit.cdfs.is_empty());
+            fit.assert_consistent();
+            assert_eq!(fit.cdf(2.0).count(), 0);
+            assert_eq!(fit.cdf_at(2.0, 1.5), 0.0);
+            assert!(fit.quantile(2.0, 0.5, false).is_infinite());
+            assert!(fit.mean(2.0).is_nan());
+            assert!(fit.predict_grid([1.0, 2.0], [0.5, 1.5]).all(|v| v == 0.0));
+        }
+    }
+
+    /// A positive weight that rounds to 0.0f32 is dropped like a zero weight (the
+    /// documented fit() contract): the fit equals the fit on the remaining
+    /// observations, including both grids — and the empty fit if nothing remains.
+    #[test]
+    fn test_weight_below_f32_range_drops_observation() {
+        let fit = fit_sd(&[1.0, 2.0, 3.0], &[2.0, 1.0, 3.0], Some(&[1.0, 1e-50, 1.0]));
+        assert_eq!(fit.covariates, vec![1.0, 3.0]);
+        assert_eq!(fit.thresholds, vec![2.0, 3.0]);
+        assert_eq!(fit.cdfs, vec![1.0, 1.0, 0.0, 1.0]);
+
+        let fit = fit_sd(&[1.0, 2.0], &[1.0, 2.0], Some(&[1e-300, 1e-300]));
         assert!(fit.thresholds.is_empty());
         assert!(fit.cdfs.is_empty());
+    }
+
+    /// On already-isotonic data the fit is the empirical point masses, with
+    /// mathematically-exact 1.0 cells pinned bitwise — so the unit quantile lands on
+    /// each covariate's point mass instead of overshooting to a later grid step.
+    #[test]
+    fn test_exact_unit_mass_quantile_on_monotone_data() {
+        let x: Vec<f64> = (0..7).map(|i| i as f64).collect();
+        let y: Vec<f64> = (0..7).map(|i| (i as f64) * 2.0).collect();
+        let w = [
+            0.3642906526368309,
+            0.9050669124861691,
+            1.0939139792798336,
+            0.32111702794569374,
+            0.9402725130656718,
+            0.37363377079925664,
+            0.542632225634752,
+        ];
+        let fit = fit_sd(&x, &y, Some(&w));
+        for i in 0..7 {
+            assert_eq!(fit.cdf_at(x[i], y[i]), 1.0, "F(x_{i}, own response)");
+            assert_eq!(
+                fit.quantile(x[i], 1.0, false),
+                y[i],
+                "unit quantile at x_{i}"
+            );
+        }
     }
 
     /// `y_observed = Some(all true)` and `y_observed = None` describe the same data;
