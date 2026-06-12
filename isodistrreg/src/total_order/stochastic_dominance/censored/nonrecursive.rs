@@ -480,6 +480,45 @@ mod test {
         assert_eq!(cdf, vec![0.75, 0.75, 1.0, 1.0]);
     }
 
+    /// Generic (non-binary-friendly) f64 weights: the running at-risk sums are
+    /// maintained by repeated subtraction and can drift a few ulps below the last
+    /// event's weight, so the final Kaplan-Meier factor must be treated as exactly 0,
+    /// never negative. All-observed data then fits the ordinary IDR step CDFs.
+    #[test]
+    fn test_all_observed_generic_weights() {
+        let ((n_covariate, n_threshold), cdf) = algorithm(
+            &[0.0, 1.0],
+            &[1.0, 2.0],
+            &[true, true],
+            &[1.6463212473246904, 1.4322194835320843],
+        )
+        .unwrap();
+        assert_eq!((n_covariate, n_threshold), (2, 2));
+        assert_eq!(cdf, vec![1.0, 0.0, 1.0, 1.0]);
+    }
+
+    /// Same drift tolerance for the single-threshold variant, where the cell weight
+    /// comes from a cumulative-sum difference: censored mass beyond the threshold
+    /// leaves the max-min over interval Kaplan-Meier survivals at the event's share
+    /// of the total weight.
+    #[test]
+    fn test_single_generic_weights() {
+        let w = [1.6293038471250594, 1.9665908508711913];
+        let expected = w[1] / (w[0] + w[1]);
+        let cdf = algorithm_single::<Decreasing, Serial>(
+            1.5,
+            &[0.0, 1.0],
+            &[2.0, 1.0],
+            &[false, true],
+            &w,
+        )
+        .unwrap();
+        assert_eq!(cdf.len(), 2);
+        for v in cdf {
+            assert!((v - expected).abs() < 1e-9, "expected {expected}, got {v}");
+        }
+    }
+
     #[test]
     fn test_single() {
         assert_eq!(

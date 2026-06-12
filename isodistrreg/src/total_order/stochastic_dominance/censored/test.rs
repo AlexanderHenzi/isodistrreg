@@ -1006,6 +1006,48 @@ fn pins_exact_one_at_intermediate_threshold() {
     }
 }
 
+/// The companion invariant across covariates: for an increasing fit every threshold
+/// row is nonincreasing along the sorted covariates. Cells whose sub-CDF completes
+/// must be pinned to exactly 1.0 even when their *neighbors* arrive at 1.0 through a
+/// different route (e.g. the clamp of a slightly-negative survival) — otherwise a
+/// drifted 0.99999994 between two exact 1.0s breaks the stochastic ordering by an ulp.
+/// Here the first three covariates complete at the first threshold.
+#[test]
+fn pins_exact_one_preserves_covariate_ordering() {
+    let x = [
+        0.04097593542105893,
+        0.05876877680199277,
+        0.019171183910507095,
+        0.16271247105566322,
+        0.7878839749351719,
+    ];
+    let y = [
+        0.12012876644649723,
+        0.10460697733118048,
+        0.10047503132764332,
+        0.19127475492081214,
+        0.7837285927709854,
+    ];
+    let observed = [true, true, true, false, true];
+    let w = [1.4884429840234832, 1.0, 1.0, 1.0, 1.0];
+
+    let context = preprocess(&x, &y, &observed, &w).unwrap();
+    let n_covariate = context.n_covariate();
+    let cdfs = fast::algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+    for (threshold, row) in cdfs.chunks_exact(n_covariate).enumerate() {
+        assert!(
+            row.iter().rev().is_sorted(),
+            "threshold index {threshold}: row must be nonincreasing along the \
+             covariates, got {row:?}",
+        );
+    }
+    // At the third threshold (y = 0.12012...) all three left sub-CDFs have completed.
+    assert_eq!(
+        &cdfs[2 * n_covariate..3 * n_covariate],
+        &[1.0, 1.0, 1.0, 0.0, 0.0]
+    );
+}
+
 /// `preprocess` merges an *uncensored* observation into an immediately preceding
 /// *censored* observation at the same covariate (`is_following_censored` in
 /// preprocessing.rs), converting the event into censoring mass at a lower response and

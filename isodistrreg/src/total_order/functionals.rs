@@ -585,6 +585,47 @@ mod test {
         }
     }
 
+    /// A TRAILING undefined block is resolved without disturbing its defined left
+    /// neighbour (no order violation exists): per the max-min definition the
+    /// undefined group takes the pooled Var{1,2,5} = 13/3 while {1,2} keeps 0.5.
+    #[test]
+    fn test_undefined_block_trailing_keeps_left_neighbor() {
+        let tuples = [(1.0, 1.0), (1.0, 2.0), (2.0, 5.0)];
+        let expected = [0.5, 13.0 / 3.0];
+        let fast = algorithm_pre_sorted::<Increasing, _, _, _>(
+            tuples.iter().copied(),
+            &ClippingWrapper::new(Variance::new()),
+        );
+        assert_eq!(fast.len(), expected.len());
+        for (f, e) in fast.iter().zip(expected.iter()) {
+            assert!((f - e).abs() < 1e-12, "{fast:?} != {expected:?}");
+        }
+    }
+
+    /// An undefined block in the MIDDLE pools with its RIGHT neighbour per the
+    /// max-min definition (Var{5,7,8,9} = 35/12 keeps the order against the left
+    /// group's 0.5), leaving the defined left group untouched.
+    #[test]
+    fn test_undefined_block_middle_pools_right() {
+        let tuples = [
+            (1.0, 1.0),
+            (1.0, 2.0),
+            (2.0, 5.0),
+            (3.0, 7.0),
+            (3.0, 8.0),
+            (3.0, 9.0),
+        ];
+        let expected = [0.5, 35.0 / 12.0, 35.0 / 12.0];
+        let fast = algorithm_pre_sorted::<Increasing, _, _, _>(
+            tuples.iter().copied(),
+            &ClippingWrapper::new(Variance::new()),
+        );
+        assert_eq!(fast.len(), expected.len());
+        for (f, e) in fast.iter().zip(expected.iter()) {
+            assert!((f - e).abs() < 1e-12, "{fast:?} != {expected:?}");
+        }
+    }
+
     #[test]
     fn test_variance_two_groups_ordering_satisfied() {
         let functional = Variance::new();

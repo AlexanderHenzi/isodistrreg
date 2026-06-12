@@ -859,6 +859,43 @@ mod test {
         );
     }
 
+    /// Fractional sizes resolve to ceiling(n * p), per the documented `idrbag`
+    /// contract ("a random subsample of size ceiling(nrow(X)*p)").
+    #[test]
+    fn parse_fractional_size_uses_ceiling() {
+        let config = Config::parse(Some(2), Some(Either::Right(0.61)), false, 5, None, 1).unwrap();
+        assert_eq!(config.subsample_size, 4); // ceiling(3.05)
+    }
+
+    /// The aggregate's threshold grid and covariate set come from the positive-weight
+    /// subsample, matching the member fits' own grids; with every weight zero the
+    /// aggregate is the empty fit.
+    #[test]
+    fn zero_weight_observations_are_inert_in_aggregate_grids() {
+        let fit = |x: &[f64], y: &[f64], w: Option<&[f64]>| {
+            Fit::<total_order::Fit<f64, f64>>::fit::<f64>(
+                x,
+                y,
+                None,
+                w,
+                Increasing,
+                StochasticOrder::StochasticDominance,
+                false,
+                (Config::disable(x.len()), Default::default()),
+                &crate::NoProgress,
+            )
+            .unwrap()
+        };
+        let base = fit(&[1.0, 2.0], &[1.0, 2.0], None);
+        let padded = fit(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0], Some(&[1.0, 1.0, 0.0]));
+        assert_eq!(padded.thresholds(), base.thresholds());
+        assert_eq!(padded.covariates, base.covariates);
+
+        let empty = fit(&[1.0, 2.0], &[1.0, 2.0], Some(&[0.0, 0.0]));
+        assert!(empty.thresholds().is_empty());
+        assert_eq!(empty.cdf(1.0).count(), 0);
+    }
+
     /// Without an explicit size, subagging (no replacement) defaults to half the data
     /// and bootstrapping (with replacement) to the full sample size.
     #[test]
@@ -941,6 +978,45 @@ mod test {
             result,
             Err(crate::Error::SubaggingParameterInconsistency(_))
         ));
+    }
+
+    /// An all-censored subsample yields an empty member fit; the grid prediction
+    /// path handles it like the pointwise path does (an empty member contributes 0
+    /// everywhere).
+    #[test]
+    fn predict_grid_handles_empty_member_fits() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y = [2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        // One event, five censored observations: a size-2 subsample without the
+        // event produces the empty member fit.
+        let observed = [true, false, false, false, false, false];
+        let fit_with_seed = |seed| {
+            Fit::<total_order::Fit<f64, f64>>::fit::<f64>(
+                &x,
+                &y,
+                Some(&observed),
+                None,
+                Increasing,
+                StochasticOrder::StochasticDominance,
+                false,
+                (Config::new(3, 2, false, Some(seed), 1), Default::default()),
+                &crate::NoProgress,
+            )
+            .unwrap()
+        };
+        let agg = (0..1000)
+            .map(fit_with_seed)
+            .find(|agg| {
+                agg.fits.iter().any(|f| f.thresholds.is_empty())
+                    && agg.fits.iter().any(|f| !f.thresholds.is_empty())
+            })
+            .expect("some seed in 0..1000 must draw both member kinds");
+
+        let via_cdf: Vec<f32> = x.iter().flat_map(|&c| agg.cdf(c)).collect();
+        let via_grid: Vec<f32> = agg
+            .predict_grid(x.iter().copied(), agg.thresholds().iter().copied())
+            .collect();
+        assert_eq!(via_grid, via_cdf);
     }
 
     #[test]

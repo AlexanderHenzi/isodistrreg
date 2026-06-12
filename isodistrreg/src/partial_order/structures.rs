@@ -907,12 +907,68 @@ mod test {
         }
     }
 
-    /// All-censored input has zero events, hence no thresholds: the empty fit.
+    /// All-censored input has zero events, hence no thresholds: the empty fit — the
+    /// sub-CDF that stays at 0, which is what predictions report.
     #[test]
     fn test_all_censored_yields_empty_fit() {
         let fit = fit(&COVARIATES, &RESPONSES, Some(&[false; 4]));
         assert!(fit.thresholds().is_empty());
         assert!(fit.cdfs.is_empty());
+        assert_eq!(fit.cdf_at(&COVARIATES[..2], 1.5), 0.0);
+    }
+
+    /// The groups and ungrouped lists must cover exactly `dimension` columns, and no
+    /// member index may reach beyond it — `fit` rejects such orders with `Err` via
+    /// this check.
+    #[test]
+    fn test_covariate_groups_consistency_requires_matching_dimension() {
+        let cg = |ungrouped: Vec<usize>, dimension| CovariateGroups {
+            groups: vec![],
+            ungrouped,
+            dimension,
+        };
+        assert!(cg(vec![0, 1], 2).is_consistent());
+        // Declared dimension exceeds the covered columns.
+        assert!(!cg(vec![0], 2).is_consistent());
+        // Member index beyond the declared dimension.
+        assert!(!cg(vec![0, 1], 1).is_consistent());
+    }
+
+    /// The censored solver's capacity limit counts unique covariate rows (what its
+    /// bitsets index), not observation records: two covariates spread over more than
+    /// 8192 records must fit fine. Two events define the threshold grid; the record
+    /// count comes from censored mass at distinct responses above them.
+    #[test]
+    fn test_censored_capacity_counts_covariates_not_observations() {
+        let n_censored = 8193usize;
+        let mut covariates = Vec::new();
+        let mut responses = Vec::new();
+        let mut observed = Vec::new();
+        for c in 0..2 {
+            covariates.extend([c as f64, c as f64]);
+            responses.push(c as f64 * 0.5);
+            observed.push(true);
+        }
+        for i in 0..n_censored {
+            let c = i % 2;
+            covariates.extend([c as f64, c as f64]);
+            responses.push(1.0 + i as f64);
+            observed.push(false);
+        }
+
+        let fit = Fit::<f64, f64>::fit::<f64>(
+            &covariates,
+            &responses,
+            Some(&observed),
+            None,
+            CovariateGroups::empty(2),
+            StochasticOrder::StochasticDominance,
+            false,
+            Config::default(),
+            &NoProgress,
+        )
+        .unwrap();
+        assert_eq!(fit.thresholds().len(), 2);
     }
 
     /// `global_cdf` is the pooled Kaplan-Meier with one value per threshold —
