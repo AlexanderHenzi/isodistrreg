@@ -5,6 +5,9 @@ use bitree::BITree;
 
 pub type Partition = total_order::structures::Partition<(), ()>;
 
+/// Flag bit marking an observed (uncensored) item in `Estimates::walk_x`.
+pub const WALK_OBSERVED_BIT: u32 = 1 << 31;
+
 impl Partition {
     pub fn new(index: usize) -> Self {
         Self {
@@ -139,10 +142,23 @@ pub struct Estimates {
     /// survival is mathematically exactly 0 are pinned to exactly 0 the moment they
     /// complete, immune to the f32 drift of the running Kaplan-Meier bookkeeping.
     pub completion: CompletionIndex,
+    /// Covariate index of each observation (response order, parallel to the context's
+    /// `observations`), with [`WALK_OBSERVED_BIT`] set on uncensored items. The hot K-M
+    /// walk in `update_value` filters on this pure 4-byte stream instead of dragging
+    /// 24-byte `Observation`s through cache; the weight in `walk_w` is only read for
+    /// items that pass the filter.
+    pub walk_x: Vec<u32>,
+    /// Weight of each observation, parallel to `walk_x`.
+    pub walk_w: Vec<f32>,
 }
 
 impl Estimates {
-    pub fn new(n: usize, start_count: usize, completion: CompletionIndex) -> Self {
+    pub fn new(
+        n: usize,
+        start_count: usize,
+        completion: CompletionIndex,
+        observations: &[Observation<usize, usize, bool, f32>],
+    ) -> Self {
         let total = n * (n + 1) / 2;
         let values = vec![1.0; total];
         let mut cold = vec![
@@ -163,11 +179,19 @@ impl Estimates {
             cold[idx].lower_bound = f32::NAN;
             cold[idx].upper_bound = f32::NAN;
         }
+        debug_assert!(observations.len() < WALK_OBSERVED_BIT as usize);
+        let walk_x = observations
+            .iter()
+            .map(|o| o.x as u32 | if o.observed { WALK_OBSERVED_BIT } else { 0 })
+            .collect();
+        let walk_w = observations.iter().map(|o| o.weight).collect();
         Self {
             len: n,
             values,
             cold,
             completion,
+            walk_x,
+            walk_w,
         }
     }
     /// Index into the array - `r` is inclusive, `s` is inclusive
@@ -208,11 +232,12 @@ impl Estimates {
         covariate_statistics: &[CovariateStatistic],
         start_count: usize,
         completion: CompletionIndex,
+        observations: &[Observation<usize, usize, bool, f32>],
     ) -> Self {
         let len = consumed_weight.len();
         debug_assert_eq!(covariate_statistics.len(), len);
 
-        let mut estimates = Estimates::new(len, start_count, completion);
+        let mut estimates = Estimates::new(len, start_count, completion, observations);
 
         let consumed_weight_plain: Vec<f32> = Vec::from(consumed_weight);
 
