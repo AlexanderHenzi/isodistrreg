@@ -1,8 +1,7 @@
 use crate::Float;
 use crate::error::Error;
 use crate::preprocessing::validate;
-use crate::routines::argsort_indices_unstable_by;
-use crate::structures::{Increasing, Observation};
+use crate::structures::Observation;
 use crate::total_order::structures::{AlgorithmContext, CensoredContext, CovariateStatistic};
 use itertools::{Itertools, izip};
 
@@ -84,19 +83,34 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
 ) -> AlgorithmContext<X, Y, S> {
     let n = x.len();
 
-    // Determine the order by covariate and response, over the positive-weight
-    // observations only — zero-weight ones are dropped before they are even compared.
-    // `validate` has rejected negative and non-finite weights, so `> 0` is exactly
-    // "nonzero" here.
-    let order = argsort_indices_unstable_by::<Increasing, _>(
-        |i, j| {
-            x[i].total_cmp(&x[j])
-                .then(y[i].total_cmp(&y[j]))
-                .then(observed(i).cmp(&observed(j)).reverse())
-        },
-        (0..n).filter(|&i| weight[i] > W::zero()).collect(),
-    );
-    if order.is_empty() {
+    // Sort packed values rather than argsort indices, for the same reason as in
+    // `preprocess_censored`: the comparator reads its keys from the element itself
+    // instead of gathering from separate arrays per comparison, and the aggregation
+    // loop below scans one contiguous buffer instead of gathering through the sorted
+    // order. Same comparator, still unstable — order among fully-tied keys remains
+    // arbitrary. `observed` is evaluated once per row at pack time (it is a pure
+    // function of the original index, which filtering does not disturb).
+    //
+    // Zero-weight observations are dropped while packing, before they are even
+    // compared. `validate` has rejected negative and non-finite weights, so `> 0` is
+    // exactly "nonzero" here.
+    struct Item<X, Y, S, W> {
+        x: X,
+        y: Y,
+        observed: S,
+        weight: W,
+    }
+    let mut items: Vec<Item<X, Y, S, W>> = izip!(x, y, weight)
+        .enumerate()
+        .filter(|&(_, (_, _, &weight))| weight > W::zero())
+        .map(|(index, (&x, &y, &weight))| Item {
+            x,
+            y,
+            observed: observed(index),
+            weight,
+        })
+        .collect();
+    if items.is_empty() {
         return AlgorithmContext {
             observations: Vec::with_capacity(0),
             covariate_statistics: Vec::with_capacity(0),
@@ -104,6 +118,11 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
             unique_covariates: Vec::with_capacity(0),
         };
     }
+    items.sort_unstable_by(|a, b| {
+        a.x.total_cmp(&b.x)
+            .then(a.y.total_cmp(&b.y))
+            .then(a.observed.cmp(&b.observed).reverse())
+    });
 
     // While copying the data in the sorted order and aggregating identical observations by weight,
     // we track the unique covariates we encounter.
@@ -119,36 +138,36 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
     // uninitialized placeholder (0.0) and must not be read.
     let mut last_w_accum: W;
 
-    let mut covariate_sorted_indices = order.into_iter();
+    let mut items_sorted = items.into_iter();
     {
-        let index = covariate_sorted_indices.next().unwrap();
+        let item = items_sorted.next().unwrap();
         observations.push(Observation {
             x: 0,
-            y: y[index],
-            observed: observed(index),
+            y: item.y,
+            observed: item.observed,
             weight: 0.0, // placeholder; finalized from `last_w_accum`
         });
-        last_w_accum = weight[index];
+        last_w_accum = item.weight;
         covariate_statistics.push(CovariateStatistic {
             weight: 0.0,
             cumulative_weight: 0.0, // Accumulated as each observation's weight is committed
         });
-        unique_covariates.push(x[index]);
+        unique_covariates.push(item.x);
     }
 
-    for index in covariate_sorted_indices {
-        let covariate_equal = x[index] == *unique_covariates.last().unwrap();
+    for item in items_sorted {
+        let covariate_equal = item.x == *unique_covariates.last().unwrap();
         let (response_equal, censoring_equal) = {
             let last_observation = observations.last().unwrap();
             (
-                y[index] == last_observation.y,
-                observed(index) == last_observation.observed,
+                item.y == last_observation.y,
+                item.observed == last_observation.observed,
             )
         };
 
         if covariate_equal && response_equal && censoring_equal {
             // At the same observation -> just accumulate observation weight in W precision
-            last_w_accum = last_w_accum + weight[index];
+            last_w_accum = last_w_accum + item.weight;
         } else if covariate_equal {
             // New observation but same covariate -> finalize the previous observation's
             // weight (narrow to f32, dropping it if no mass survives the narrowing),
@@ -161,11 +180,11 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
             );
             observations.push(Observation {
                 x: unique_covariates.len() - 1, // we stay with the same covariate
-                y: y[index],
-                observed: observed(index),
+                y: item.y,
+                observed: item.observed,
                 weight: 0.0, // placeholder; finalized from `last_w_accum`
             });
-            last_w_accum = weight[index];
+            last_w_accum = item.weight;
         } else {
             // New observation and new covariate -> finalize the previous observation's
             // weight, accumulate covariate weight from it, close the finished covariate
@@ -187,12 +206,12 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
             covariate_statistics.push(new_statistic);
             observations.push(Observation {
                 x: unique_covariates.len(),
-                y: y[index],
-                observed: observed(index),
+                y: item.y,
+                observed: item.observed,
                 weight: 0.0, // placeholder; finalized from `last_w_accum`
             });
-            last_w_accum = weight[index];
-            unique_covariates.push(x[index]);
+            last_w_accum = item.weight;
+            unique_covariates.push(item.x);
         }
     }
     // Finalize the last in-progress observation and close the last covariate.
