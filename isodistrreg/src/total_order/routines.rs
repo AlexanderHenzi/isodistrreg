@@ -68,7 +68,7 @@ fn pool_impl<D: Direction, F: Float, const ZERO_WEIGHT_BLOCKS: bool>(
             // fully censored away): the least-squares criterion is indifferent, any
             // value between the two satisfies the ordering — take the midpoint
             // deterministically instead of computing 0/0 = NaN.
-            (absorbs.value + gets_absorbed.value) / (F::one() + F::one())
+            absorbs.value.midpoint(gets_absorbed.value)
         };
         absorbs.weight = pooled_weight;
     }
