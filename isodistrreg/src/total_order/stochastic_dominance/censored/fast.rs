@@ -8,7 +8,7 @@ use crate::total_order::stochastic_dominance::censored::propagate_bounds::{
 };
 use crate::total_order::stochastic_dominance::censored::propagate_bounds::{Kernel, ScalarKernel};
 use crate::total_order::stochastic_dominance::censored::structures::{
-    CompletionIndex, Estimates, Partition,
+    Bounds, CompletionIndex, Estimates, Partition,
 };
 use crate::total_order::stochastic_dominance::routines;
 use crate::total_order::structures;
@@ -281,16 +281,18 @@ fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
             1.0 - obs_weight / total_weight
         };
 
-        let (value, cold) = estimators.entry_mut(r, obs_x);
+        let idx = Estimates::compute_index((r, obs_x), estimators.len());
+        let row_idx = Estimates::compute_row_index((r, obs_x), estimators.len());
+        let cold = &mut estimators.cold[idx];
         cold.raw_value = raw_value;
         cold.weight = obs_weight;
+        cold.count = (data_index + 1) as u32;
         // The estimators (r, cov_index) are decreasing in r, so the lower bound is below the value
-        *value = raw_value;
-        cold.count = data_index + 1;
+        estimators.set_value(idx, row_idx, raw_value);
 
         // Propagate bound
         if r > 0 {
-            estimators.cold_mut(r - 1, obs_x).lower_bound = raw_value;
+            estimators.bounds_mut(r - 1, obs_x).0 = raw_value;
         }
     }
 
@@ -372,11 +374,9 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     progress: &dyn ProgressTracker,
 ) {
     let mut tmp_partition_store = Vec::with_capacity(input.n_covariate());
-    // Scratch buffers reused across all `pool` calls: `row_buf` holds `values[(r, k)]` for the
-    // current outer-`r` iteration so the inner `s` sweep reads a contiguous slice instead of
-    // striding into the triangle; `marker_buf` holds the completion-marker prefix maxima of the
-    // current pooling round's ultimate range.
-    let mut row_buf: Vec<f32> = Vec::with_capacity(input.n_covariate());
+    // Scratch buffer reused across all `pool` calls: holds the completion-marker prefix
+    // maxima of the current pooling round's ultimate range. (The kernel's row operands come
+    // straight from the row-major `values_row` mirror — no row scratch is needed.)
     let mut marker_buf: Vec<u32> = Vec::with_capacity(input.n_covariate());
     // Precompute the dynamic K-M safety threshold. In `update_value`, the K-M numerator
     // divides `obs.weight` by `remaining_weight = total_weight − cold.weight`. Both
@@ -401,7 +401,6 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
                     input,
                     epsilon,
                     &mut tmp_partition_store,
-                    &mut row_buf,
                     &mut marker_buf,
                 );
             } else {
@@ -426,7 +425,6 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     input: &CensoredContext<X, Y>,
     epsilon: f32,
     tmp_partition_store: &mut Vec<Partition>,
-    row_buf: &mut Vec<f32>,
     marker_buf: &mut Vec<u32>,
 ) {
     let observation = input.observations[data_index];
@@ -461,7 +459,6 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         partitions,
         input,
         epsilon,
-        row_buf,
         marker_buf,
     );
 
@@ -476,7 +473,6 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             partitions,
             input,
             epsilon,
-            row_buf,
             marker_buf,
         );
     }
@@ -492,7 +488,6 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     partitions: &mut Vec<structures::Partition<W, V>>,
     input: &CensoredContext<X, Y>,
     epsilon: f32,
-    row_buf: &mut Vec<f32>,
     marker_buf: &mut Vec<u32>,
 ) {
     loop {
@@ -555,35 +550,32 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         // faster
         for r in (penultimate_start..penultimate_end).rev() {
             left_marker_max = left_marker_max.max(estimates.completion.marker(r));
-            // Materialize row r once: `row_buf[k - r] = values[(r, k)]` for `k` in
-            // `r..right_partition_end`. The inner `s` sweep reuses this row across every `s`, and
-            // refreshes the just-written entry after `update_value`.
-            row_buf.clear();
-            row_buf.reserve(ultimate_end - r);
-            let mut col_k_base = r * (r + 1) / 2;
-            row_buf.push(estimates.values[col_k_base + r]); // (r, r)
-            for k in (r + 1)..penultimate_end {
-                col_k_base += k;
-                row_buf.push(estimates.values[col_k_base + r]);
-            }
 
             for s in ultimate_start..ultimate_end {
                 let marker_max = left_marker_max.max(marker_buf[s - ultimate_start]);
-                estimates.propagate_bounds_with_row::<K>(r, s, row_buf);
-                estimates.update_value::<K, _, _>(data_index, r, s, input, epsilon, marker_max);
-                // Reflect the freshly written `values[(r, s)]` back into the row buffer so
-                // subsequent iterations (with larger `s`) see the updated value.
+                // Index and bounds flow through registers between the kernel and
+                // `update_value` — the bounds/value stores remain for future readers, but
+                // the consecutive-cell dependency chain skips the memory round-trip.
                 let idx = Estimates::compute_index((r, s), estimates.len());
-                row_buf.push(estimates.values[idx]);
+                let bounds = estimates.propagate_bounds_with_row::<K>(idx, r, s);
+                estimates.update_value::<K, _, _>(
+                    data_index, idx, bounds, r, s, input, epsilon, marker_max,
+                );
             }
         }
     }
 }
 
 impl Estimates {
+    /// Update the K-M value of cell `idx` = (covariate_start_index, covariate_end_index),
+    /// clipping against `bounds` (the cell's current clip bounds, usually just computed by
+    /// `propagate_bounds_with_row` and handed over in registers).
+    #[allow(clippy::too_many_arguments)]
     fn update_value<K: Kernel, X: crate::Float, Y: crate::Float>(
         &mut self,
         data_index: usize,
+        idx: usize,
+        bounds: Bounds,
         covariate_start_index: usize, // inclusive
         covariate_end_index: usize,   // inclusive
         input: &CensoredContext<X, Y>,
@@ -598,7 +590,19 @@ impl Estimates {
             self.completion
                 .range_max(covariate_start_index, covariate_end_index),
         );
-        let idx = Self::compute_index((covariate_start_index, covariate_end_index), self.len());
+        debug_assert_eq!(
+            idx,
+            Self::compute_index((covariate_start_index, covariate_end_index), self.len()),
+        );
+        // Bitwise comparison: diagonal cells carry the (NAN, NAN) sentinel, which `==` would
+        // reject even when the pair is byte-identical to the stored bounds.
+        debug_assert_eq!(
+            (bounds.0.to_bits(), bounds.1.to_bits()),
+            (self.bounds[idx].0.to_bits(), self.bounds[idx].1.to_bits()),
+        );
+        let row_idx =
+            Self::compute_row_index((covariate_start_index, covariate_end_index), self.len());
+        let (lower_bound, upper_bound) = bounds;
         // Exact-0 pinning, checked before anything else: once the interval's last
         // observation has been consumed (an event — see `CompletionIndex`), the interval
         // Kaplan-Meier survival is mathematically exactly 0 and must be stored as exactly
@@ -610,7 +614,7 @@ impl Estimates {
         // again.
         if CompletionIndex::completes_marker(marker_max, data_index) {
             self.cold[idx].raw_value = 0.0;
-            self.values[idx] = 0.0;
+            self.set_value(idx, row_idx, 0.0);
             return;
         }
 
@@ -618,18 +622,18 @@ impl Estimates {
 
         // `cold.count` may already be `data_index + 1` when the cell was touched earlier in the
         // same run of tied uncensored observations (the walk consumes the whole run at once).
-        debug_assert!(data_index + 1 >= cold.count);
+        debug_assert!(data_index + 1 >= cold.count as usize);
         debug_assert!(covariate_start_index <= covariate_end_index);
         debug_assert!(covariate_end_index < input.n_covariate());
 
         // We assume the bounds to be up to date. If a bound is not available, will be false.
         debug_assert_eq!(
-            cold.lower_bound.is_nan(),
-            cold.upper_bound.is_nan(),
+            lower_bound.is_nan(),
+            upper_bound.is_nan(),
             "Bounds should only be NAN if this is a diagonal value",
         );
-        if cold.lower_bound >= cold.upper_bound {
-            self.values[idx] = f32::midpoint(cold.lower_bound, cold.upper_bound);
+        if lower_bound >= upper_bound {
+            self.set_value(idx, row_idx, f32::midpoint(lower_bound, upper_bound));
             return;
         }
 
@@ -645,7 +649,8 @@ impl Estimates {
             // the bounds may have just been re-propagated from fresh neighbor values, so the
             // clip still has to be reapplied. Skipping it would leave a value clipped against
             // bounds that no longer exist.
-            self.values[idx] = cold.raw_value.max(cold.lower_bound).min(cold.upper_bound);
+            let result = cold.raw_value.max(lower_bound).min(upper_bound);
+            self.set_value(idx, row_idx, result);
             return;
         }
 
@@ -662,7 +667,7 @@ impl Estimates {
         // items that pass. `K::walk_scan` vectorizes the range test where SIMD masks are
         // available — the walk is usually filter-dominated, with only a few percent of
         // items passing.
-        let from = cold.count;
+        let from = cold.count as usize;
         let to = data_index + 1;
         let (raw_value, remaining_weight) = K::walk_scan(
             &self.walk_x[from..to],
@@ -676,9 +681,10 @@ impl Estimates {
         let cold = &mut self.cold[idx];
         cold.raw_value = raw_value;
         cold.weight = total_weight - remaining_weight;
-        cold.count = data_index + 1;
+        cold.count = (data_index + 1) as u32;
 
-        self.values[idx] = raw_value.max(cold.lower_bound).min(cold.upper_bound);
+        let result = raw_value.max(lower_bound).min(upper_bound);
+        self.set_value(idx, row_idx, result);
     }
 }
 
@@ -700,79 +706,46 @@ impl Estimates {
         let mut marker_max = 0;
         for r in (partition_start_index..=observation.x).rev() {
             marker_max = marker_max.max(self.completion.marker(r));
-            // TODO: Try eliminating this branch
-            if r < observation.x {
-                self.propagate_bounds::<K>(r, observation.x);
-            }
-            self.update_value::<K, _, _>(data_index, r, observation.x, input, epsilon, marker_max);
+            let idx = Self::compute_index((r, observation.x), self.len());
+            let bounds = if r < observation.x {
+                self.propagate_bounds_with_row::<K>(idx, r, observation.x)
+            } else {
+                self.bounds[idx]
+            };
+            self.update_value::<K, _, _>(
+                data_index,
+                idx,
+                bounds,
+                r,
+                observation.x,
+                input,
+                epsilon,
+                marker_max,
+            );
         }
     }
 
-    /// Propagate bounds — reads row r directly from the strided triangle. Used by the one-shot
-    /// non-pool callsite (`update_partial_row_with_single_observation`) where there is no row
-    /// reuse. Uses a stack array for small rows; heap fallback for large ones.
-    fn propagate_bounds<K: Kernel>(&mut self, r: usize, s: usize) {
-        assert!(r < s);
-        assert!(s < self.len());
-
-        let col_s_base = s * (s + 1) / 2;
-        let col = &self.values[col_s_base + r + 1..=col_s_base + s];
-
-        // Gather the row r entries (r, r), (r, r+1), ..., (r, s-1) into a small stack-bounded
-        // local. The triangle is strided in the row direction, so we read scalars one at a
-        // time; the kernel then sees two contiguous slices and can auto-vectorize.
-        let len = s - r;
-        let mut row_buf = [0.0f32; 128];
-        let row_slice = if len <= 128 {
-            let mut col_i_base = r * (r + 1) / 2;
-            row_buf[0] = self.values[col_i_base + r];
-            #[allow(clippy::needless_range_loop)]
-            for k in 1..len {
-                col_i_base += r + k;
-                row_buf[k] = self.values[col_i_base + r];
-            }
-            &row_buf[..len]
-        } else {
-            // Fallback for unusually large rows: heap allocation instead of stack overflow.
-            let mut v = Vec::with_capacity(len);
-            let mut col_i_base = r * (r + 1) / 2;
-            v.push(self.values[col_i_base + r]);
-            for k in 1..len {
-                col_i_base += r + k;
-                v.push(self.values[col_i_base + r]);
-            }
-            let (lower, upper) = K::apply(&v, col);
-            let cold = &mut self.cold[col_s_base + r];
-            cold.lower_bound = lower;
-            cold.upper_bound = upper;
-            return;
-        };
-
-        let (lower, upper) = K::apply(row_slice, col);
-        let cold = &mut self.cold[col_s_base + r];
-        cold.lower_bound = lower;
-        cold.upper_bound = upper;
-    }
-
-    /// Propagate bounds at `(r, s)` using a precomputed row buffer.
+    /// Propagate bounds at `(r, s)`: reduce over the row operand `values[(r, r..s)]` (read
+    /// contiguously from the row-major mirror) paired with the column operand
+    /// `values[(r+1..=s, s)]` (contiguous in the column-major triangle).
     ///
-    /// `row_buf[k - r]` must equal `values[(r, k)]` for `k = r..s` (entries beyond `s` are
-    /// ignored). Used in `pool` where the same row r is reused across an entire inner s sweep.
-    fn propagate_bounds_with_row<K: Kernel>(&mut self, r: usize, s: usize, row_buf: &[f32]) {
+    /// `idx` must be `compute_index((r, s))`. The fresh bounds are stored *and* returned, so
+    /// the immediately following `update_value` keeps them in registers.
+    fn propagate_bounds_with_row<K: Kernel>(&mut self, idx: usize, r: usize, s: usize) -> Bounds {
         assert!(r < s);
         assert!(s < self.len());
-        debug_assert!(row_buf.len() >= s - r);
 
         let len = s - r;
-        let col_s_base = s * (s + 1) / 2;
-        let row = &row_buf[..len];
+        let col_s_base = idx - r;
+        debug_assert_eq!(col_s_base, s * (s + 1) / 2);
+        let row_start = Self::compute_row_index((r, r), self.len());
+        let row = &self.values_row[row_start..row_start + len];
         let col = &self.values[col_s_base + r + 1..=col_s_base + s];
 
-        let (lower, upper) = K::apply(row, col);
+        let bounds = K::apply(row, col);
 
-        let cold = &mut self.cold[col_s_base + r];
-        cold.lower_bound = lower;
-        cold.upper_bound = upper;
+        self.bounds[idx] = bounds;
+        bounds
     }
 }
 
