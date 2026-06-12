@@ -31,17 +31,29 @@ impl Partition {
 /// oracle on every write.
 ///
 /// Representation: per covariate `x`, `m[x] = (t[x] << 1) | e[x]`, where `t[x]` is the
-/// 1-based index into the response-sorted observations of x's last observation (0 = none)
-/// and `e[x]` is whether that observation is an event. The `t` values are distinct across
-/// covariates (each observation index belongs to exactly one covariate), so a range-max
-/// over `m` is achieved by the max-`t` covariate and a single query yields both "which
-/// observation is the interval's last" and "is it an event". A sparse table over `m`
-/// answers inclusive range-max queries in O(1) after an O(C log C) build.
+/// index into the response-sorted observations of x's last observation and `e[x]` is
+/// whether that observation is an event. The `t` values are distinct across covariates
+/// (each observation index belongs to exactly one covariate), so a range-max over `m`
+/// is achieved by the max-`t` covariate and a single value yields both "which
+/// observation is the interval's last" and "is it an event". A covariate that keeps no
+/// observations (all censored below every event) retains the initial `m[x] = 0`, which
+/// reads as "censored observation at index 0" — even, so it never completes anything,
+/// which is exactly right for an empty covariate; the collision with a real censored
+/// index-0 observation is harmless for the same reason (and unreachable besides:
+/// preprocessing makes the first observation an event).
+///
+/// Every hot query site grows its interval one covariate at a time (nested-extension
+/// order), so the range-max needs no index structure: callers fold [`Self::marker`] into
+/// a running max and test it with [`Self::completes_marker`] — O(1) per query, and the
+/// oracle stores nothing beyond `m` itself. The linear-scan
+/// [`Self::completes_with_all_data`] and [`Self::range_max`] serve the once-per-call
+/// finalization path and debug asserts.
 #[derive(Debug)]
 pub struct CompletionIndex {
-    /// Sparse table; `levels[k][i]` is the max of `m[i..i + 2^k]`, so `levels[0]` is `m`
-    /// itself and `levels[k]` has `n_covariate + 1 - 2^k` entries.
-    levels: Vec<Vec<u32>>,
+    /// `m[x] = (t[x] << 1) | e[x]` as documented on the struct; `m[x] == 0` (no
+    /// observation, or a censored observation at index 0) is even and so correctly
+    /// never completes.
+    m: Vec<u32>,
 }
 
 impl CompletionIndex {
@@ -50,51 +62,41 @@ impl CompletionIndex {
         // limit are unrepresentable long before this point (the O(C²) estimator triangle).
         debug_assert!(observations.len() < (u32::MAX >> 1) as usize);
 
-        // Last observation per covariate: 1-based index and event bit. Preprocessing
-        // guarantees every observation in the context has positive weight (zero-weight
-        // observations are dropped) and every covariate has at least one observation.
+        // Last observation per covariate: index and event bit.
         let mut m = vec![0u32; n_covariate];
         for (index, observation) in observations.iter().enumerate() {
             debug_assert!(observation.weight > 0.0);
-            m[observation.x] = ((index as u32 + 1) << 1) | u32::from(observation.observed);
+            m[observation.x] = ((index as u32) << 1) | u32::from(observation.observed);
         }
-
-        let mut levels = vec![m];
-        let mut width = 1;
-        while 2 * width <= n_covariate {
-            let prev = levels.last().unwrap();
-            let next = (0..=n_covariate - 2 * width)
-                .map(|i| prev[i].max(prev[i + width]))
-                .collect();
-            levels.push(next);
-            width *= 2;
-        }
-        Self { levels }
+        Self { m }
     }
 
-    /// Inclusive range-max of `m` over covariates `[r, s]`.
+    /// The marker `m[x]` of covariate `x`, for the hot callers' running range-max.
     #[inline(always)]
-    fn range_max(&self, r: usize, s: usize) -> u32 {
+    pub fn marker(&self, x: usize) -> u32 {
+        self.m[x]
+    }
+
+    /// Is the interval Kaplan-Meier survival exactly 0 once observations `..=data_index`
+    /// are consumed, for an interval whose marker range-max is `marker_max`? True iff
+    /// the interval's last observation is an event that has already been consumed.
+    /// (`marker_max == 0` ⇒ no observation ⇒ false via the event-bit check.)
+    #[inline(always)]
+    pub fn completes_marker(marker_max: u32, data_index: usize) -> bool {
+        (marker_max & 1) == 1 && ((marker_max >> 1) as usize) <= data_index
+    }
+
+    /// Inclusive range-max of `m` over covariates `[r, s]` by linear scan — for the cold
+    /// finalization path and debug asserts; hot callers maintain the max incrementally
+    /// via [`Self::marker`].
+    pub(crate) fn range_max(&self, r: usize, s: usize) -> u32 {
         debug_assert!(r <= s);
-        let len = s - r + 1;
-        let level = (usize::BITS - 1 - len.leading_zeros()) as usize; // floor(log2(len))
-        let row = &self.levels[level];
-        row[r].max(row[s + 1 - (1 << level)])
+        self.m[r..=s].iter().copied().max().unwrap()
     }
 
-    /// Is the interval Kaplan-Meier survival over covariates `[r, s]` exactly 0 once
-    /// observations `..=data_index` are consumed? True iff the interval's last
-    /// observation is an event that has already been consumed. (`m == 0` ⇒ no
-    /// observation ⇒ false via the event-bit check.)
-    #[inline(always)]
-    pub fn completes(&self, r: usize, s: usize, data_index: usize) -> bool {
-        let m = self.range_max(r, s);
-        (m & 1) == 1 && ((m >> 1) as usize) <= data_index + 1
-    }
-
-    /// [`Self::completes`] with every observation consumed: true iff the interval's last
-    /// observation is an event.
-    #[inline(always)]
+    /// [`Self::completes_marker`] with every observation consumed: true iff the
+    /// interval's last observation is an event. Linear scan — the only caller walks
+    /// disjoint partition ranges once per algorithm call (O(C) total).
     pub fn completes_with_all_data(&self, r: usize, s: usize) -> bool {
         self.range_max(r, s) & 1 == 1
     }
@@ -218,10 +220,16 @@ impl Estimates {
         for s in 0..len {
             let weight_consumed = consumed_weight_plain[s];
 
-            // Filling in the rest of the triangle
+            // Filling in the rest of the triangle. The loop runs r descending so the
+            // completion queries can fold `marker(r)` into a running range-max over
+            // `[r, s]`; the body is order-independent (iteration r only reads
+            // `prev_values[r]`/`prev_cold[r]` and writes `curr_values[r]`/`curr_cold[r]`).
             let (prev_values, curr_values) = estimates.values[index - s..].split_at_mut(s);
             let (prev_cold, curr_cold) = estimates.cold[index - s..].split_at_mut(s);
-            for r in 0..s {
+            let mut marker_max = estimates.completion.marker(s);
+            for r in (0..s).rev() {
+                marker_max = marker_max.max(estimates.completion.marker(r));
+                debug_assert_eq!(marker_max, estimates.completion.range_max(r, s));
                 let prev_value = prev_values[r];
                 let prev_cold = &prev_cold[r];
                 let curr_value = &mut curr_values[r];
@@ -254,7 +262,7 @@ impl Estimates {
                 // all-observed (`accelerated_pava` stops at the first censored
                 // observation), so whenever the interval's last observation lies inside
                 // the consumed prefix its event bit holds automatically.
-                if estimates.completion.completes(r, s, start_count - 1) {
+                if CompletionIndex::completes_marker(marker_max, start_count - 1) {
                     curr_cold.raw_value = 0.0;
                 }
                 *curr_value = curr_cold.raw_value;
@@ -264,7 +272,10 @@ impl Estimates {
             // Diagonal item last; pinned to exactly 0 when complete, like the
             // off-diagonal cells above (`weight_consumed` is a BIT-reconstructed f32 sum
             // and need not equal the covariate's total weight bitwise).
-            let diag_raw = if estimates.completion.completes(s, s, start_count - 1) {
+            let diag_raw = if CompletionIndex::completes_marker(
+                estimates.completion.marker(s),
+                start_count - 1,
+            ) {
                 0.0
             } else {
                 1.0 - weight_consumed / covariate_statistics[s].weight

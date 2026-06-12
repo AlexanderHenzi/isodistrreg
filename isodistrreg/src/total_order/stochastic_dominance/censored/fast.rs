@@ -64,7 +64,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         return cdfs;
     }
 
-    // Build the exact-0 completion oracle once (O(n + C log C)); `Estimates` carries it
+    // Build the exact-0 completion oracle once (O(n + C)); `Estimates` carries it
     // through the whole hot call tree so every cell write pins mathematically-completed
     // intervals to exactly 0 the moment they complete. None of the early returns above
     // need it: `single_response` already pins its completed covariates (`share = 1.0`)
@@ -250,8 +250,14 @@ fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
     let obs_x = observation.x;
     let obs_weight = observation.weight;
 
-    // Initialize estimators
-    for r in 0..=obs_x {
+    // Initialize estimators. The loop runs r descending so the completion queries can
+    // fold `marker(r)` into a running range-max over `[r, obs_x]`; the body is
+    // order-independent (iteration r writes only cell `(r, obs_x)` plus the
+    // `(r - 1, obs_x)` lower bound, and reads nothing written by other iterations).
+    let mut marker_max = 0;
+    for r in (0..=obs_x).rev() {
+        marker_max = marker_max.max(estimators.completion.marker(r));
+        debug_assert_eq!(marker_max, estimators.completion.range_max(r, obs_x));
         let total_weight = if r > 0 {
             input.covariate_statistics[obs_x].cumulative_weight
                 - input.covariate_statistics[r - 1].cumulative_weight
@@ -263,7 +269,7 @@ fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
         // lone observation is not exactly 0. Only `r == obs_x` can actually fire here
         // (any wider range contains another covariate whose observations all sort after
         // this very first one).
-        let raw_value = if estimators.completion.completes(r, obs_x, data_index) {
+        let raw_value = if CompletionIndex::completes_marker(marker_max, data_index) {
             0.0
         } else {
             1.0 - obs_weight / total_weight
@@ -360,10 +366,12 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     progress: &dyn ProgressTracker,
 ) {
     let mut tmp_partition_store = Vec::with_capacity(input.n_covariate());
-    // Scratch buffer reused across all `pool` calls: holds `values[(r, k)]` for the current
-    // outer-`r` iteration so the inner `s` sweep reads a contiguous slice instead of striding
-    // into the triangle.
+    // Scratch buffers reused across all `pool` calls: `row_buf` holds `values[(r, k)]` for the
+    // current outer-`r` iteration so the inner `s` sweep reads a contiguous slice instead of
+    // striding into the triangle; `marker_buf` holds the completion-marker prefix maxima of the
+    // current pooling round's ultimate range.
     let mut row_buf: Vec<f32> = Vec::with_capacity(input.n_covariate());
+    let mut marker_buf: Vec<u32> = Vec::with_capacity(input.n_covariate());
     // Precompute the dynamic K-M safety threshold. In `update_value`, the K-M numerator
     // divides `obs.weight` by `remaining_weight = total_weight − cold.weight`. Both
     // `total_weight` and `cold.weight` are sums of f32 weights and pick up O(Σw · u_32)
@@ -388,6 +396,7 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
                     epsilon,
                     &mut tmp_partition_store,
                     &mut row_buf,
+                    &mut marker_buf,
                 );
             } else {
                 // Censored observations are deferred. They affect the K-M estimate only at the
@@ -403,6 +412,7 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimates: &mut Estimates,
@@ -411,6 +421,7 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     epsilon: f32,
     tmp_partition_store: &mut Vec<Partition>,
     row_buf: &mut Vec<f32>,
+    marker_buf: &mut Vec<u32>,
 ) {
     let observation = input.observations[data_index];
     let (partition_index, (lower, upper)) =
@@ -437,13 +448,17 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     );
     // Pooling left part of partitions (direction is the same, because we're working with survival
     // quantities, not the CDF)
-    pool::<_, _, D, K, _, _>(data_index, estimates, partitions, input, epsilon, row_buf);
+    pool::<_, _, D, K, _, _>(
+        data_index, estimates, partitions, input, epsilon, row_buf, marker_buf,
+    );
 
     // Accelerated extension and pooling
     for i in observation.x + 1..upper {
         partitions.push(Partition::new(i + 1));
         // Direction is the same, because we're working with survival quantities, not the CDF)
-        pool::<_, _, D, K, _, _>(data_index, estimates, partitions, input, epsilon, row_buf);
+        pool::<_, _, D, K, _, _>(
+            data_index, estimates, partitions, input, epsilon, row_buf, marker_buf,
+        );
     }
 
     // Restore right-most partitions
@@ -457,6 +472,7 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     input: &CensoredContext<X, Y>,
     epsilon: f32,
     row_buf: &mut Vec<f32>,
+    marker_buf: &mut Vec<u32>,
 ) {
     loop {
         // Start inclusive, end exclusive
@@ -483,11 +499,27 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         let ultimate_boundary = partitions.pop().unwrap();
         *partitions.last_mut().unwrap() = ultimate_boundary;
 
+        // The completion range-max over a cell `[r, s]` splits at the partition boundary
+        // (`ultimate_start == penultimate_end` in both match arms above): the left part
+        // `[r, penultimate_end)` extends one covariate per descending `r` and folds
+        // incrementally below; the right part `[ultimate_start, s]` is shared by every
+        // `r`, so its prefix maxima are materialized once per pooling round —
+        // `marker_buf[s - ultimate_start]` = max of `m[ultimate_start..=s]`. This keeps
+        // the per-cell query O(1) without touching the row-materialization loop.
+        marker_buf.clear();
+        let mut ultimate_marker_max = 0;
+        for x in ultimate_start..ultimate_end {
+            ultimate_marker_max = ultimate_marker_max.max(estimates.completion.marker(x));
+            marker_buf.push(ultimate_marker_max);
+        }
+        let mut left_marker_max = 0;
+
         // TODO: Can we iterate in a different order that tries to find a min == max combination
         //  as soon as possible?
         // Iterating over r in the outer loop and over s in the inner loop is somehow significantly
         // faster
         for r in (penultimate_start..penultimate_end).rev() {
+            left_marker_max = left_marker_max.max(estimates.completion.marker(r));
             // Materialize row r once: `row_buf[k - r] = values[(r, k)]` for `k` in
             // `r..right_partition_end`. The inner `s` sweep reuses this row across every `s`, and
             // refreshes the just-written entry after `update_value`.
@@ -501,8 +533,9 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             }
 
             for s in ultimate_start..ultimate_end {
+                let marker_max = left_marker_max.max(marker_buf[s - ultimate_start]);
                 estimates.propagate_bounds_with_row::<K>(r, s, row_buf);
-                estimates.update_value(data_index, r, s, input, epsilon);
+                estimates.update_value(data_index, r, s, input, epsilon, marker_max);
                 // Reflect the freshly written `values[(r, s)]` back into the row buffer so
                 // subsequent iterations (with larger `s`) see the updated value.
                 let idx = Estimates::compute_index((r, s), estimates.len());
@@ -520,7 +553,16 @@ impl Estimates {
         covariate_end_index: usize,   // inclusive
         input: &CensoredContext<X, Y>,
         epsilon: f32,
+        // Caller-maintained running max of `completion.marker` over the cell's covariate
+        // range — both callers extend their interval one covariate at a time, which makes
+        // the range-max O(1) without any index structure.
+        marker_max: u32,
     ) {
+        debug_assert_eq!(
+            marker_max,
+            self.completion
+                .range_max(covariate_start_index, covariate_end_index),
+        );
         // Exact-0 pinning, checked before anything else: once the interval's last
         // observation has been consumed (an event — see `CompletionIndex`), the interval
         // Kaplan-Meier survival is mathematically exactly 0 and must be stored as exactly
@@ -530,10 +572,7 @@ impl Estimates {
         // remains unconsumed, and this branch re-fires on every future call (the
         // condition is monotone in `data_index`), so the stale bookkeeping is never read
         // again.
-        if self
-            .completion
-            .completes(covariate_start_index, covariate_end_index, data_index)
-        {
+        if CompletionIndex::completes_marker(marker_max, data_index) {
             let (value, cold) = self.entry_mut(covariate_start_index, covariate_end_index);
             cold.raw_value = 0.0;
             *value = 0.0;
@@ -617,12 +656,15 @@ impl Estimates {
         input: &CensoredContext<X, Y>,
         epsilon: f32,
     ) {
+        // Completion range-max over `[r, observation.x]`, folded as the loop descends.
+        let mut marker_max = 0;
         for r in (partition_start_index..=observation.x).rev() {
+            marker_max = marker_max.max(self.completion.marker(r));
             // TODO: Try eliminating this branch
             if r < observation.x {
                 self.propagate_bounds::<K>(r, observation.x);
             }
-            self.update_value(data_index, r, observation.x, input, epsilon);
+            self.update_value(data_index, r, observation.x, input, epsilon, marker_max);
         }
     }
 
