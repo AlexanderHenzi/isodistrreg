@@ -1,10 +1,10 @@
 use crate::Float;
 use crate::error::Error;
 use crate::preprocessing::validate;
-use crate::routines::{argsort_indices_unstable_by, argsort_unstable_by};
+use crate::routines::argsort_indices_unstable_by;
 use crate::structures::{Increasing, Observation};
 use crate::total_order::structures::{AlgorithmContext, CensoredContext, CovariateStatistic};
-use itertools::Itertools;
+use itertools::{Itertools, izip};
 
 pub fn preprocess_uncensored<X: Float, Y: Float, W: Float>(
     x: &[X],
@@ -240,23 +240,41 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
     let n = validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
 
     let (observations_response_sorted, thresholds) = {
+        // Sort packed values rather than argsort indices: the comparator then reads its
+        // keys from the element itself instead of three gathers per comparison, which is
+        // what made the index sort dominate preprocessing for large inputs. Same
+        // comparator either way, both unstable — order among fully-tied keys remains
+        // arbitrary.
+        //
         // Zero-weight observations are dropped before anything is aggregated (or even
         // sorted): they carry no statistical information, create no thresholds, and the
         // kernels rely on every weight in the context being positive. `validate` has
         // rejected negative and non-finite weights, so `> 0` is exactly "nonzero".
-        let response_order = argsort_indices_unstable_by::<Increasing, _>(
-            |i, j| {
-                y[i].total_cmp(&y[j])
-                    .then(observed[i].cmp(&observed[j]).reverse())
-                    .then(x[i].total_cmp(&x[j]))
-            },
-            (0..n).filter(|&i| weights[i] > W::zero()).collect(),
-        );
+        struct Item<X, Y, W> {
+            y: Y,
+            x: X,
+            weight: W,
+            observed: bool,
+        }
+        let mut items: Vec<Item<X, Y, W>> = izip!(x, y, observed, weights)
+            .filter(|&(_, _, _, &weight)| weight > W::zero())
+            .map(|(&x, &y, &observed, &weight)| Item {
+                y,
+                x,
+                weight,
+                observed,
+            })
+            .collect();
+        items.sort_unstable_by(|a, b| {
+            a.y.total_cmp(&b.y)
+                .then(a.observed.cmp(&b.observed).reverse())
+                .then(a.x.total_cmp(&b.x))
+        });
 
         // Discard censored observations not greater than or equal to any uncensored observation
-        let first_uncensored = response_order
+        let first_uncensored = items
             .iter()
-            .find_position(|&&i| observed[i])
+            .find_position(|item| item.observed)
             .map(|(index, _)| index);
         let Some(first_uncensored_index) = first_uncensored else {
             return Ok(CensoredContext {
@@ -273,50 +291,50 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
         // Simultaneously deduplicate, copy over with index, and collect unique thresholds
 
         // First item
-        let data_index = response_order[first_uncensored_index];
-        thresholds.push(y[data_index]);
+        let first = &items[first_uncensored_index];
+        thresholds.push(first.y);
         obs.push(Observation {
-            x: x[data_index],
+            x: first.x,
             y: 0,
             observed: true,
             weight: 0.0, // placeholder; finalized from `last_w_accum`
         });
-        debug_assert!(observed[data_index]);
+        debug_assert!(first.observed);
         // Accumulator for the in-progress observation's weight in the caller's W precision.
         // Invariant: while the loop is running, `last_w_accum` holds the running W-precision
         // sum for `obs.last()`. Its `weight` field carries a 0.0 placeholder that is replaced
         // by the narrowed accumulator when the observation is finalized — either when a new
         // observation is pushed, or after the loop ends.
-        let mut last_w_accum: W = weights[data_index];
+        let mut last_w_accum: W = first.weight;
         // Remaining items
-        for &data_index in &response_order[first_uncensored_index + 1..] {
-            let response_equal = y[data_index] == *thresholds.last().unwrap();
+        for item in &items[first_uncensored_index + 1..] {
+            let response_equal = item.y == *thresholds.last().unwrap();
             let last_observation = obs.last().unwrap();
-            let censoring_equal = observed[data_index] == last_observation.observed;
-            let covariate_equal = x[data_index] == last_observation.x;
+            let censoring_equal = item.observed == last_observation.observed;
+            let covariate_equal = item.x == last_observation.x;
 
             let is_duplicate = response_equal && censoring_equal && covariate_equal;
             // Adjacent (in response order) censored observations at the same covariate
             // have no event between them, so they share the threshold index and only
             // their combined weight matters for every interval Kaplan-Meier estimator.
             let is_mergeable_censored =
-                !observed[data_index] && !last_observation.observed && covariate_equal;
+                !item.observed && !last_observation.observed && covariate_equal;
             if is_duplicate || is_mergeable_censored {
-                last_w_accum = last_w_accum + weights[data_index];
+                last_w_accum = last_w_accum + item.weight;
             } else {
                 // Finalize the previous in-progress observation: narrow once.
                 obs.last_mut().unwrap().weight = last_w_accum.to_f32().unwrap();
-                if !response_equal && observed[data_index] {
-                    thresholds.push(y[data_index]);
+                if !response_equal && item.observed {
+                    thresholds.push(item.y);
                 }
                 obs.push(Observation {
-                    x: x[data_index],
+                    x: item.x,
                     // If an observation is censored, we point to the previous (lower) threshold value here
                     y: thresholds.len() - 1,
-                    observed: observed[data_index],
+                    observed: item.observed,
                     weight: 0.0, // placeholder; finalized from `last_w_accum`
                 });
-                last_w_accum = weights[data_index];
+                last_w_accum = item.weight;
             }
         }
         // Finalize the last in-progress observation.
@@ -325,15 +343,17 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
         (obs, thresholds)
     };
 
-    // Order of the observations (can sort unstable, we keep the same response order)
-    let covariate_order = argsort_unstable_by::<Increasing, _>(
-        |i, j| {
-            observations_response_sorted[i]
-                .x
-                .total_cmp(&observations_response_sorted[j].x)
-        },
-        observations_response_sorted.len(),
-    );
+    // Order of the observations by covariate (unstable is fine; we keep the response
+    // order intact). Sorting (key, position) pairs beats an argsort for the same
+    // gather-avoidance reason as above. Positions fit u32 — the estimator triangles
+    // downstream could never be allocated for sizes anywhere near that limit.
+    assert!(observations_response_sorted.len() <= u32::MAX as usize);
+    let mut covariate_order: Vec<(X, u32)> = observations_response_sorted
+        .iter()
+        .enumerate()
+        .map(|(position, o)| (o.x, position as u32))
+        .collect();
+    covariate_order.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut observations: Vec<Observation<usize, usize, bool, f32>> = vec![
         Observation {
@@ -349,7 +369,7 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
     let mut covariate_statistics = Vec::with_capacity(capacity_upper_bound);
 
     // First item
-    let data_index = covariate_order[0];
+    let data_index = covariate_order[0].1 as usize;
     let observation = &observations_response_sorted[data_index];
     observations[data_index] = Observation {
         x: 0,
@@ -363,7 +383,8 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
         cumulative_weight: 0.0,
     });
     // Remaining items
-    for data_index in covariate_order.into_iter().skip(1) {
+    for &(_, position) in covariate_order[1..].iter() {
+        let data_index = position as usize;
         let observation = &observations_response_sorted[data_index];
         if observation.x != *unique_covariates.last().unwrap() {
             unique_covariates.push(observation.x);
