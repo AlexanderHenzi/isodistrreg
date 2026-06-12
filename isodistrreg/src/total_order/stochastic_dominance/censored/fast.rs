@@ -374,10 +374,12 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     progress: &dyn ProgressTracker,
 ) {
     let mut tmp_partition_store = Vec::with_capacity(input.n_covariate());
-    // Scratch buffer reused across all `pool` calls: holds the completion-marker prefix
-    // maxima of the current pooling round's ultimate range. (The kernel's row operands come
-    // straight from the row-major `values_row` mirror — no row scratch is needed.)
+    // Scratch buffers reused across all `pool` calls: the completion-marker prefix maxima
+    // of the current pooling round's ultimate range, and the suffix maxima of its
+    // penultimate range. (The kernel's row operands come straight from the row-major
+    // `values_row` mirror — no row scratch is needed.)
     let mut marker_buf: Vec<u32> = Vec::with_capacity(input.n_covariate());
+    let mut left_marker_buf: Vec<u32> = Vec::with_capacity(input.n_covariate());
     // Precompute the dynamic K-M safety threshold. In `update_value`, the K-M numerator
     // divides `obs.weight` by `remaining_weight = total_weight − cold.weight`. Both
     // `total_weight` and `cold.weight` are sums of f32 weights and pick up O(Σw · u_32)
@@ -402,6 +404,7 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
                     epsilon,
                     &mut tmp_partition_store,
                     &mut marker_buf,
+                    &mut left_marker_buf,
                 );
             } else {
                 // Censored observations are deferred. They affect the K-M estimate only at the
@@ -426,6 +429,7 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     epsilon: f32,
     tmp_partition_store: &mut Vec<Partition>,
     marker_buf: &mut Vec<u32>,
+    left_marker_buf: &mut Vec<u32>,
 ) {
     let observation = input.observations[data_index];
     let (partition_index, (lower, upper)) =
@@ -460,6 +464,7 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         input,
         epsilon,
         marker_buf,
+        left_marker_buf,
     );
 
     // Accelerated extension and pooling
@@ -474,6 +479,7 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             input,
             epsilon,
             marker_buf,
+            left_marker_buf,
         );
     }
 
@@ -481,6 +487,13 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     partitions.append(tmp_partition_store);
 }
 
+/// Number of columns processed per tile in `pool`'s cell-update loops. Sized so a tile's
+/// columns plus their bounds/K-M state stay cache-resident across the r sweep on any modern
+/// CPU (>= 512 KB L2); 64-128 measured equivalently well, smaller tiles start paying
+/// per-tile overhead.
+const POOL_TILE: usize = 96;
+
+#[allow(clippy::too_many_arguments)]
 fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     split_x: usize,
@@ -489,6 +502,7 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     input: &CensoredContext<X, Y>,
     epsilon: f32,
     marker_buf: &mut Vec<u32>,
+    left_marker_buf: &mut Vec<u32>,
 ) {
     loop {
         // Start inclusive, end exclusive
@@ -542,26 +556,101 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             ultimate_marker_max = ultimate_marker_max.max(estimates.completion.marker(x));
             marker_buf.push(ultimate_marker_max);
         }
+        // Suffix maxima of the penultimate range: `left_marker_buf[r - penultimate_start]`
+        // = max of `m[r..penultimate_end]`, so any cell-visit schedule can read its left
+        // part in O(1).
+        left_marker_buf.clear();
+        left_marker_buf.resize(penultimate_end - penultimate_start, 0);
         let mut left_marker_max = 0;
-
-        // TODO: Can we iterate in a different order that tries to find a min == max combination
-        //  as soon as possible?
-        // Iterating over r in the outer loop and over s in the inner loop is somehow significantly
-        // faster
         for r in (penultimate_start..penultimate_end).rev() {
             left_marker_max = left_marker_max.max(estimates.completion.marker(r));
+            left_marker_buf[r - penultimate_start] = left_marker_max;
+        }
 
-            for s in ultimate_start..ultimate_end {
-                let marker_max = left_marker_max.max(marker_buf[s - ultimate_start]);
-                // Index and bounds flow through registers between the kernel and
-                // `update_value` — the bounds/value stores remain for future readers, but
-                // the consecutive-cell dependency chain skips the memory round-trip.
-                let idx = Estimates::compute_index((r, s), estimates.len());
-                let bounds = estimates.propagate_bounds_with_row::<K>(idx, r, s);
-                estimates.update_value::<K, _, _>(
-                    data_index, idx, bounds, r, s, input, epsilon, marker_max,
-                );
+        // Iterating over r in the outer loop and over s in the inner loop is significantly
+        // faster than the transposed order; on top of that the s range is processed in
+        // tiles of `POOL_TILE` columns (tile outer, r descending inside, s ascending
+        // within the tile). Cell (r, s) reads row entries (r, k<s) — written in earlier
+        // tiles or earlier in this row's sweep — and column entries (k>r, s) — written at
+        // larger r within the same tile — so the tiled order is a valid schedule of the
+        // same DP and every cell sees identical inputs (bit-identical results). The point
+        // of the tiles: wide merges revisit each column once per row, and with the full
+        // span in flight the columns (plus their bounds and K-M state) fall out of L2
+        // between visits; a tile's working set stays cache-resident across the r sweep.
+        // One cell: kernel, then K-M update. Index and bounds flow through registers
+        // between the two — the bounds/value stores remain for future readers, but the
+        // consecutive-cell dependency chain skips the memory round-trip.
+        #[inline(always)]
+        #[allow(clippy::too_many_arguments)]
+        fn cell<K: Kernel, X: crate::Float, Y: crate::Float>(
+            estimates: &mut Estimates,
+            data_index: usize,
+            r: usize,
+            s: usize,
+            input: &CensoredContext<X, Y>,
+            epsilon: f32,
+            marker_max: u32,
+        ) {
+            let idx = Estimates::compute_index((r, s), estimates.len());
+            let bounds = estimates.propagate_bounds_with_row::<K>(idx, r, s);
+            estimates
+                .update_value::<K, _, _>(data_index, idx, bounds, r, s, input, epsilon, marker_max);
+        }
+
+        let mut tile_start = ultimate_start;
+        while tile_start < ultimate_end {
+            let tile_end = (tile_start + POOL_TILE).min(ultimate_end);
+            // Rows advance in pairs per column: cell (r0, s) is computed right before
+            // (r0 - 1, s), whose column operand merely *ends* with the fresh (r0, s) value —
+            // so the two kernels overlap almost entirely, doubling the independent work in
+            // flight. The pair schedule is a valid order of the same DP (each cell still
+            // sees row entries with smaller s and column entries with larger r already
+            // computed), so results stay bit-identical.
+            let mut r_high = penultimate_end;
+            while r_high >= penultimate_start + 2 {
+                let r0 = r_high - 1;
+                let r1 = r_high - 2;
+                let left0 = left_marker_buf[r0 - penultimate_start];
+                let left1 = left_marker_buf[r1 - penultimate_start];
+                for s in tile_start..tile_end {
+                    let right = marker_buf[s - ultimate_start];
+                    cell::<K, _, _>(
+                        estimates,
+                        data_index,
+                        r0,
+                        s,
+                        input,
+                        epsilon,
+                        left0.max(right),
+                    );
+                    cell::<K, _, _>(
+                        estimates,
+                        data_index,
+                        r1,
+                        s,
+                        input,
+                        epsilon,
+                        left1.max(right),
+                    );
+                }
+                r_high -= 2;
             }
+            if r_high > penultimate_start {
+                let left = left_marker_buf[0];
+                for s in tile_start..tile_end {
+                    let right = marker_buf[s - ultimate_start];
+                    cell::<K, _, _>(
+                        estimates,
+                        data_index,
+                        penultimate_start,
+                        s,
+                        input,
+                        epsilon,
+                        left.max(right),
+                    );
+                }
+            }
+            tile_start = tile_end;
         }
     }
 }
