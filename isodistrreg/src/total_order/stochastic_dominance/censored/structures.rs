@@ -105,9 +105,10 @@ impl CompletionIndex {
     }
 }
 
-/// The fields of a survival/Kaplan-Meier computation that the hot inner loop of `propagate_bounds`
-/// does not touch. Stored in a parallel vector to `Estimates::values` so that the hot loop iterates
-/// over a tightly packed `[f32]` instead of fetching a 6-field struct per access.
+/// The Kaplan-Meier running state of one (r, s) cell — only touched when `update_value`
+/// actually folds observations, unlike the bounds, which every `propagate_bounds` call
+/// rewrites. Kept in a separate array (12 bytes vs 8 for the bounds pair) so each path only
+/// streams the bytes it uses.
 #[derive(Clone, Debug)]
 pub struct SurvivalComputationCold {
     /// The Kaplan-Meier estimator (based on `count` samples). Updated incrementally inside
@@ -116,13 +117,15 @@ pub struct SurvivalComputationCold {
     pub raw_value: f32,
     /// Sum of weight of included observations.
     pub weight: f32,
-    /// Number of samples included in the computation of the raw value.
-    pub count: usize,
-    /// Lower bound based on all subdivisions of the interval - NAN for singletons.
-    pub lower_bound: f32,
-    /// Upper bound based on all subdivisions of the interval - NAN for singletons.
-    pub upper_bound: f32,
+    /// Number of samples included in the computation of the raw value. `u32` suffices:
+    /// the observation count is bounded far below that by the O(C²) estimator triangle
+    /// (and `CompletionIndex` packs observation indices into 31 bits already).
+    pub count: u32,
 }
+
+/// Lower/upper clip bound of one (r, s) cell — NAN for diagonal singletons. Written as a pair
+/// by every `propagate_bounds` call; read as a pair by `update_value`.
+pub type Bounds = (f32, f32);
 
 /// Stores partial survival / Kaplan-Meier estimator computations for all sub intervals.
 ///
@@ -136,7 +139,15 @@ pub struct Estimates {
     /// `compute_index((r, s), len)` so `(r, i)` for `i` increasing is sequential within column `i`,
     /// and `(i+1, s)` for `i` increasing is sequential within column `s`.
     pub values: Vec<f32>,
-    /// Cold half of each (r, s). Indexed identically to `values`.
+    /// Row-major mirror of `values`: `(r, s)` at `compute_row_index((r, s), len)`, so `(r, k)`
+    /// for `k` increasing is sequential. The bound-propagation kernel reads a row operand and
+    /// a column operand per cell; without the mirror the row side needs a strided gather
+    /// (one cache line per element), which measured at ~26% of kernel-bound fits. Every
+    /// value write maintains both copies (the second store is sequential and cheap).
+    pub values_row: Vec<f32>,
+    /// (lower, upper) clip bound of each (r, s). Indexed identically to `values`.
+    pub bounds: Vec<Bounds>,
+    /// K-M running state of each (r, s). Indexed identically to `values`.
     pub cold: Vec<SurvivalComputationCold>,
     /// Exact-0 completion oracle. Consulted on every cell write so that intervals whose
     /// survival is mathematically exactly 0 are pinned to exactly 0 the moment they
@@ -161,13 +172,13 @@ impl Estimates {
     ) -> Self {
         let total = n * (n + 1) / 2;
         let values = vec![1.0; total];
-        let mut cold = vec![
+        let values_row = vec![1.0; total];
+        let mut bounds = vec![(1.0f32, 1.0f32); total];
+        let cold = vec![
             SurvivalComputationCold {
                 raw_value: 1.0,
                 weight: 0.0,
-                count: start_count,
-                lower_bound: 1.0,
-                upper_bound: 1.0,
+                count: start_count as u32,
             };
             total
         ];
@@ -176,8 +187,7 @@ impl Estimates {
         // intervals.
         for i in 0..n {
             let idx = Self::compute_index((i, i), n);
-            cold[idx].lower_bound = f32::NAN;
-            cold[idx].upper_bound = f32::NAN;
+            bounds[idx] = (f32::NAN, f32::NAN);
         }
         debug_assert!(observations.len() < WALK_OBSERVED_BIT as usize);
         let walk_x = observations
@@ -188,6 +198,8 @@ impl Estimates {
         Self {
             len: n,
             values,
+            values_row,
+            bounds,
             cold,
             completion,
             walk_x,
@@ -202,6 +214,16 @@ impl Estimates {
 
         s * (s + 1) / 2 + r
     }
+    /// Index into the row-major mirror `values_row` — row `r` (length `len - r`) starts after
+    /// rows `0..r`, whose lengths sum to `r * (2 * len + 1 - r) / 2` (the product is always
+    /// even, and `r < len` keeps the inner term positive).
+    #[inline(always)]
+    pub fn compute_row_index((r, s): (usize, usize), len: usize) -> usize {
+        debug_assert!(r <= s);
+        debug_assert!(s < len);
+
+        r * (2 * len + 1 - r) / 2 + (s - r)
+    }
     pub fn len(&self) -> usize {
         self.len
     }
@@ -211,16 +233,16 @@ impl Estimates {
     pub fn value(&self, r: usize, s: usize) -> f32 {
         self.values[Self::compute_index((r, s), self.len)]
     }
-    /// Mutable access to the cold half at (r, s).
+    /// Mutable access to the clip bounds at (r, s).
     #[inline(always)]
-    pub fn cold_mut(&mut self, r: usize, s: usize) -> &mut SurvivalComputationCold {
-        &mut self.cold[Self::compute_index((r, s), self.len)]
+    pub fn bounds_mut(&mut self, r: usize, s: usize) -> &mut Bounds {
+        &mut self.bounds[Self::compute_index((r, s), self.len)]
     }
-    /// Mutable access to both halves at (r, s).
+    /// Write the clipped value at `idx` = (r, s), maintaining the row-major mirror.
     #[inline(always)]
-    pub fn entry_mut(&mut self, r: usize, s: usize) -> (&mut f32, &mut SurvivalComputationCold) {
-        let idx = Self::compute_index((r, s), self.len);
-        (&mut self.values[idx], &mut self.cold[idx])
+    pub fn set_value(&mut self, idx: usize, row_idx: usize, value: f32) {
+        self.values[idx] = value;
+        self.values_row[row_idx] = value;
     }
 }
 
@@ -310,6 +332,14 @@ impl Estimates {
             diag_cold.weight = weight_consumed;
             estimates.values[index] = diag_cold.raw_value;
             index += 1;
+        }
+
+        // Mirror the freshly built triangle into the row-major copy.
+        for r in 0..len {
+            for s in r..len {
+                let v = estimates.values[Estimates::compute_index((r, s), len)];
+                estimates.values_row[Estimates::compute_row_index((r, s), len)] = v;
+            }
         }
 
         estimates
