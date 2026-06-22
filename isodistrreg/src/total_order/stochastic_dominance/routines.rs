@@ -275,19 +275,17 @@ pub fn classical_pava_update_step<R, S, D: Direction>(
 
     // Accelerated extension and pooling
     match D::IS_INCREASING {
-        false => add_remaining(
+        false => add_remaining::<true, _>(
             covariate + 1..upper,
             partitions,
             consumed_share,
             covariate_statistics,
-            true,
         ),
-        true => add_remaining(
+        true => add_remaining::<false, _>(
             (lower..covariate).rev(),
             partitions,
             consumed_share,
             covariate_statistics,
-            false,
         ),
     }
 
@@ -372,25 +370,58 @@ fn new_partition(
     }
 }
 
-fn add_remaining(
-    range_to_add: impl Iterator<Item = usize>,
-    partitions: &mut Vec<Partition<f32, f32>>,
-    consumed_share: &mut [f32],
+/// Re-add the covariates in `range_to_add` as singleton blocks, pooling each into the
+/// running partition stack so it stays a `Decreasing`-by-value antitonic regression.
+///
+/// This is the accelerated PAVA's hottest loop on weakly-correlated data (a split block
+/// re-adds its whole interior). Rather than `push` a singleton and immediately call the
+/// generic pool — which pops it straight back out whenever it merges — the merge is
+/// accumulated in registers and the block is pushed once. `REINDEX` (compile-time,
+/// mirroring the generic pool's runtime flag) selects which merged endpoint's `index`
+/// (block boundary) survives.
+///
+/// Besides the strict `Decreasing` violation (pooled by weighted mean, operand order
+/// matching the generic pool), an *equal*-valued neighbour is coalesced: it carries the
+/// same value, so the merged block keeps it bit-for-bit and only sums the weight. This is
+/// the important part — the regression is frequently a step function whose runs a strict
+/// pool leaves as thousands of singletons (a long consumed/unconsumed plateau); folding
+/// them keeps the list near its true block count, shrinking every later suffix copy, store
+/// and scan. The emitted CDF is the same step function; only later pooled means round
+/// differently (a coalesced weight vs. a chain of pair merges), all within the f32 noise
+/// floor — gated by the f64-reference differential tests. Values are finite shares in
+/// `[0, 1]`, so `<`/`==` match the `partial_cmp` trichotomy the generic pool used.
+fn add_remaining<const REINDEX: bool, I: Iterator<Item = usize>>(
+    range_to_add: I,
+    partitions: &mut Vec<WeightedPartition>,
+    consumed_share: &[f32],
     covariate_statistics: &[CovariateStatistic],
-    reindex_on_pool: bool,
 ) {
-    // TODO: Can we track how blocks were merged to avoid having to add singletons, and instead
-    //  merge larger sub blocks? (not in the worst case, but in the typical case, maybe?)
     for i in range_to_add {
-        partitions.push(Partition {
+        let mut acc = Partition {
             index: i + 1,
             weight: covariate_statistics[i].weight,
             value: consumed_share[i],
-        });
-        routines::pool_partitions_from_right_can_reindex::<Decreasing, _>(
-            partitions,
-            reindex_on_pool,
-        );
+        };
+        while let Some(prev) = partitions.last() {
+            if prev.value < acc.value {
+                let prev = partitions.pop().unwrap();
+                let pooled_weight = prev.weight + acc.weight;
+                acc.value = (prev.weight * prev.value + acc.weight * acc.value) / pooled_weight;
+                acc.weight = pooled_weight;
+                if !REINDEX {
+                    acc.index = prev.index;
+                }
+            } else if prev.value == acc.value {
+                let prev = partitions.pop().unwrap();
+                acc.weight += prev.weight;
+                if !REINDEX {
+                    acc.index = prev.index;
+                }
+            } else {
+                break;
+            }
+        }
+        partitions.push(acc);
     }
 }
 
