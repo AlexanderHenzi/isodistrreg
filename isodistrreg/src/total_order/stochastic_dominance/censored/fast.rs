@@ -287,13 +287,7 @@ fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
         cold.raw_value = raw_value;
         cold.weight = obs_weight;
         cold.count = (data_index + 1) as u32;
-        // The estimators (r, cov_index) are decreasing in r, so the lower bound is below the value
         estimators.set_value(idx, row_idx, raw_value);
-
-        // Propagate bound
-        if r > 0 {
-            estimators.bounds_mut(r - 1, obs_x).0 = raw_value;
-        }
     }
 
     // Set up partitions
@@ -575,11 +569,11 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         // larger r within the same tile — so the tiled order is a valid schedule of the
         // same DP and every cell sees identical inputs (bit-identical results). The point
         // of the tiles: wide merges revisit each column once per row, and with the full
-        // span in flight the columns (plus their bounds and K-M state) fall out of L2
-        // between visits; a tile's working set stays cache-resident across the r sweep.
-        // One cell: kernel, then K-M update. Index and bounds flow through registers
-        // between the two — the bounds/value stores remain for future readers, but the
-        // consecutive-cell dependency chain skips the memory round-trip.
+        // span in flight the columns (plus their K-M state) fall out of L2 between visits;
+        // a tile's working set stays cache-resident across the r sweep.
+        // One cell: kernel, then K-M update. Index and bounds flow through registers between
+        // the two — bounds are never stored (only the value store remains for future readers),
+        // so the consecutive-cell dependency chain skips the memory round-trip.
         #[inline(always)]
         #[allow(clippy::too_many_arguments)]
         fn cell<K: Kernel, X: crate::Float, Y: crate::Float>(
@@ -682,12 +676,6 @@ impl Estimates {
         debug_assert_eq!(
             idx,
             Self::compute_index((covariate_start_index, covariate_end_index), self.len()),
-        );
-        // Bitwise comparison: diagonal cells carry the (NAN, NAN) sentinel, which `==` would
-        // reject even when the pair is byte-identical to the stored bounds.
-        debug_assert_eq!(
-            (bounds.0.to_bits(), bounds.1.to_bits()),
-            (self.bounds[idx].0.to_bits(), self.bounds[idx].1.to_bits()),
         );
         let row_idx =
             Self::compute_row_index((covariate_start_index, covariate_end_index), self.len());
@@ -799,7 +787,10 @@ impl Estimates {
             let bounds = if r < observation.x {
                 self.propagate_bounds_with_row::<K>(idx, r, observation.x)
             } else {
-                self.bounds[idx]
+                // Diagonal (singleton) cell: no subdivisions, so no clip bounds. The
+                // (NaN, NaN) sentinel makes `update_value`'s `lower >= upper` collapse
+                // check false and the final `max(NaN).min(NaN)` clip a no-op.
+                (f32::NAN, f32::NAN)
             };
             self.update_value::<K, _, _>(
                 data_index,
@@ -818,9 +809,10 @@ impl Estimates {
     /// contiguously from the row-major mirror) paired with the column operand
     /// `values[(r+1..=s, s)]` (contiguous in the column-major triangle).
     ///
-    /// `idx` must be `compute_index((r, s))`. The fresh bounds are stored *and* returned, so
-    /// the immediately following `update_value` keeps them in registers.
-    fn propagate_bounds_with_row<K: Kernel>(&mut self, idx: usize, r: usize, s: usize) -> Bounds {
+    /// `idx` must be `compute_index((r, s))`. The bounds are only ever consumed by the
+    /// `update_value` that immediately follows (kept in registers), so they are returned
+    /// rather than stored — no per-cell bounds array is maintained.
+    fn propagate_bounds_with_row<K: Kernel>(&self, idx: usize, r: usize, s: usize) -> Bounds {
         assert!(r < s);
         assert!(s < self.len());
 
@@ -831,10 +823,7 @@ impl Estimates {
         let row = &self.values_row[row_start..row_start + len];
         let col = &self.values[col_s_base + r + 1..=col_s_base + s];
 
-        let bounds = K::apply(row, col);
-
-        self.bounds[idx] = bounds;
-        bounds
+        K::apply(row, col)
     }
 }
 
