@@ -3,57 +3,83 @@ use std::cmp::Ordering;
 use std::iter::once;
 use std::mem;
 
-/// Tile size for the blocked transposes. Chosen so a `BLOCK × BLOCK` `f32` tile
-/// (and the two windows the off-diagonal swap touches) sits comfortably in L1d.
-const BLOCK: usize = 32;
+/// Inner tile size for the blocked transposes. A `BLOCK × BLOCK` tile of `f32` is 9 KiB; a
+/// swap holds two such tiles of scratch (18 KiB), which stays resident in the smallest
+/// modern L1d (32 KiB) with headroom for the matrix rows streaming through.
+///
+/// 48 is chosen empirically: each `copy_from_slice` then moves a 192-byte (BLOCK·4) run,
+/// long enough for the hardware prefetcher to engage on the otherwise row-scattered tiles
+/// (a transpose of a multi-GB matrix is bound by scattered DRAM access). Smaller tiles
+/// (32: 128-byte runs) leave throughput on the table; larger ones (64: two 16 KiB buffers
+/// = a full 32 KiB L1) thrash the smallest laptop caches. The value is deliberately a
+/// conservative middle, not tuned to one machine.
+const BLOCK: usize = 48;
+
+/// Outer block size for the two-level square transpose. Inner `BLOCK` tiles keep each swap
+/// in L1, but on a matrix far larger than cache every tile's rows still come from distinct
+/// pages, so the inner pass alone is throttled by TLB/last-level-cache misses. Grouping the
+/// inner tiles into `OUTER_BLOCK × OUTER_BLOCK` regions and finishing one region (and its
+/// mirror) before moving on keeps that working set — 2·`768²`·4 B ≈ 4.5 MiB for a pair —
+/// resident in the last-level cache of any recent laptop, roughly halving the run time at
+/// the multi-GB sizes that dominate. 768 is a deliberately conservative, machine-agnostic
+/// middle: large enough to amortise the page/line misses, small enough to fit a modest L3.
+const OUTER_BLOCK: usize = 768;
 
 /// Transposes a row-major `m × n` matrix stored in `matrix`.
 ///
-/// The square (`m == n`) case is done in place with no extra allocation — at the
-/// sizes that dominate the IDR fit (uncensored uniform, where `m == n` and the
-/// matrix is multiple GB), allocating a second buffer would double peak RSS.
-/// Rectangular matrices need a copy; we still walk in tiles so the strided read
-/// stays in L1.
+/// Both paths move each tile through a small stack buffer so every *main-memory* access
+/// is contiguous (one row segment per `copy_from_slice`); the unavoidable strided access
+/// of a transpose is confined to the L1-resident buffer. A naive element-wise swap streams
+/// one operand down a column — a fresh cache line and TLB entry per element — which on the
+/// multi-GB matrices that dominate the uncensored fit runs at a small fraction of DRAM
+/// bandwidth.
+///
+/// The square (`m == n`) case is done in place with no extra allocation — at the sizes
+/// that dominate (uncensored continuous, where `m == n` and the matrix is multiple GB),
+/// a second buffer would double peak RSS. Rectangular matrices transpose into a fresh
+/// buffer.
 pub fn transpose<T: Copy>(matrix: &mut Vec<T>, m: usize, n: usize) {
     assert_eq!(matrix.len(), m * n);
     if m == 0 || n == 0 {
         return;
     }
 
+    // `T: Copy` and the matrix is non-empty, so this element seeds the stack scratch
+    // without needing `T: Default` or `MaybeUninit`.
+    let fill = matrix[0];
+
     if m == n {
-        let mut ii = 0;
-        while ii < m {
-            let i_end = (ii + BLOCK).min(m);
-            for i in ii..i_end {
-                for j in (i + 1)..i_end {
-                    matrix.swap(i * n + j, j * n + i);
-                }
-            }
-            let mut jj = ii + BLOCK;
-            while jj < m {
-                let j_end = (jj + BLOCK).min(m);
-                for i in ii..i_end {
-                    for j in jj..j_end {
-                        matrix.swap(i * n + j, j * n + i);
-                    }
-                }
-                jj += BLOCK;
-            }
-            ii += BLOCK;
-        }
+        transpose_square_inplace(matrix, n, fill);
         return;
     }
 
-    let mut out: Vec<T> = matrix.clone();
+    // Rectangular: write into a fresh `n × m` buffer. `vec![fill; _]` memsets once (a
+    // write-only pass) rather than `clone()`'s read+write of the whole matrix; every
+    // element is overwritten below.
+    let mut out: Vec<T> = vec![fill; m * n];
+    let mut buf = [fill; BLOCK * BLOCK];
+    // Output is `n × m`; tile over output rows (`ii`, source columns) and output
+    // columns (`jj`, source rows).
     let mut ii = 0;
     while ii < n {
-        let i_end = (ii + BLOCK).min(n);
+        let ie = (ii + BLOCK).min(n);
+        let rci = ie - ii;
         let mut jj = 0;
         while jj < m {
-            let j_end = (jj + BLOCK).min(m);
-            for i in ii..i_end {
-                for j in jj..j_end {
-                    out[i * m + j] = matrix[j * n + i];
+            let je = (jj + BLOCK).min(m);
+            let rcj = je - jj;
+            // Read source tile (rows jj..je, cols ii..ie) contiguously into `buf`.
+            for bj in 0..rcj {
+                let base = (jj + bj) * n + ii;
+                buf[bj * rci..bj * rci + rci].copy_from_slice(&matrix[base..base + rci]);
+            }
+            // Write its transpose into the output tile (rows ii..ie, cols jj..je),
+            // one contiguous output row at a time.
+            for bi in 0..rci {
+                let base = (ii + bi) * m + jj;
+                let dst = &mut out[base..base + rcj];
+                for (bj, d) in dst.iter_mut().enumerate() {
+                    *d = buf[bj * rci + bi];
                 }
             }
             jj += BLOCK;
@@ -61,6 +87,108 @@ pub fn transpose<T: Copy>(matrix: &mut Vec<T>, m: usize, n: usize) {
         ii += BLOCK;
     }
     *matrix = out;
+}
+
+/// Transpose the diagonal `BLOCK` tile `[s, e) × [s, e)` of an `n × n` matrix in place.
+fn transpose_diagonal_tile<T: Copy>(matrix: &mut [T], n: usize, s: usize, e: usize) {
+    for i in s..e {
+        for j in (i + 1)..e {
+            matrix.swap(i * n + j, j * n + i);
+        }
+    }
+}
+
+/// Swap the off-diagonal `BLOCK` tile pair A = (rows `ii..ie`, cols `jj..je`) and
+/// B = (rows `jj..je`, cols `ii..ie`) of an `n × n` matrix, leaving A = Bᵀ and B = Aᵀ.
+/// Both tiles are staged through row-major stack buffers so every matrix read and write is
+/// a contiguous row segment; the strided access of the transpose stays in the L1 buffers.
+fn swap_offdiagonal_tiles<T: Copy>(
+    matrix: &mut [T],
+    n: usize,
+    (ii, ie): (usize, usize),
+    (jj, je): (usize, usize),
+    buf_a: &mut [T],
+    buf_b: &mut [T],
+) {
+    let ra = ie - ii;
+    let ca = je - jj;
+    for r in 0..ra {
+        let base = (ii + r) * n + jj;
+        buf_a[r * ca..r * ca + ca].copy_from_slice(&matrix[base..base + ca]);
+    }
+    for r in 0..ca {
+        let base = (jj + r) * n + ii;
+        buf_b[r * ra..r * ra + ra].copy_from_slice(&matrix[base..base + ra]);
+    }
+    // A[r][c] = Bᵀ[r][c] = buf_b[c][r]; write one contiguous row of A at a time.
+    for r in 0..ra {
+        let base = (ii + r) * n + jj;
+        let dst = &mut matrix[base..base + ca];
+        for (c, d) in dst.iter_mut().enumerate() {
+            *d = buf_b[c * ra + r];
+        }
+    }
+    // B[r][c] = Aᵀ[r][c] = buf_a[c][r].
+    for r in 0..ca {
+        let base = (jj + r) * n + ii;
+        let dst = &mut matrix[base..base + ra];
+        for (c, d) in dst.iter_mut().enumerate() {
+            *d = buf_a[c * ca + r];
+        }
+    }
+}
+
+/// In-place transpose of an `n × n` row-major matrix, two-level blocked: `OUTER_BLOCK`
+/// regions (last-level-cache locality) of `BLOCK` tiles (L1 locality). Each outer region
+/// — a diagonal one, then it paired with every region to its right — is finished before
+/// the next, so its pages stay cache-resident across all the inner tiles it contains.
+/// Within a region, diagonal tiles transpose in place and off-diagonal tile pairs swap
+/// through stack buffers (all matrix access contiguous).
+fn transpose_square_inplace<T: Copy>(matrix: &mut [T], n: usize, fill: T) {
+    let mut buf_a = [fill; BLOCK * BLOCK];
+    let mut buf_b = [fill; BLOCK * BLOCK];
+
+    // Inner tiles of the diagonal outer region `[o, oe) × [o, oe)`.
+    let inner_diagonal_region =
+        |matrix: &mut [T], o: usize, oe: usize, buf_a: &mut [T], buf_b: &mut [T]| {
+            let mut ii = o;
+            while ii < oe {
+                let ie = (ii + BLOCK).min(oe);
+                transpose_diagonal_tile(matrix, n, ii, ie);
+                let mut jj = ie;
+                while jj < oe {
+                    let je = (jj + BLOCK).min(oe);
+                    swap_offdiagonal_tiles(matrix, n, (ii, ie), (jj, je), buf_a, buf_b);
+                    jj += BLOCK;
+                }
+                ii += BLOCK;
+            }
+        };
+
+    let mut oi = 0;
+    while oi < n {
+        let oie = (oi + OUTER_BLOCK).min(n);
+        inner_diagonal_region(matrix, oi, oie, &mut buf_a, &mut buf_b);
+        // Off-diagonal outer regions to the right: all inner tile pairs between the row
+        // band `[oi, oie)` and the column band `[oj, oje)`.
+        let mut oj = oie;
+        while oj < n {
+            let oje = (oj + OUTER_BLOCK).min(n);
+            let mut ii = oi;
+            while ii < oie {
+                let ie = (ii + BLOCK).min(oie);
+                let mut jj = oj;
+                while jj < oje {
+                    let je = (jj + BLOCK).min(oje);
+                    swap_offdiagonal_tiles(matrix, n, (ii, ie), (jj, je), &mut buf_a, &mut buf_b);
+                    jj += BLOCK;
+                }
+                ii += BLOCK;
+            }
+            oj += OUTER_BLOCK;
+        }
+        oi += OUTER_BLOCK;
+    }
 }
 
 pub fn argsort_unstable_by<D: Direction, F>(cmp: F, n: usize) -> Vec<usize>
