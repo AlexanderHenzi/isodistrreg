@@ -106,9 +106,8 @@ impl CompletionIndex {
 }
 
 /// The Kaplan-Meier running state of one (r, s) cell — only touched when `update_value`
-/// actually folds observations, unlike the bounds, which every `propagate_bounds` call
-/// rewrites. Kept in a separate array (12 bytes vs 8 for the bounds pair) so each path only
-/// streams the bytes it uses.
+/// actually folds observations. Kept in its own array (12 bytes) so the hot bound-propagation
+/// reader streams only the contiguous `values`/`values_row` it needs.
 #[derive(Clone, Debug)]
 pub struct SurvivalComputationCold {
     /// The Kaplan-Meier estimator (based on `count` samples). Updated incrementally inside
@@ -122,8 +121,9 @@ pub struct SurvivalComputationCold {
     pub count: u32,
 }
 
-/// Lower/upper clip bound of one (r, s) cell — NAN for diagonal singletons. Written as a pair
-/// by every `propagate_bounds` call; read as a pair by `update_value`.
+/// Lower/upper clip bound of one (r, s) cell — `(NaN, NaN)` for diagonal singletons.
+/// Produced by `propagate_bounds_with_row` and consumed by `update_value` in the same step;
+/// flows through registers, never stored in a per-cell array.
 pub type Bounds = (f32, f32);
 
 /// Stores partial survival / Kaplan-Meier estimator computations for all sub intervals.
@@ -144,8 +144,6 @@ pub struct Estimates {
     /// (one cache line per element), which measured at ~26% of kernel-bound fits. Every
     /// value write maintains both copies (the second store is sequential and cheap).
     pub values_row: Vec<f32>,
-    /// (lower, upper) clip bound of each (r, s). Indexed identically to `values`.
-    pub bounds: Vec<Bounds>,
     /// K-M running state of each (r, s). Indexed identically to `values`.
     pub cold: Vec<SurvivalComputationCold>,
     /// Exact-0 completion oracle. Consulted on every cell write so that intervals whose
@@ -172,7 +170,6 @@ impl Estimates {
         let total = n * (n + 1) / 2;
         let values = vec![1.0; total];
         let values_row = vec![1.0; total];
-        let mut bounds = vec![(1.0f32, 1.0f32); total];
         let cold = vec![
             SurvivalComputationCold {
                 raw_value: 1.0,
@@ -181,13 +178,6 @@ impl Estimates {
             };
             total
         ];
-        // Diagonal entries don't have meaningful bounds (no subdivisions); mark with NAN so the
-        // bounds-equality short-circuit in `update_value` would only fire on actually-collapsed
-        // intervals.
-        for i in 0..n {
-            let idx = Self::compute_index((i, i), n);
-            bounds[idx] = (f32::NAN, f32::NAN);
-        }
         // Covariate indices share their u32 with the flag in the top bit; `MAX_OBSERVATIONS`
         // keeps them below it (the largest covariate index is at most `observations.len() - 1`).
         debug_assert!(observations.len() <= MAX_OBSERVATIONS);
@@ -200,7 +190,6 @@ impl Estimates {
             len: n,
             values,
             values_row,
-            bounds,
             cold,
             completion,
             walk_x,
@@ -233,11 +222,6 @@ impl Estimates {
     #[inline(always)]
     pub fn value(&self, r: usize, s: usize) -> f32 {
         self.values[Self::compute_index((r, s), self.len)]
-    }
-    /// Mutable access to the clip bounds at (r, s).
-    #[inline(always)]
-    pub fn bounds_mut(&mut self, r: usize, s: usize) -> &mut Bounds {
-        &mut self.bounds[Self::compute_index((r, s), self.len)]
     }
     /// Write the clipped value at `idx` = (r, s), maintaining the row-major mirror.
     #[inline(always)]
