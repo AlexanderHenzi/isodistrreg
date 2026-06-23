@@ -18,8 +18,8 @@ crate-type = ["cdylib"]
 [dependencies]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 # "abi3-py313" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.13
-pyo3 = { version = "0.28.3", features = ["extension-module", "abi3-py313", "either"] }
-numpy = "0.28.0"
+pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py313", "either"] }
+numpy = "0.29.0"
 isodistrreg = { workspace = true, features = ["parallel", "serde", "subagging"] }
 num-traits = "0.2"
 itertools = { workspace = true }
@@ -29,4 +29,4 @@ rayon = { workspace = true }
 kdam = { version = "0.6", features = ["notebook", "template"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-pyo3 = { version = "0.28.3", features = ["generate-import-lib"] }
+pyo3 = { version = "0.29.0", features = ["generate-import-lib"] }

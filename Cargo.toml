@@ -38,7 +38,7 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 isodistrreg = { path = "isodistrreg", features = ["partial-order"] }
 osqp = "1.0.1"
-itertools = "0.14.0"
+itertools = "0.15.0"
 serde = "1.0.228"
 rayon = "1.12.0"
 
