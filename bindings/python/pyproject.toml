@@ -39,7 +39,7 @@ Issues = "https://github.com/AlexanderHenzi/isodistrreg/issues"
 
 [project.optional-dependencies]
 scikit-learn = [
-    "scikit-learn>=1.8.0",
+    "scikit-learn>=1.9.0",
     "numpy>=1",
 ]
 
@@ -50,7 +50,7 @@ dev = [
     "pre-commit>=4.6.0",
 ]
 test = [
-    "pytest>=9.0.3",
+    "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "pandas>=3.0.3",  # to test the scikit learn interface
 ]
