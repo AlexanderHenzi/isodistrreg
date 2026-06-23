@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "isodistrreg"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "approx",
  "bitree",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "isodistrreg-py"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "isodistrreg",
  "itertools",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "isodistrreg-r"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "crossbeam-channel",
  "extendr-api",
