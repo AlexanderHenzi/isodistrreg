@@ -3,17 +3,19 @@
 Rust, Python and R implementations of **Isotonic Distributional Regression
 (IDR)** and its **Survival-IDR (S-IDR)** extension for right-censored data.
 
-Most regression methods answer *“what is the expected value of `y`?”*. IDR
-answers the more useful question *“what is the **whole distribution** of `y`?”* —
-it returns a full conditional CDF, from which means, quantiles, prediction
-intervals, exceedance probabilities and proper scores all follow — which is what
-you want for calibrated weather forecasting, survival analysis, risk and demand
-modelling, and probabilistic prediction generally. And it does so:
+Most regression methods answer *“what is the expected value of `y` given `x`?”*.
+(S-)IDR answers the more useful question *“what is the **whole distribution**
+of `y` given `x`?”* — it returns a full conditional CDF, from which means, 
+quantiles, prediction intervals, exceedance probabilities and proper scores all
+follow. These conditional distributions are stochastically monotone, meaning
+that each quantile is nondecreasing / nonincreasing, which is useful when
+estimating effects that only move in one direction (effect of the dose size on 
+the response, early discovery of cancer improves survival, recalibrating models,
+...). And it does so:
 
 - **without tuning parameters** — the fit is determined entirely by the data and
   the ordering you put on the covariates;
-- **monotonically** — larger covariates yield stochastically larger responses, so
-  the estimated CDFs never cross;
+- **nonparametrically** — the fit gets more complex as more data is available;
 - **calibrated and sharp** — the fit is the unique estimator that is
   simultaneously optimal for a large class of proper scoring rules (CRPS, Brier
   score, quantile loss, …).
@@ -80,12 +82,12 @@ fully identified.
 
 ## Subagging
 
-On large datasets a single exact fit can be costly. **Subagging** fits IDR on
-many random subsamples and averages the resulting distributions. Each fit sees
-only a fraction of the data, so it is far cheaper, and the fits are independent,
-so they run in parallel across cores via `n_jobs` — turning one large problem
-into many small ones. The averaged estimate is also smoother and more stable than
-a single fit.
+**Subagging** fits IDR on many random subsamples and averages the resulting 
+distributions. Each fit sees only a fraction of the data, so it is far cheaper,
+and the fits are independent, so they run in parallel across cores via `n_jobs`
+— turning one large problem into many small ones. On large datasets a single 
+exact fit can be costly if censoring is present. The averaged estimate is also 
+smoother and more stable than a single fit.
 
 ```python
 # Average 50 fits, each on a random half of the data, across 4 cores
