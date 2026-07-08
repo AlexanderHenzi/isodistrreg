@@ -1,6 +1,6 @@
 # isodistrreg: Isotonic Distributional Regression
 
-<p align="center"><strong><a href="bindings/python/README.md">Available for: Python</a> · <a href="bindings/R/README.md">R</a> · <a href="isodistrreg/README.md">Rust</a></strong></p>
+<p align="center"><strong>Available for: <a href="bindings/python/README.md">Python</a> · <a href="bindings/R/README.md">R</a> · <a href="isodistrreg/README.md">Rust</a></strong></p>
 
 Implementations of **Isotonic Distributional Regression (IDR)** and its
 **Survival-IDR (S-IDR)** extension for right-censored data.
