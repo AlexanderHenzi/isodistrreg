@@ -149,6 +149,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
             data_index,
             completion,
             &context.observations,
+            &context.covariate_statistics,
         );
         let mut partitions = Vec::with_capacity(context.n_covariate());
 
@@ -625,16 +626,14 @@ impl Estimates {
         // condition is monotone in `data_index`), so the stale bookkeeping is never read
         // again.
         if CompletionIndex::completes_marker(marker_max, data_index) {
-            self.cold[idx].raw_value = 0.0;
+            debug_assert!(idx < self.cold.len());
+            // SAFETY: `idx` is the triangle index of the cell (asserted equal to
+            // `compute_index` above), hence within `cold`.
+            unsafe { self.cold.get_unchecked_mut(idx) }.raw_value = 0.0;
             self.set_value(idx, row_idx, 0.0);
             return;
         }
 
-        let cold = &mut self.cold[idx];
-
-        // `cold.count` may already be `data_index + 1` when the cell was touched earlier in the
-        // same run of tied uncensored observations (the walk consumes the whole run at once).
-        debug_assert!(data_index + 1 >= cold.count as usize);
         debug_assert!(covariate_start_index <= covariate_end_index);
         debug_assert!(covariate_end_index < input.n_covariate());
 
@@ -649,12 +648,32 @@ impl Estimates {
             return;
         }
 
-        let total_weight = if covariate_start_index > 0 {
-            input.covariate_statistics[covariate_end_index].cumulative_weight
-                - input.covariate_statistics[covariate_start_index - 1].cumulative_weight
-        } else {
-            input.covariate_statistics[covariate_end_index].cumulative_weight
+        // Branch-free total weight off the flat shifted `cum_w` copy — bitwise equal to
+        // the `covariate_start_index > 0` branching form (`cum_w[0]` is exactly 0.0 and
+        // `a - 0.0 == a` in IEEE arithmetic).
+        debug_assert_eq!(
+            self.cum_w[covariate_end_index + 1] - self.cum_w[covariate_start_index],
+            if covariate_start_index > 0 {
+                input.covariate_statistics[covariate_end_index].cumulative_weight
+                    - input.covariate_statistics[covariate_start_index - 1].cumulative_weight
+            } else {
+                input.covariate_statistics[covariate_end_index].cumulative_weight
+            }
+        );
+        // SAFETY: `covariate_end_index < self.len()` (asserted above) and `cum_w` has
+        // `self.len() + 1` entries, so both indices are in bounds.
+        let total_weight = unsafe {
+            self.cum_w.get_unchecked(covariate_end_index + 1)
+                - self.cum_w.get_unchecked(covariate_start_index)
         };
+
+        debug_assert!(idx < self.cold.len());
+        // SAFETY: `idx` is the triangle index of the cell (asserted equal to
+        // `compute_index` above), hence within `cold`.
+        let cold = unsafe { self.cold.get_unchecked_mut(idx) };
+        // `cold.count` may already be `data_index + 1` when the cell was touched earlier in the
+        // same run of tied uncensored observations (the walk consumes the whole run at once).
+        debug_assert!(data_index + 1 >= cold.count as usize);
         let remaining_weight = total_weight - cold.weight;
         if remaining_weight < epsilon {
             // There is no more weight to process, so the raw Kaplan-Meier value is final — but
@@ -681,16 +700,27 @@ impl Estimates {
         // items passing.
         let from = cold.count as usize;
         let to = data_index + 1;
+        debug_assert!(from <= to && to <= self.walk_x.len() && to <= self.walk_w.len());
+        // SAFETY: `from <= to` (asserted above from `cold.count`'s invariant) and
+        // `to == data_index + 1 <= n`, the length of both walk arrays.
+        let (walk_xs, walk_ws) = unsafe {
+            (
+                self.walk_x.get_unchecked(from..to),
+                self.walk_w.get_unchecked(from..to),
+            )
+        };
         let (raw_value, remaining_weight) = K::walk_scan(
-            &self.walk_x[from..to],
-            &self.walk_w[from..to],
+            walk_xs,
+            walk_ws,
             covariate_start_index as u32,
             (covariate_end_index - covariate_start_index) as u32,
             cold.raw_value,
             remaining_weight,
         );
 
-        let cold = &mut self.cold[idx];
+        // SAFETY: as above; re-borrowed because the walk's slice borrows ended the
+        // earlier exclusive borrow.
+        let cold = unsafe { self.cold.get_unchecked_mut(idx) };
         cold.raw_value = raw_value;
         cold.weight = total_weight - remaining_weight;
         cold.count = (data_index + 1) as u32;
@@ -748,15 +778,27 @@ impl Estimates {
     /// `update_value` that immediately follows (kept in registers), so they are returned
     /// rather than stored — no per-cell bounds array is maintained.
     fn propagate_bounds_with_row<K: Kernel>(&self, idx: usize, r: usize, s: usize) -> Bounds {
-        assert!(r < s);
-        assert!(s < self.len());
+        debug_assert!(r < s);
+        debug_assert!(s < self.len());
 
         let len = s - r;
         let col_s_base = idx - r;
         debug_assert_eq!(col_s_base, s * (s + 1) / 2);
         let row_start = Self::compute_row_index((r, r), self.len());
-        let row = &self.values_row[row_start..row_start + len];
-        let col = &self.values[col_s_base + r + 1..=col_s_base + s];
+        debug_assert!(row_start + len <= self.values_row.len());
+        debug_assert!(col_s_base + s < self.values.len());
+        // SAFETY: both callers guarantee `r < s < self.len()` (cell coordinates come from
+        // partition indices bounded by `n_covariate`). The row operand `(r, r..s)` then ends
+        // at the row-mirror index of `(r, s)`, inside row `r`'s segment, and the column
+        // operand `(r+1..=s, s)` ends at the triangle index of `(s, s)`, the last entry of
+        // column `s` — both in bounds, and `r < s` keeps both ranges well-formed.
+        let (row, col) = unsafe {
+            (
+                self.values_row.get_unchecked(row_start..row_start + len),
+                self.values
+                    .get_unchecked(col_s_base + r + 1..col_s_base + s + 1),
+            )
+        };
 
         K::apply(row, col)
     }
