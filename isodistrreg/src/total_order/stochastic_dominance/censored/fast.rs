@@ -586,6 +586,17 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             marker_max: u32,
         ) {
             let idx = Estimates::compute_index((r, s), estimates.len());
+            // Completed cells pin to exactly 0 before `update_value` ever looks at the
+            // bounds (its first branch), so the O(s - r) kernel reduction below would be
+            // computed only to be discarded. Do the same stores here and skip it. The
+            // check re-fires on every visit once true (monotone in `data_index`), so
+            // this shortcut applies to every revisit of a completed cell.
+            if CompletionIndex::completes_marker(marker_max, data_index) {
+                let row_idx = Estimates::compute_row_index((r, s), estimates.len());
+                estimates.cold[idx].raw_value = 0.0;
+                estimates.set_value(idx, row_idx, 0.0);
+                return;
+            }
             let bounds = estimates.propagate_bounds_with_row::<K>(idx, r, s);
             estimates
                 .update_value::<K, _, _>(data_index, idx, bounds, r, s, input, epsilon, marker_max);
