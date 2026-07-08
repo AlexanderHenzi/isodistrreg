@@ -134,7 +134,9 @@ fn sweep_rect_body<K: Kernel, X: crate::Float, Y: crate::Float>(args: SweepArgs<
         // this shortcut applies to every revisit of a completed cell.
         if CompletionIndex::completes_marker(marker_max, data_index) {
             let row_idx = Estimates::compute_row_index((r, s), estimates.len());
-            estimates.cold[idx].raw_value = 0.0;
+            debug_assert!(idx < estimates.cold.len());
+            // SAFETY: `idx` is the triangle index of (r, s) with r <= s < len.
+            unsafe { estimates.cold.get_unchecked_mut(idx) }.raw_value = 0.0;
             estimates.set_value(idx, row_idx, 0.0);
             return;
         }

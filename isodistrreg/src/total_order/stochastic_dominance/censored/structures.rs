@@ -158,6 +158,13 @@ pub struct Estimates {
     pub walk_x: Vec<u32>,
     /// Weight of each observation, parallel to `walk_x`.
     pub walk_w: Vec<f32>,
+    /// Cumulative covariate weights, shifted by one: `cum_w[x + 1]` is the cumulative
+    /// weight through covariate `x` and `cum_w[0] == 0.0`, so a cell's total weight is
+    /// the branch-free difference `cum_w[s + 1] - cum_w[r]`. Bitwise equal to the
+    /// branching form: subtracting the leading exact 0.0 is an IEEE no-op. A flat `f32`
+    /// copy (16 values per cache line) instead of the strided `CovariateStatistic` field
+    /// loads `update_value` would otherwise issue twice per cell.
+    pub cum_w: Vec<f32>,
 }
 
 impl Estimates {
@@ -166,6 +173,7 @@ impl Estimates {
         start_count: usize,
         completion: CompletionIndex,
         observations: &[Observation<usize, usize, bool, f32>],
+        covariate_statistics: &[CovariateStatistic],
     ) -> Self {
         let total = n * (n + 1) / 2;
         let values = vec![1.0; total];
@@ -186,6 +194,10 @@ impl Estimates {
             .map(|o| o.x as u32 | if o.observed { WALK_OBSERVED_BIT } else { 0 })
             .collect();
         let walk_w = observations.iter().map(|o| o.weight).collect();
+        debug_assert_eq!(covariate_statistics.len(), n);
+        let cum_w = std::iter::once(0.0)
+            .chain(covariate_statistics.iter().map(|c| c.cumulative_weight))
+            .collect();
         Self {
             len: n,
             values,
@@ -194,6 +206,7 @@ impl Estimates {
             completion,
             walk_x,
             walk_w,
+            cum_w,
         }
     }
     /// Index into the array - `r` is inclusive, `s` is inclusive
@@ -224,10 +237,21 @@ impl Estimates {
         self.values[Self::compute_index((r, s), self.len)]
     }
     /// Write the clipped value at `idx` = (r, s), maintaining the row-major mirror.
+    ///
+    /// `idx`/`row_idx` must be `compute_index((r, s))`/`compute_row_index((r, s))` for one
+    /// cell with `r <= s < len` — every caller derives them exactly that way, which keeps
+    /// both inside the triangle. The explicit bounds checks were two extra
+    /// compare-and-branches on the hottest store in the crate (every cell visit ends
+    /// here).
     #[inline(always)]
     pub fn set_value(&mut self, idx: usize, row_idx: usize, value: f32) {
-        self.values[idx] = value;
-        self.values_row[row_idx] = value;
+        debug_assert!(idx < self.values.len());
+        debug_assert!(row_idx < self.values_row.len());
+        // SAFETY: see above — triangle indices of a valid (r, s) cell.
+        unsafe {
+            *self.values.get_unchecked_mut(idx) = value;
+            *self.values_row.get_unchecked_mut(row_idx) = value;
+        }
     }
 }
 
@@ -244,7 +268,13 @@ impl Estimates {
         let len = consumed_weight.len();
         debug_assert_eq!(covariate_statistics.len(), len);
 
-        let mut estimates = Estimates::new(len, start_count, completion, observations);
+        let mut estimates = Estimates::new(
+            len,
+            start_count,
+            completion,
+            observations,
+            covariate_statistics,
+        );
 
         let consumed_weight_plain: Vec<f32> = Vec::from(consumed_weight);
 
