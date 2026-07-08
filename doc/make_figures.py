@@ -29,9 +29,17 @@ mpl.rcParams.update(
         "figure.facecolor": "white",
         "axes.facecolor": "white",
         "savefig.facecolor": "white",
+        # Computer Modern (the "LaTeX look") via matplotlib's own bundled fonts
+        # and mathtext — no external LaTeX/dvipng install required, so the script
+        # stays portable. cmr10 has no bold cut, hence normal-weight titles.
+        "font.family": "serif",
+        "font.serif": ["cmr10", "DejaVu Serif"],
+        "mathtext.fontset": "cm",
+        "axes.unicode_minus": False,
+        "axes.formatter.use_mathtext": True,
         "font.size": 11,
-        "axes.titlesize": 12,
-        "axes.titleweight": "bold",
+        "axes.titlesize": 13,
+        "axes.titleweight": "normal",
         "axes.labelcolor": INK,
         "axes.edgecolor": "#d5d4cf",
         "axes.linewidth": 1.0,
@@ -76,12 +84,12 @@ def figure_distribution():
     axL.scatter(x, y, s=9, color=MUTED, alpha=0.35, edgecolors="none",
                 label="observations", zorder=1)
     axL.fill_between(xs, lo, hi, color=BLUE, alpha=0.16, linewidth=0,
-                     label="10%–90% interval", zorder=2)
+                     label="10%-90% interval", zorder=2)
     axL.plot(xs, med, color=BLUE, lw=2.2, label="median", zorder=3)
     axL.plot(xs, mean, color=ORANGE, lw=2.2, label="mean", zorder=4)
-    axL.set_title("One fit → the whole conditional distribution")
-    axL.set_xlabel("covariate  x")
-    axL.set_ylabel("response  y")
+    axL.set_title(r"One fit $\rightarrow$ the whole conditional distribution")
+    axL.set_xlabel(r"covariate $x$")
+    axL.set_ylabel(r"response $y$")
     axL.set_ylim(-0.3, min(y.max(), 12))
     axL.legend(loc="upper left")
     tidy(axL)
@@ -93,9 +101,9 @@ def figure_distribution():
     cdfs = fit.cdf(np.array(picks))
     for xi, c, cdf in zip(picks, colors, cdfs):
         axR.plot(thr, cdf, drawstyle="steps-post", color=c, lw=2.0,
-                 label=f"x = {xi:.0f}")
-    axR.set_title("Predictive CDF  F(y | x)")
-    axR.set_xlabel("response  y")
+                 label=fr"$x = {xi:.0f}$")
+    axR.set_title(r"Predictive CDF $F(y \mid x)$")
+    axR.set_xlabel(r"response $y$")
     axR.set_ylabel("probability")
     axR.set_xlim(0, 10)
     axR.set_ylim(-0.02, 1.02)
@@ -139,9 +147,9 @@ def figure_censoring():
             label="naive (censoring ignored)")
     ax.plot(thr_s, surv_sidr, drawstyle="steps-post", color=BLUE, lw=2.2,
             label="S-IDR (censoring handled)")
-    ax.set_title(f"Survival estimate at x = {x0:.0f}   ({100*(1-observed.mean()):.0f}% censored)")
-    ax.set_xlabel("time  t")
-    ax.set_ylabel("P(event after t | x)")
+    ax.set_title(fr"Survival estimate at $x = {x0:.0f}$   ({100*(1-observed.mean()):.0f}% censored)")
+    ax.set_xlabel(r"time $t$")
+    ax.set_ylabel(r"P(event after $t \mid x$)")
     ax.set_xlim(0, 10)
     ax.set_ylim(-0.02, 1.02)
     ax.legend(loc="upper right")
@@ -166,9 +174,9 @@ def figure_subagging():
     xs = np.linspace(0.2, 9.8, 300)
     fig, ax = plt.subplots(figsize=(6.4, 4.0))
     ax.plot(xs, raw.predict(xs), color=MUTED, lw=1.8, label="single fit")
-    ax.plot(xs, bag.predict(xs), color=BLUE, lw=2.4, label="subagged (50×)")
+    ax.plot(xs, bag.predict(xs), color=BLUE, lw=2.4, label=r"subagged ($50\!\times\!$)")
     ax.set_title("Subagging stabilises the fit")
-    ax.set_xlabel("covariate  x")
+    ax.set_xlabel(r"covariate $x$")
     ax.set_ylabel("predicted mean")
     ax.set_xlim(0, 10)
     ax.legend(loc="upper left")

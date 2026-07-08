@@ -1,7 +1,6 @@
 # isodistrreg: Isotonic Distributional Regression
 
-<p style="text-align: center;">**[Python](bindings/python/README.md) · [R](bindings/R/README.md) ·
-[Rust](isodistrreg/README.md)**</p> 
+<p align="center"><strong><a href="bindings/python/README.md">Python</a> · <a href="bindings/R/README.md">R</a> · <a href="isodistrreg/README.md">Rust</a></strong></p>
 
 Implementations of **Isotonic Distributional Regression (IDR)** and its
 **Survival-IDR (S-IDR)** extension for right-censored data.
@@ -55,11 +54,9 @@ fit.cdf(np.array([2.0, 5.0, 8.0]))               # the full predictive CDF at ea
 <p align="center"><img src="doc/idr_distribution.png" alt="IDR estimates the whole conditional distribution"></p>
 
 <p align="center"><sub>The mean and median (left) trace the centre of the
-response — their gap reveals the skew — while the shaded 10 %–90 % band widens
-exactly where the data become more dispersed, so the <em>spread</em> is captured,
-not just the location. Ask for the predictive CDF at a few covariate values
-(right) and you see the entire distribution shift and stretch as <code>x</code>
-grows.</sub></p>
+response while the shaded 10 %–90 % band widens exactly where the data become
+more dispersed, so the <em>spread</em> is captured, not just the location. The
+entire distribution shifts and stretches as <code>x</code> grows (right).</sub></p>
 
 ## Right-censored outcomes (S-IDR)
 
