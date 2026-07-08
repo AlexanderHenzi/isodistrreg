@@ -121,10 +121,16 @@ fn single_global_block() {
         // The whole grid pooled: rows must be exactly flat (single-block signature).
         for t in 0..2 {
             let row = &fast_cdf[t * c..(t + 1) * c];
-            let (lo, hi) = row.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
-                (lo.min(v), hi.max(v))
-            });
-            assert!(hi - lo < TOL, "C={c} threshold={t}: row not constant, spread {}", hi - lo);
+            let (lo, hi) = row
+                .iter()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
+                    (lo.min(v), hi.max(v))
+                });
+            assert!(
+                hi - lo < TOL,
+                "C={c} threshold={t}: row not constant, spread {}",
+                hi - lo
+            );
         }
         // Proper CDF: nondecreasing along thresholds at every covariate.
         assert!(cdf_y1 <= cdf_y2);
@@ -226,14 +232,26 @@ fn wide_ultimate_merge() {
     let plateau = &y1[2..nc - 1]; // covariates 2 ..= w  (the pooled plateau, excl. the crash cov)
     let (plo, phi) = plateau
         .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-    assert!(phi - plo < TOL, "y=1 plateau not flat: spread {}", phi - plo);
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    assert!(
+        phi - plo < TOL,
+        "y=1 plateau not flat: spread {}",
+        phi - plo
+    );
 
     let y2 = &fast_cdf[nc..2 * nc];
     let (lo, hi) = y2
         .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-    assert!(hi - lo < TOL, "y=2 row not fully pooled: spread {}", hi - lo);
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    assert!(
+        hi - lo < TOL,
+        "y=2 row not fully pooled: spread {}",
+        hi - lo
+    );
 
     // Every threshold row of an increasing fit is nonincreasing along the sorted covariates.
     for (t, row) in fast_cdf.chunks_exact(nc).enumerate() {
