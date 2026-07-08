@@ -200,8 +200,9 @@ unsafe fn walk_scan_avx2(
     mut remaining_weight: f32,
 ) -> (f32, f32) {
     use core::arch::x86_64::{
-        _mm256_and_si256, _mm256_castsi256_ps, _mm256_cmpeq_epi32, _mm256_loadu_si256,
-        _mm256_min_epu32, _mm256_movemask_ps, _mm256_set1_epi32, _mm256_sub_epi32,
+        _mm256_and_si256, _mm256_castsi256_ps, _mm256_cmpeq_epi32, _mm256_cmpgt_epi32,
+        _mm256_loadu_si256, _mm256_maskload_epi32, _mm256_min_epu32, _mm256_movemask_ps,
+        _mm256_set1_epi32, _mm256_setr_epi32, _mm256_sub_epi32,
     };
 
     debug_assert_eq!(xs.len(), ws.len());
@@ -267,6 +268,35 @@ unsafe fn walk_scan_avx2(
                 mask &= mask - 1;
             }
             k += 8;
+        }
+
+        // Masked tail (4-7 items): one masked load + compare instead of a scalar
+        // per-item loop — the tail runs on every walk, and short deltas are common. The
+        // lane mask must also gate the range mask: a zeroed inactive lane would pass the
+        // range test whenever `start == 0`. Tails of 1-3 items stay scalar: cells that
+        // are revisited on every arrival (large n over few covariate levels) see
+        // 1-2-item deltas by the million, and there the masked setup costs more than
+        // the items.
+        if n - k >= 4 {
+            let lane_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+            let lmask = _mm256_cmpgt_epi32(_mm256_set1_epi32((n - k) as i32), lane_idx);
+            let v = _mm256_maskload_epi32(xs.as_ptr().add(k).cast(), lmask);
+            let x = _mm256_and_si256(v, clear_v);
+            let t = _mm256_sub_epi32(x, start_v);
+            let in_range =
+                _mm256_and_si256(_mm256_cmpeq_epi32(_mm256_min_epu32(t, span_v), t), lmask);
+            let mut mask = _mm256_movemask_ps(_mm256_castsi256_ps(in_range)) as u32;
+            while mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                let x_flagged = *xs.get_unchecked(k + j);
+                let weight = *ws.get_unchecked(k + j);
+                if x_flagged & WALK_OBSERVED_BIT != 0 {
+                    raw_value *= 1.0 - weight / remaining_weight;
+                }
+                remaining_weight -= weight;
+                mask &= mask - 1;
+            }
+            k = n;
         }
     }
 
@@ -394,8 +424,8 @@ unsafe fn walk_scan_avx512(
     mut remaining_weight: f32,
 ) -> (f32, f32) {
     use core::arch::x86_64::{
-        _mm512_and_si512, _mm512_cmple_epu32_mask, _mm512_loadu_si512, _mm512_set1_epi32,
-        _mm512_sub_epi32,
+        _mm512_and_si512, _mm512_cmple_epu32_mask, _mm512_loadu_si512, _mm512_maskz_loadu_epi32,
+        _mm512_set1_epi32, _mm512_sub_epi32,
     };
 
     debug_assert_eq!(xs.len(), ws.len());
@@ -461,6 +491,32 @@ unsafe fn walk_scan_avx512(
                 mask &= mask - 1;
             }
             k += 16;
+        }
+
+        // Masked tail (4-15 items): one masked load + compare instead of a scalar
+        // per-item loop — the tail runs on every walk, and short deltas are common. The
+        // load mask must also gate the range mask: a zeroed inactive lane would pass the
+        // range test whenever `start == 0`. Tails of 1-3 items stay scalar: cells that
+        // are revisited on every arrival (large n over few covariate levels) see
+        // 1-2-item deltas by the million, and there the masked setup costs more than
+        // the items.
+        if n - k >= 4 {
+            let rem_mask = ((1u32 << (n - k)) - 1) as u16;
+            let v = _mm512_maskz_loadu_epi32(rem_mask, xs.as_ptr().add(k).cast());
+            let x = _mm512_and_si512(v, clear_v);
+            let t = _mm512_sub_epi32(x, start_v);
+            let mut mask = (_mm512_cmple_epu32_mask(t, span_v) & rem_mask) as u32;
+            while mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                let x_flagged = *xs.get_unchecked(k + j);
+                let weight = *ws.get_unchecked(k + j);
+                if x_flagged & WALK_OBSERVED_BIT != 0 {
+                    raw_value *= 1.0 - weight / remaining_weight;
+                }
+                remaining_weight -= weight;
+                mask &= mask - 1;
+            }
+            k = n;
         }
     }
 
