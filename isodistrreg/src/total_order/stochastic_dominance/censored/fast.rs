@@ -591,6 +591,17 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
                 .update_value::<K, _, _>(data_index, idx, bounds, r, s, input, epsilon, marker_max);
         }
 
+        // The block-level skip above applies row-wise too: a cell (r, s) with r > split_x
+        // has split_x outside [r, s] and, because every partition in play here lies within
+        // the just-split block's original range (the partitions right of it were drained
+        // to `tmp_partition_store`), [r, s] is a sub-interval of that block — so by the
+        // same argument its values, bounds, clips, and completion state are already
+        // exactly what the sweep would recompute. Only rows r <= split_x can change; clamp
+        // the sweep to them. (`row_end > penultimate_start` holds here — otherwise the
+        // whole-rectangle skip above fired.)
+        let row_end = penultimate_end.min(split_x + 1);
+        debug_assert!(row_end > penultimate_start);
+
         let mut tile_start = ultimate_start;
         while tile_start < ultimate_end {
             let tile_end = (tile_start + POOL_TILE).min(ultimate_end);
@@ -600,7 +611,7 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             // flight. The pair schedule is a valid order of the same DP (each cell still
             // sees row entries with smaller s and column entries with larger r already
             // computed), so results stay bit-identical.
-            let mut r_high = penultimate_end;
+            let mut r_high = row_end;
             while r_high >= penultimate_start + 2 {
                 let r0 = r_high - 1;
                 let r1 = r_high - 2;
