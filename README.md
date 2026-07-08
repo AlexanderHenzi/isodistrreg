@@ -1,7 +1,10 @@
 # isodistrreg: Isotonic Distributional Regression
 
-Rust, Python and R implementations of **Isotonic Distributional Regression
-(IDR)** and its **Survival-IDR (S-IDR)** extension for right-censored data.
+<p style="text-align: center;">**[Python](bindings/python/README.md) · [R](bindings/R/README.md) ·
+[Rust](isodistrreg/README.md)**</p> 
+
+Implementations of **Isotonic Distributional Regression (IDR)** and its
+**Survival-IDR (S-IDR)** extension for right-censored data.
 
 Most regression methods answer *“what is the expected value of `y` given `x`?”*.
 (S-)IDR answers the more useful question *“what is the **whole distribution**
@@ -13,15 +16,16 @@ estimating effects that only move in one direction (effect of the dose size on
 the response, early discovery of cancer improves survival, recalibrating models,
 ...). And it does so:
 
-- **without tuning parameters** — the fit is determined entirely by the data and
-  the ordering you put on the covariates;
-- **nonparametrically** — the fit gets more complex as more data is available;
-- **calibrated and sharp** — the fit is the unique estimator that is
+- **without tuning parameters** — the nonparametric fit gets more complex as
+  more data is available;
+- **monotonically** - the fitted estimator is guaranteed to respect the 
+  isotonicity assumption;
+- **calibrated and sharp** — the fit is in-sample threshold calibrated and
   simultaneously optimal for a large class of proper scoring rules (CRPS, Brier
   score, quantile loss, …).
 
-**Available in [Python](bindings/python/README.md) · [R](bindings/R/README.md) ·
-[Rust](isodistrreg/README.md)** — one Rust core, the same operations in each;
+**Available in [Python](bindings/python/README.md), [R](bindings/R/README.md),
+and [Rust](isodistrreg/README.md)** — one Rust core, the same operations in each;
 installation and full worked examples live in each linked README. The snippets
 below use Python.
 
@@ -48,13 +52,14 @@ fit.predict(np.array([2.0, 5.0, 8.0]))           # conditional mean at each x
 fit.cdf(np.array([2.0, 5.0, 8.0]))               # the full predictive CDF at each x
 ```
 
-![IDR estimates the whole conditional distribution](doc/idr_distribution.png)
+<p align="center"><img src="doc/idr_distribution.png" alt="IDR estimates the whole conditional distribution"></p>
 
-The mean and median (left) trace the centre of the response — their gap reveals
-the skew — while the shaded 10 %–90 % band widens exactly where the data become
-more dispersed, so the *spread* is captured, not just the location. Ask for the
-predictive CDF at a few covariate values (right) and you see the entire
-distribution shift and stretch as `x` grows.
+<p align="center"><sub>The mean and median (left) trace the centre of the
+response — their gap reveals the skew — while the shaded 10 %–90 % band widens
+exactly where the data become more dispersed, so the <em>spread</em> is captured,
+not just the location. Ask for the predictive CDF at a few covariate values
+(right) and you see the entire distribution shift and stretch as <code>x</code>
+grows.</sub></p>
 
 ## Right-censored outcomes (S-IDR)
 
@@ -62,8 +67,8 @@ In time-to-event problems the outcome is often only observed up to a censoring
 time: all we know is that the event had not happened yet. **S-IDR** takes a
 censoring indicator alongside each observation and estimates the conditional
 distribution of the *true* event time. Ignoring censoring — treating each
-censored time as if the event happened right then — biases the estimate; S-IDR
-corrects it.
+censored time as if the event happened right then — biases the estimate, which 
+S-IDR corrects.
 
 ```python
 # t = observed time, observed = True if the event was seen (False = right-censored)
@@ -71,14 +76,14 @@ fit = IDR(t, x, observed)
 survival = 1 - fit.cdf(np.array([6.0]))[0]       # P(event after t | x = 6)
 ```
 
-![S-IDR corrects the bias from right-censoring](doc/idr_censoring.png)
+<p align="center"><img src="doc/idr_censoring.png" width="70%" alt="S-IDR corrects the bias from right-censoring"></p>
 
-Treating censored observations as events makes events look like they happen
-sooner than they do, so the naive survival curve drops far too fast. S-IDR
-accounts for censoring and tracks the truth. Because the tail beyond the last
-observed event is genuinely unknown, S-IDR stays honest there rather than
-extrapolating — so a conditional mean is reported only when the distribution is
-fully identified.
+<p align="center"><sub>Treating censored observations as events makes events
+look like they happen sooner than they do, so the naive survival curve drops far
+too fast. S-IDR accounts for censoring and estimates the truth. Because the tail
+beyond the last observed event is genuinely unknown, the S-IDR survival curve may
+not reach 0.0 (i.e. the cdf may not reach 1.0), causing the mean to not be
+defined.</sub></p>
 
 ## Subagging
 
@@ -94,9 +99,9 @@ smoother and more stable than a single fit.
 fit = IDR(y, x, subsamples=50, subsample_size=0.5, n_jobs=4, seed=1)
 ```
 
-![Subagging averages many subsample fits into a stable estimate](doc/idr_subagging.png)
+<p align="center"><img src="doc/idr_subagging.png" width="70%" alt="Subagging averages many subsample fits into a stable estimate"></p>
 
-The single fit's abrupt jumps are averaged into a smoother, more stable estimate.
+<p align="center"><sub>The single fit's abrupt jumps are averaged into a smoother, more stable estimate.</sub></p>
 
 ## Multivariate covariates & partial orders
 
