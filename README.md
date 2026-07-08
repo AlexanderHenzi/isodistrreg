@@ -3,51 +3,109 @@
 Rust, Python and R implementations of **Isotonic Distributional Regression
 (IDR)** and its **Survival-IDR (S-IDR)** extension for right-censored data.
 
-## What is IDR?
+Most regression methods answer *“what is the expected value of `y`?”*. IDR
+answers the more useful question *“what is the **whole distribution** of `y`?”* —
+it returns a full conditional CDF, from which means, quantiles, prediction
+intervals, exceedance probabilities and proper scores all follow — which is what
+you want for calibrated weather forecasting, survival analysis, risk and demand
+modelling, and probabilistic prediction generally. And it does so:
 
-IDR is a nonparametric method for estimating the *conditional distribution* of
-a numeric or binary response given numeric or ordinal covariates. Instead of
-predicting a single point (like a mean or a quantile), it returns the full
-conditional CDF, from which means, quantiles, exceedance probabilities, and
-proper scoring rules can all be derived.
+- **without tuning parameters** — the fit is determined entirely by the data and
+  the ordering you put on the covariates;
+- **monotonically** — larger covariates yield stochastically larger responses, so
+  the estimated CDFs never cross;
+- **calibrated and sharp** — the fit is the unique estimator that is
+  simultaneously optimal for a large class of proper scoring rules (CRPS, Brier
+  score, quantile loss, …).
 
-Compared to other distributional regression techniques, IDR has a few
-properties that make it appealing as a baseline or as a calibration layer:
+**Available in [Python](bindings/python/README.md) · [R](bindings/R/README.md) ·
+[Rust](isodistrreg/README.md)** — one Rust core, the same operations in each;
+installation and full worked examples live in each linked README. The snippets
+below use Python.
 
-- **No tuning parameters.** The fit is determined entirely by the data and the
-  user-specified partial order on the covariate space.
-- **Monotone by construction.** IDR assumes a monotone relationship between
-  covariates and response, so the estimated CDFs respect stochastic ordering.
-- **Calibrated and sharp.** The estimator is the unique solution to a
-  constrained optimization that is optimal under a wide class of proper scoring
-  rules (CRPS, Brier score, quantile loss, ...).
+## A distribution, not a point
 
-A motivating use case is post-processing ensemble weather forecasts: IDR turns
-a raw ensemble into a calibrated probabilistic forecast without distributional
-assumptions, and serves as a strong benchmark in many other prediction tasks.
+Give IDR a covariate `x` and a response `y` and it estimates the entire
+conditional distribution `F(y | x)` in one fit — no bins, no bandwidths, no
+assumed distributional family.
 
-### S-IDR: extension to right-censored outcomes
+```python
+import numpy as np
+from isodistrreg import IDR
 
-In survival analysis, the outcome is often only observed up to a censoring
-time. **S-IDR** extends IDR to this setting: given `(t, d)` pairs where `t` is
-the observed time and `d` indicates whether `t` is the true event time or a
-right-censoring time, S-IDR estimates the conditional sub-distribution of the
-event time. All the usual IDR queries (CDF, quantiles, mean where defined)
-remain available.
+# 600 observations; both the mean and the spread of y grow with x
+rng = np.random.default_rng(20)
+x = rng.uniform(0, 10, size=600)
+y = rng.gamma(shape=2.0, scale=(x + 1) / 4)
 
-## Language bindings
+fit = IDR(y, x)                                  # no tuning parameters
 
-The same Rust core powers all three interfaces. Pick the one that matches your
-stack:
+fit.quantile(np.array([[2.0], [5.0], [8.0]]),    # 10/50/90% quantiles ...
+             np.array([[0.1, 0.5, 0.9]]))        # ... at x = 2, 5, 8
+fit.predict(np.array([2.0, 5.0, 8.0]))           # conditional mean at each x
+fit.cdf(np.array([2.0, 5.0, 8.0]))               # the full predictive CDF at each x
+```
 
-| Language   | Path                                            |
-|------------|-------------------------------------------------|
-| **Python** | [`bindings/python`](bindings/python/README.md)  |
-| **R**      | [`bindings/R`](bindings/R/README.md)            |
-| **Rust**   | [`isodistrreg`](isodistrreg/README.md)          |
+![IDR estimates the whole conditional distribution](doc/idr_distribution.png)
 
-Each subdirectory's README contains installation instructions and worked
-examples.
+The mean and median (left) trace the centre of the response — their gap reveals
+the skew — while the shaded 10 %–90 % band widens exactly where the data become
+more dispersed, so the *spread* is captured, not just the location. Ask for the
+predictive CDF at a few covariate values (right) and you see the entire
+distribution shift and stretch as `x` grows.
+
+## Right-censored outcomes (S-IDR)
+
+In time-to-event problems the outcome is often only observed up to a censoring
+time: all we know is that the event had not happened yet. **S-IDR** takes a
+censoring indicator alongside each observation and estimates the conditional
+distribution of the *true* event time. Ignoring censoring — treating each
+censored time as if the event happened right then — biases the estimate; S-IDR
+corrects it.
+
+```python
+# t = observed time, observed = True if the event was seen (False = right-censored)
+fit = IDR(t, x, observed)
+survival = 1 - fit.cdf(np.array([6.0]))[0]       # P(event after t | x = 6)
+```
+
+![S-IDR corrects the bias from right-censoring](doc/idr_censoring.png)
+
+Treating censored observations as events makes events look like they happen
+sooner than they do, so the naive survival curve drops far too fast. S-IDR
+accounts for censoring and tracks the truth. Because the tail beyond the last
+observed event is genuinely unknown, S-IDR stays honest there rather than
+extrapolating — so a conditional mean is reported only when the distribution is
+fully identified.
+
+## Subagging
+
+On large datasets a single exact fit can be costly. **Subagging** fits IDR on
+many random subsamples and averages the resulting distributions. Each fit sees
+only a fraction of the data, so it is far cheaper, and the fits are independent,
+so they run in parallel across cores via `n_jobs` — turning one large problem
+into many small ones. The averaged estimate is also smoother and more stable than
+a single fit.
+
+```python
+# Average 50 fits, each on a random half of the data, across 4 cores
+fit = IDR(y, x, subsamples=50, subsample_size=0.5, n_jobs=4, seed=1)
+```
+
+![Subagging averages many subsample fits into a stable estimate](doc/idr_subagging.png)
+
+The single fit's abrupt jumps are averaged into a smoother, more stable estimate.
+
+## Multivariate covariates & partial orders
+
+Every example above used a single numeric covariate with its natural ordering.
+IDR also handles **multivariate covariates**, where you specify a *partial order*
+on the covariate space — component-wise ordering, the increasing convex order
+(useful for comparing forecast ensembles), or groups of these. This is how IDR
+post-processes an entire weather-forecast ensemble at once; the
+[R package README](bindings/R/README.md) walks through a full precipitation
+example. Partial-order support lives behind an optional feature in the Rust crate
+(it depends on the OSQP solver).
 
 ## References
 
@@ -59,3 +117,5 @@ Henzi, A., Moesching, A. and Duembgen, L. (2022). Accelerating the
 Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression.
 *Methodol Comput Appl Probab*.
 <https://doi.org/10.1007/s11009-022-09937-2>
+
+<sub>Figures reproduced by [`doc/make_figures.py`](doc/make_figures.py) — needs the Python bindings plus `numpy`, `scipy` and `matplotlib`.</sub>
