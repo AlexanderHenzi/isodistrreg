@@ -13,3 +13,6 @@ pub use nonrecursive::algorithm_single as algorithm_nonrecursive_single;
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod scale_test;
