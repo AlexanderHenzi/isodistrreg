@@ -75,12 +75,10 @@ survival = 1 - fit.cdf(np.array([6.0]))[0]       # P(event after t | x = 6)
 
 <p align="center"><img src="doc/idr_censoring.png" width="70%" alt="S-IDR corrects the bias from right-censoring"></p>
 
-<p align="center"><sub>Treating censored observations as events makes events
-look like they happen sooner than they do, so the naive survival curve drops far
-too fast. S-IDR accounts for censoring and estimates the truth. Because the tail
-beyond the last observed event is genuinely unknown, the S-IDR survival curve may
-not reach 0.0 (i.e. the cdf may not reach 1.0), causing the mean to not be
-defined.</sub></p>
+<p align="center"><sub>Treating censored observations as events causes bias and
+the naive survival curve drops too fast. Because the tail beyond the last
+observed event is unknown, the S-IDR survival curve may not reach 0.0 (i.e.,
+the cdf may not reach 1.0).</sub></p>
 
 ## Subagging
 
