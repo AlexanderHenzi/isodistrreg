@@ -18,6 +18,9 @@ use crate::total_order::weight_noise_floor;
 use std::cmp::Ordering;
 use std::iter::repeat_n;
 
+mod sweep;
+use sweep::{SweepArgs, SweepDispatch};
+
 pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     context: &CensoredContext<X, Y>,
     progress: &dyn ProgressTracker,
@@ -358,7 +361,7 @@ fn dispatch_generalized_pava<D: Direction, X: crate::Float, Y: crate::Float>(
     );
 }
 
-fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
+fn generalized_pava<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::Float>(
     mut data_index: usize,
     start_threshold: usize,
     mut estimates: Estimates,
@@ -415,7 +418,7 @@ fn generalized_pava<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
+fn update_uncensored<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     estimates: &mut Estimates,
     partitions: &mut Vec<Partition>,
@@ -481,14 +484,8 @@ fn update_uncensored<D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
     partitions.append(tmp_partition_store);
 }
 
-/// Number of columns processed per tile in `pool`'s cell-update loops. Sized so a tile's
-/// columns plus their bounds/K-M state stay cache-resident across the r sweep on any modern
-/// CPU (>= 512 KB L2); 64-128 measured equivalently well, smaller tiles start paying
-/// per-tile overhead.
-const POOL_TILE: usize = 96;
-
 #[allow(clippy::too_many_arguments)]
-fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
+fn pool<W, V, D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::Float>(
     data_index: usize,
     split_x: usize,
     estimates: &mut Estimates,
@@ -561,47 +558,6 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
             left_marker_buf[r - penultimate_start] = left_marker_max;
         }
 
-        // Iterating over r in the outer loop and over s in the inner loop is significantly
-        // faster than the transposed order; on top of that the s range is processed in
-        // tiles of `POOL_TILE` columns (tile outer, r descending inside, s ascending
-        // within the tile). Cell (r, s) reads row entries (r, k<s) — written in earlier
-        // tiles or earlier in this row's sweep — and column entries (k>r, s) — written at
-        // larger r within the same tile — so the tiled order is a valid schedule of the
-        // same DP and every cell sees identical inputs (bit-identical results). The point
-        // of the tiles: wide merges revisit each column once per row, and with the full
-        // span in flight the columns (plus their K-M state) fall out of L2 between visits;
-        // a tile's working set stays cache-resident across the r sweep.
-        // One cell: kernel, then K-M update. Index and bounds flow through registers between
-        // the two — bounds are never stored (only the value store remains for future readers),
-        // so the consecutive-cell dependency chain skips the memory round-trip.
-        #[inline(always)]
-        #[allow(clippy::too_many_arguments)]
-        fn cell<K: Kernel, X: crate::Float, Y: crate::Float>(
-            estimates: &mut Estimates,
-            data_index: usize,
-            r: usize,
-            s: usize,
-            input: &CensoredContext<X, Y>,
-            epsilon: f32,
-            marker_max: u32,
-        ) {
-            let idx = Estimates::compute_index((r, s), estimates.len());
-            // Completed cells pin to exactly 0 before `update_value` ever looks at the
-            // bounds (its first branch), so the O(s - r) kernel reduction below would be
-            // computed only to be discarded. Do the same stores here and skip it. The
-            // check re-fires on every visit once true (monotone in `data_index`), so
-            // this shortcut applies to every revisit of a completed cell.
-            if CompletionIndex::completes_marker(marker_max, data_index) {
-                let row_idx = Estimates::compute_row_index((r, s), estimates.len());
-                estimates.cold[idx].raw_value = 0.0;
-                estimates.set_value(idx, row_idx, 0.0);
-                return;
-            }
-            let bounds = estimates.propagate_bounds_with_row::<K>(idx, r, s);
-            estimates
-                .update_value::<K, _, _>(data_index, idx, bounds, r, s, input, epsilon, marker_max);
-        }
-
         // The block-level skip above applies row-wise too: a cell (r, s) with r > split_x
         // has split_x outside [r, s] and, because every partition in play here lies within
         // the just-split block's original range (the partitions right of it were drained
@@ -613,61 +569,18 @@ fn pool<W, V, D: Direction, K: Kernel, X: crate::Float, Y: crate::Float>(
         let row_end = penultimate_end.min(split_x + 1);
         debug_assert!(row_end > penultimate_start);
 
-        let mut tile_start = ultimate_start;
-        while tile_start < ultimate_end {
-            let tile_end = (tile_start + POOL_TILE).min(ultimate_end);
-            // Rows advance in pairs per column: cell (r0, s) is computed right before
-            // (r0 - 1, s), whose column operand merely *ends* with the fresh (r0, s) value —
-            // so the two kernels overlap almost entirely, doubling the independent work in
-            // flight. The pair schedule is a valid order of the same DP (each cell still
-            // sees row entries with smaller s and column entries with larger r already
-            // computed), so results stay bit-identical.
-            let mut r_high = row_end;
-            while r_high >= penultimate_start + 2 {
-                let r0 = r_high - 1;
-                let r1 = r_high - 2;
-                let left0 = left_marker_buf[r0 - penultimate_start];
-                let left1 = left_marker_buf[r1 - penultimate_start];
-                for s in tile_start..tile_end {
-                    let right = marker_buf[s - ultimate_start];
-                    cell::<K, _, _>(
-                        estimates,
-                        data_index,
-                        r0,
-                        s,
-                        input,
-                        epsilon,
-                        left0.max(right),
-                    );
-                    cell::<K, _, _>(
-                        estimates,
-                        data_index,
-                        r1,
-                        s,
-                        input,
-                        epsilon,
-                        left1.max(right),
-                    );
-                }
-                r_high -= 2;
-            }
-            if r_high > penultimate_start {
-                let left = left_marker_buf[0];
-                for s in tile_start..tile_end {
-                    let right = marker_buf[s - ultimate_start];
-                    cell::<K, _, _>(
-                        estimates,
-                        data_index,
-                        penultimate_start,
-                        s,
-                        input,
-                        epsilon,
-                        left.max(right),
-                    );
-                }
-            }
-            tile_start = tile_end;
-        }
+        K::sweep_rect(SweepArgs {
+            estimates,
+            data_index,
+            penultimate_start,
+            row_end,
+            ultimate_start,
+            ultimate_end,
+            input,
+            epsilon,
+            marker_buf,
+            left_marker_buf,
+        });
     }
 }
 
