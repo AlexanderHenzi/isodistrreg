@@ -954,7 +954,24 @@ impl Estimates {
             )
         };
 
-        K::apply(row, col)
+        // Kernel-mode choice, a single comparison against the fit-level effective
+        // threshold (see `Estimates::checkpoint_min_len`). Long reductions on fits with
+        // real censoring run with the collapse checkpoints: one checkpoint reduce is
+        // noise next to their straight-line work, and a collapsed long cell (the
+        // dominant visit on weakly-dependent continuous censored fits) exits with most
+        // of its work skipped. Everything else runs the straight-line kernel: short and
+        // mid-length reductions cannot profit (below the first checkpoint the checks
+        // cannot fire, just above it the reduces on open-bounds cells cost more than
+        // the exits save — measured net regressions on weakly correlated fits, whose
+        // collapsed cells concentrate at these lengths), and low-censoring fits almost
+        // never collapse at all. Both dispatch inputs are deterministic and identical
+        // across SIMD levels: the length is a static property of the cell, the
+        // threshold a pure function of the input data.
+        if len >= self.checkpoint_min_len {
+            K::apply::<true>(row, col)
+        } else {
+            K::apply::<false>(row, col)
+        }
     }
 }
 
