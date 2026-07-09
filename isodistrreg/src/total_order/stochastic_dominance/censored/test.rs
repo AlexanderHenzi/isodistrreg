@@ -847,6 +847,43 @@ mod differential {
         }
     }
 
+    /// Tie-heavy instances large enough that every threshold carries a long run of tied
+    /// uncensored responses, exercising the batched tie-run update against `definition`
+    /// (the per-arrival and batched schedules must evaluate the same per-threshold
+    /// estimator).
+    #[test]
+    fn tied_response_runs() {
+        let mut failures = Vec::new();
+        let mut seed = 4000u64;
+        for n in [120, 250] {
+            for response_levels in [3, 12, 40] {
+                for censoring in [0.0, 0.5, 0.8] {
+                    for covariate_levels in [None, Some(25)] {
+                        for rho in [0.0, 0.5] {
+                            seed += 1;
+                            let instance = Instance::survival(
+                                &mut StdRng::seed_from_u64(seed),
+                                n,
+                                covariate_levels,
+                                Some(response_levels),
+                                rho,
+                                censoring,
+                                seed.is_multiple_of(2),
+                            );
+                            failures.extend(
+                                instance
+                                    .check_full(false)
+                                    .err()
+                                    .map(|e| format!("seed {seed}: {e}")),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_all_ok(failures);
+    }
+
     /// Factor grid matching the benchmark axes: continuous/discrete covariate and response,
     /// strong/weak/no X-Y dependence, low/high censoring share, several sizes.
     #[test]
