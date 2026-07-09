@@ -70,7 +70,7 @@ S-IDR corrects.
 ```python
 # t = observed time, observed = True if the event was seen (False = right-censored)
 fit = IDR(t, x, observed)
-survival = 1 - fit.cdf(np.array([6.0]))[0]       # P(event after t | x = 6)
+survival = 1 - fit.cdf(6.0)                       # P(event after t | x = 6)
 ```
 
 <p align="center"><img src="doc/idr_censoring.png" width="70%" alt="S-IDR corrects the bias from right-censoring"></p>
