@@ -68,9 +68,11 @@ censored time as if the event happened right then — biases the estimate, which
 S-IDR corrects.
 
 ```python
-# t = observed time, observed = True if the event was seen (False = right-censored)
-fit = IDR(t, x, observed)
-survival = 1 - fit.cdf(np.array([6.0]))[0]       # P(event after t | x = 6)
+# y = true event time, c = censoring time; we observe only whichever comes first
+t = np.minimum(y, c)                             # observed time (event or censoring)
+d = y <= c                                       # True if the event was seen (else censored)
+fit = IDR(t, x, d)
+survival = 1 - fit.cdf(6.0)                       # P(event after t | x = 6)
 ```
 
 <p align="center"><img src="doc/idr_censoring.png" width="70%" alt="S-IDR corrects the bias from right-censoring"></p>
@@ -84,19 +86,22 @@ the cdf may not reach 1.0).</sub></p>
 
 **Subagging** fits IDR on many random subsamples and averages the resulting 
 distributions. Each fit sees only a fraction of the data, so it is far cheaper,
-and the fits are independent, so they run in parallel across cores via `n_jobs`
-— turning one large problem into many small ones. On large datasets a single 
-exact fit can be costly if censoring is present. The averaged estimate is also 
-smoother and more stable than a single fit.
+and the fits are independent, so they run in parallel across cores via `n_jobs`.
+On large datasets a single fit can be more costly than many small fits,
+especially if censoring is present. The averaged estimate is also smoother and
+more stable than a single fit.
 
 ```python
+# Smooth truth: y is gamma with mean and spread rising smoothly with x
+y = rng.gamma(shape=2.0, scale=(x + 1) / 4)
+
 # Average 50 fits, each on a random half of the data, across 4 cores
 fit = IDR(y, x, subsamples=50, subsample_size=0.5, n_jobs=4, seed=1)
 ```
 
 <p align="center"><img src="doc/idr_subagging.png" width="70%" alt="Subagging averages many subsample fits into a stable estimate"></p>
 
-<p align="center"><sub>The single fit's abrupt jumps are averaged into a smoother, more stable estimate.</sub></p>
+<p align="center"><sub>The single fit's abrupt jumps are averaged into a smoother, more stable estimate that tracks the true 80th percentile (dashed).</sub></p>
 
 ## Multivariate covariates & partial orders
 

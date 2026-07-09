@@ -1,8 +1,17 @@
 """Regenerate the figures shown in the top-level README.
 
+Run from the repository root. With uv this needs no prior setup — it builds
+the bindings and pulls in the plotting dependencies on the fly (drop
+``--reinstall-package`` if the Rust core is unchanged since the last run):
+
+    uv run --project bindings/python --reinstall-package isodistrreg \\
+        --with matplotlib --with scipy python doc/make_figures.py
+
+Or, in any environment that already has the `isodistrreg` bindings, numpy,
+scipy and matplotlib installed:
+
     python doc/make_figures.py
 
-Requires the `isodistrreg` Python bindings, numpy, scipy and matplotlib.
 All randomness is seeded so the figures are reproducible.
 """
 
@@ -165,19 +174,26 @@ def figure_censoring():
 # ---------------------------------------------------------------------------
 def figure_subagging():
     rng = np.random.default_rng(11)
-    n = 120
+    n = 200
     x = rng.uniform(0, 10, n)
     y = rng.gamma(shape=2.0, scale=(x + 1) / 4)
     raw = IDR(y, x)
     bag = IDR(y, x, subsamples=50, subsample_size=0.5, seed=1, n_jobs=4)
 
+    # A high quantile is estimated from few upper-tail observations, so a single
+    # fit is the most jittery here — where subagging's stabilising helps most.
     xs = np.linspace(0.2, 9.8, 300)
+    q80_true = gamma_dist.ppf(0.8, a=2.0, scale=(xs + 1) / 4)
     fig, ax = plt.subplots(figsize=(6.4, 4.0))
-    ax.plot(xs, raw.predict(xs), color=MUTED, lw=1.8, label="single fit")
-    ax.plot(xs, bag.predict(xs), color=BLUE, lw=2.4, label=r"subagged ($50\!\times\!$)")
+    ax.plot(xs, q80_true, color=INK, lw=1.6, ls=(0, (4, 3)),
+            label="true 80th percentile")
+    ax.plot(xs, raw.quantile(xs, 0.8), color=MUTED, lw=1.8,
+            label="single fit")
+    ax.plot(xs, bag.quantile(xs, 0.8), color=BLUE, lw=2.4,
+            label=r"subagged ($50\!\times\!$)")
     ax.set_title("Subagging stabilises the fit")
     ax.set_xlabel(r"covariate $x$")
-    ax.set_ylabel("predicted mean")
+    ax.set_ylabel(r"80th percentile of $y$")
     ax.set_xlim(0, 10)
     ax.legend(loc="upper left")
     tidy(ax)

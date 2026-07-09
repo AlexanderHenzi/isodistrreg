@@ -72,7 +72,7 @@ plt.plot(sorted_x, mean_for_each_x, color="red", label="mean")
 
 # Estimate and plot quantiles
 probabilities = np.array([0.2, 0.8])
-quantiles = fit.quantile(sorted_x[:, np.newaxis], probabilities[np.newaxis])
+quantiles = fit.quantile(sorted_x[:, np.newaxis], probabilities)
 plt.plot(sorted_x, quantiles, label=[f"{p} quantile" for p in probabilities])
 
 plt.legend(loc="lower right")
