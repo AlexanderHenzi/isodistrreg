@@ -100,12 +100,19 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
         observed: S,
         weight: W,
     }
+    // Canonicalize signed zeros while packing (`-0.0 + 0.0 == +0.0` in IEEE
+    // round-to-nearest; every other value is unchanged): the sort keys use `total_cmp`,
+    // which separates -0.0 from +0.0, while the aggregation below merges them with `==`.
+    // Mixed zeros would otherwise assemble one covariate or threshold out of two
+    // sort-distinct groups — leaving duplicate observations non-adjacent (escaping
+    // deduplication) and a threshold's events not ascending in covariate, both contracts
+    // the PAVA batching depends on.
     let mut items: Vec<Item<X, Y, S, W>> = izip!(x, y, weight)
         .enumerate()
         .filter(|&(_, (_, _, &weight))| weight > W::zero())
         .map(|(index, (&x, &y, &weight))| Item {
-            x,
-            y,
+            x: x + X::zero(),
+            y: y + Y::zero(),
             observed: observed(index),
             weight,
         })
@@ -275,11 +282,15 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
             weight: W,
             observed: bool,
         }
+        // Canonicalize signed zeros while packing, exactly as in `preprocess`: the
+        // `total_cmp` sort keys must agree with the `==` aggregation below on ±0.0, or a
+        // merged threshold's events end up not ascending in covariate and duplicate
+        // covariates escape deduplication — contracts the batched PAVA updates rely on.
         let mut items: Vec<Item<X, Y, W>> = izip!(x, y, observed, weights)
             .filter(|&(_, _, _, &weight)| weight > W::zero())
             .map(|(&x, &y, &observed, &weight)| Item {
-                y,
-                x,
+                y: y + Y::zero(),
+                x: x + X::zero(),
                 weight,
                 observed,
             })
