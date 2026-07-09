@@ -113,6 +113,18 @@ fn sweep_rect_body<K: Kernel, X: crate::Float, Y: crate::Float>(args: SweepArgs<
         left_marker_buf,
     } = args;
 
+    // The merge rectangle must be well-formed: a non-empty row range left of a non-empty
+    // column range, both inside the triangle (`row_end <= ultimate_start` is what makes
+    // every visited cell satisfy r < s, keeping the kernels' operand slices legal), and
+    // each marker buffer covering exactly its range. The caller's row clamp guarantees a
+    // non-empty row range — an empty one would silently skip the whole sweep.
+    debug_assert!(penultimate_start < row_end);
+    debug_assert!(row_end <= ultimate_start);
+    debug_assert!(ultimate_start < ultimate_end);
+    debug_assert!(ultimate_end <= estimates.len());
+    debug_assert_eq!(marker_buf.len(), ultimate_end - ultimate_start);
+    debug_assert_eq!(left_marker_buf.len(), ultimate_start - penultimate_start);
+
     // One cell: kernel, then K-M update. Index and bounds flow through registers between
     // the two — bounds are never stored (only the value store remains for future readers),
     // so the consecutive-cell dependency chain skips the memory round-trip.
@@ -133,6 +145,12 @@ fn sweep_rect_body<K: Kernel, X: crate::Float, Y: crate::Float>(args: SweepArgs<
         // check re-fires on every visit once true (monotone in `data_index`), so
         // this shortcut applies to every revisit of a completed cell.
         if CompletionIndex::completes_marker(marker_max, data_index) {
+            // `marker_max` is composed from the caller's suffix-maxima (penultimate
+            // range) and prefix-maxima (ultimate range) buffers; it must equal the true
+            // completion range-max over the whole cell. The non-completing path is
+            // re-checked inside `update_value`; this pinning path would otherwise go
+            // unchecked — and a too-large composed max pins a live cell to 0 forever.
+            debug_assert_eq!(marker_max, estimates.completion.range_max(r, s));
             let row_idx = Estimates::compute_row_index((r, s), estimates.len());
             debug_assert!(idx < estimates.cold.len());
             // SAFETY: `idx` is the triangle index of (r, s) with r <= s < len.

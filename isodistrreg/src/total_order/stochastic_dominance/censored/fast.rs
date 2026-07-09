@@ -7,6 +7,8 @@ use crate::total_order::stochastic_dominance::censored::propagate_bounds::{
     Avx2Kernel, Avx512Kernel,
 };
 use crate::total_order::stochastic_dominance::censored::propagate_bounds::{Kernel, ScalarKernel};
+#[cfg(debug_assertions)]
+use crate::total_order::stochastic_dominance::censored::structures::WALK_OBSERVED_BIT;
 use crate::total_order::stochastic_dominance::censored::structures::{
     Bounds, CompletionIndex, Estimates, Partition,
 };
@@ -21,10 +23,90 @@ use std::iter::repeat_n;
 mod sweep;
 use sweep::{SweepArgs, SweepDispatch};
 
+/// Debug-only formalization of the preprocessing contract (see `preprocess_censored`)
+/// that every stage of this module silently depends on:
+///
+/// - observations sorted by threshold index, each threshold's events forming one
+///   contiguous run (strictly ascending covariate, duplicates aggregated) before the
+///   threshold's censored observations — the run gathering, the batched update, and the
+///   walk ranges of `update_value` all assume this order;
+/// - the first observation is an event at threshold 0 and every threshold owns at least
+///   one event (thresholds are exactly the unique event responses), so the threshold
+///   loop consumes every observation;
+/// - censored observations are snapped to the latest threshold at or below their
+///   response (`y < n_threshold`), so none survives past the final threshold;
+/// - every weight is positive (the kernels divide by observation and covariate weights)
+///   and the cumulative covariate weights chain by ONE addition per covariate — the
+///   accumulation the `weight_noise_floor` bound and the branch-free `cum_w` differences
+///   reason about.
+#[cfg(debug_assertions)]
+fn assert_preprocessing_contract<X: crate::Float, Y: crate::Float>(
+    context: &CensoredContext<X, Y>,
+) {
+    let n_covariate = context.n_covariate();
+    let n_threshold = context.n_threshold();
+
+    let mut threshold_has_event = vec![false; n_threshold];
+    for o in &context.observations {
+        assert!(o.x < n_covariate, "covariate index outside the grid");
+        assert!(o.y < n_threshold, "threshold index outside the grid");
+        assert!(o.weight > 0.0, "zero-weight observations must be dropped");
+        if o.observed {
+            threshold_has_event[o.y] = true;
+        }
+    }
+    assert!(
+        threshold_has_event.iter().all(|&has| has),
+        "every threshold must own at least one event",
+    );
+    if let Some(first) = context.observations.first() {
+        assert!(
+            first.observed && first.y == 0,
+            "censored observations below the first event must be discarded",
+        );
+    }
+    for w in context.observations.windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        assert!(a.y <= b.y, "observations must be sorted by threshold");
+        if a.y == b.y {
+            assert!(
+                a.observed || !b.observed,
+                "a threshold's events must precede its censored observations",
+            );
+            if a.observed && b.observed {
+                assert!(
+                    a.x < b.x,
+                    "a threshold's events must be strictly ascending in covariate",
+                );
+            }
+        }
+    }
+
+    let statistics = &context.covariate_statistics;
+    assert_eq!(statistics.len(), n_covariate);
+    if let Some(first) = statistics.first() {
+        assert!(first.weight > 0.0);
+        assert_eq!(first.cumulative_weight, first.weight);
+    }
+    for w in statistics.windows(2) {
+        assert!(
+            w[1].weight > 0.0,
+            "empty covariates must not enter the grid"
+        );
+        assert_eq!(
+            w[1].cumulative_weight,
+            w[0].cumulative_weight + w[1].weight,
+            "cumulative weights must chain by one addition per covariate",
+        );
+    }
+}
+
 pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     context: &CensoredContext<X, Y>,
     progress: &dyn ProgressTracker,
 ) -> Vec<f32> {
+    #[cfg(debug_assertions)]
+    assert_preprocessing_contract(context);
     progress.set_total(context.n_threshold());
 
     if context.n_threshold() == 0 {
@@ -123,6 +205,11 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
                 );
             }
             progress.increment();
+            debug_assert_eq!(
+                cdfs.len(),
+                context.n_threshold() * context.n_covariate(),
+                "the specialized final threshold must complete the output matrix",
+            );
             return cdfs;
         }
 
@@ -177,6 +264,11 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
         progress,
     );
 
+    debug_assert_eq!(
+        cdfs.len(),
+        context.n_threshold() * context.n_covariate(),
+        "one full covariate row per threshold",
+    );
     cdfs
 }
 
@@ -235,6 +327,8 @@ fn finalize_for_censoring_only_in_final_threshold<
     // whose CDF is mathematically 1. The partition→range mapping mirrors
     // `routines::store_in_cdf`: ascending indices for increasing fits (partition `l`
     // covers `[partitions[l - 1].index, partitions[l].index)`), descending otherwise.
+    #[cfg(debug_assertions)]
+    let mut covered = 0usize;
     for l in 0..partitions.len() {
         let start = if D::IS_INCREASING {
             if l == 0 { 0 } else { partitions[l - 1].index }
@@ -242,12 +336,44 @@ fn finalize_for_censoring_only_in_final_threshold<
             partitions.get(l + 1).map_or(0, |p| p.index)
         };
         let end = partitions[l].index; // exclusive
+        debug_assert!(start < end);
+        #[cfg(debug_assertions)]
+        {
+            covered += end - start;
+            // The doc comment's completion characterization for this path, checked
+            // literally: with all data consumed, a range completes iff it contains no
+            // censored observation at all (every censored observation sorts at/after the
+            // final threshold's events, so it is its covariate's last observation).
+            debug_assert_eq!(
+                completion.completes_with_all_data(start, end - 1),
+                input
+                    .observations
+                    .iter()
+                    .all(|o| o.observed || o.x < start || o.x >= end),
+                "completion oracle disagrees with the no-censoring characterization \
+                 on range [{start}, {end})",
+            );
+        }
         if completion.completes_with_all_data(start, end - 1) {
+            // The pin only corrects f32 drift: the consumed-share value must already sit
+            // at 1.0 up to accumulated rounding noise. A large gap means the pin is
+            // repainting a genuinely different value — a bookkeeping bug, not drift.
+            debug_assert!(
+                (partitions[l].value - 1.0).abs() < 1e-3,
+                "pinning a value far from 1.0: {}",
+                partitions[l].value,
+            );
             partitions[l].value = 1.0;
         }
     }
+    // The partition->range mapping above mirrors `routines::store_in_cdf` for both
+    // directions; tiling the covariate grid exactly is what validates the mirroring.
+    #[cfg(debug_assertions)]
+    debug_assert_eq!(covered, input.n_covariate());
 
     routines::store_in_cdf::<_, D>(&partitions, cdf);
+    #[cfg(debug_assertions)]
+    routines::debug_assert_last_rows_monotone(cdf, input.n_covariate());
 }
 
 fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
@@ -280,6 +406,7 @@ fn initialize<D: Direction, X: crate::Float, Y: crate::Float>(
         // (any wider range contains another covariate whose observations all sort after
         // this very first one).
         let raw_value = if CompletionIndex::completes_marker(marker_max, data_index) {
+            debug_assert_eq!(r, obs_x, "only the singleton cell can complete here");
             0.0
         } else {
             1.0 - obs_weight / total_weight
@@ -439,9 +566,58 @@ fn generalized_pava<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::F
             data_index += 1;
         }
 
+        // The stored row must be an antitonic regression: adjacent block values must not
+        // compare in the forbidden ordering. Boundaries at the stack top are verified by
+        // `pool` directly; boundaries restored blind rely on same-cell values being
+        // monotone in `data_index`, which is exact for raw folds, pins, and clips but
+        // can wobble by rounding noise for collapsed-bounds midpoints (per-visit
+        // checkpoint prefixes are mutually unordered) — hence the noise slack instead of
+        // an exact comparison.
+        #[cfg(debug_assertions)]
+        {
+            let mut block_start = 0usize;
+            let mut previous: Option<f32> = None;
+            for partition in partitions.iter() {
+                let value = estimates.value(block_start, partition.index - 1);
+                if let Some(previous) = previous {
+                    let in_order = match D::FORBIDDEN_ORDERING {
+                        Ordering::Greater => previous <= value + routines::MONOTONICITY_NOISE_SLACK,
+                        Ordering::Less => value <= previous + routines::MONOTONICITY_NOISE_SLACK,
+                        Ordering::Equal => unreachable!(),
+                    };
+                    assert!(
+                        in_order,
+                        "adjacent partition values in forbidden ordering at covariate \
+                         {block_start}: {previous} vs {value}",
+                    );
+                }
+                previous = Some(value);
+                block_start = partition.index;
+            }
+        }
+        #[cfg(debug_assertions)]
+        let cdf_len_before = cdf.len();
         store_in_cdf(&estimates, &partitions, cdf);
+        #[cfg(debug_assertions)]
+        {
+            debug_assert_eq!(
+                cdf.len() - cdf_len_before,
+                input.n_covariate(),
+                "a threshold's partitions did not tile the covariate grid",
+            );
+            routines::debug_assert_last_rows_monotone(cdf, input.n_covariate());
+        }
         progress.increment();
     }
+
+    // Every observation is consumed: events drive the updates, and preprocessing snaps
+    // censored observations to the latest threshold at or below their response, so none
+    // sorts past the final threshold.
+    debug_assert_eq!(data_index, input.n());
+    // Every value write maintained both value layouts; a divergence would mean some
+    // kernel reduced a row operand and a column operand from different states.
+    #[cfg(debug_assertions)]
+    estimates.assert_mirrors_coherent();
 }
 
 /// Apply one threshold's events — the run of uncensored observations tied on that
@@ -501,6 +677,17 @@ fn update_threshold<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::F
 ) {
     // Threshold-end folds throughout: every walk consumes the whole run.
     let data_index = run_end - 1;
+
+    // One threshold's whole event run: non-empty, all observed, one response, covariates
+    // strictly ascending. The deferred-remainder bookkeeping below and the walk ranges
+    // of `update_value` (which absorb the whole run at once) both assume exactly this.
+    #[cfg(debug_assertions)]
+    {
+        let run = &input.observations[run_start..run_end];
+        debug_assert!(!run.is_empty());
+        debug_assert!(run.iter().all(|o| o.observed && o.y == run[0].y));
+        debug_assert!(run.windows(2).all(|w| w[0].x < w[1].x));
+    }
 
     if D::FORBIDDEN_ORDERING == Ordering::Less {
         // TODO
@@ -637,6 +824,12 @@ fn update_threshold<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::F
     }
     partitions.extend(tmp_partition_store.drain(store_cursor..));
     tmp_partition_store.clear();
+
+    // The rebuilt stack must tile the covariate grid exactly: the split/deferred-
+    // remainder/blind-restore choreography above re-adds every drained covariate
+    // exactly once, and a gap or overlap here silently corrupts every later threshold.
+    debug_assert!(partitions.windows(2).all(|w| w[0].index < w[1].index));
+    debug_assert_eq!(partitions.last().unwrap().index, input.n_covariate());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -835,6 +1028,23 @@ impl Estimates {
             // clip still has to be reapplied. Skipping it would leave a value clipped against
             // bounds that no longer exist.
             let result = cold.raw_value.max(lower_bound).min(upper_bound);
+            // The guard's soundness claim, checked literally: a remaining weight below
+            // the noise floor means no unconsumed observation can lie in the cell (real
+            // observation weights sit far above the floor — see `weight_noise_floor`),
+            // so the skipped walk range must contain no in-range item. A hit here means
+            // the guard fired on live data, silently freezing the cell's K-M value.
+            #[cfg(debug_assertions)]
+            {
+                let start = covariate_start_index as u32;
+                let span = (covariate_end_index - covariate_start_index) as u32;
+                let from = cold.count as usize;
+                debug_assert!(
+                    self.walk_x[from..data_index + 1]
+                        .iter()
+                        .all(|&x| (x & !WALK_OBSERVED_BIT).wrapping_sub(start) > span),
+                    "noise-floor guard skipped observations that would have folded",
+                );
+            }
             self.set_value(idx, row_idx, result);
             return;
         }
@@ -863,6 +1073,21 @@ impl Estimates {
                 self.walk_w.get_unchecked(from..to),
             )
         };
+        // Debug cross-check: a SIMD walk must fold exactly the same items in the same
+        // order as the scalar reference — bit-identical results here are what keep fits
+        // independent of the host's SIMD level, checked on every real walk rather than
+        // only on the unit test's synthetic streams.
+        #[cfg(debug_assertions)]
+        let walk_reference = (!K::IS_REFERENCE).then(|| {
+            ScalarKernel::walk_scan(
+                walk_xs,
+                walk_ws,
+                covariate_start_index as u32,
+                (covariate_end_index - covariate_start_index) as u32,
+                cold.raw_value,
+                remaining_weight,
+            )
+        });
         let (raw_value, remaining_weight) = K::walk_scan(
             walk_xs,
             walk_ws,
@@ -871,6 +1096,17 @@ impl Estimates {
             cold.raw_value,
             remaining_weight,
         );
+        #[cfg(debug_assertions)]
+        if let Some(reference) = walk_reference {
+            debug_assert_eq!(
+                (raw_value.to_bits(), remaining_weight.to_bits()),
+                (reference.0.to_bits(), reference.1.to_bits()),
+                "SIMD walk diverged from the scalar reference",
+            );
+        }
+        // The noise-floor guard above keeps every K-M denominator the walk divides by
+        // away from zero; a non-finite product means it under-guarded.
+        debug_assert!(raw_value.is_finite());
 
         // SAFETY: as above; re-borrowed because the walk's slice borrows ended the
         // earlier exclusive borrow.
@@ -898,6 +1134,9 @@ impl Estimates {
         input: &CensoredContext<X, Y>,
         epsilon: f32,
     ) {
+        // An empty range here would silently skip the arrival's whole row update — the
+        // partition lookup must have produced the block containing the arrival.
+        debug_assert!(partition_start_index <= observation.x);
         // Completion range-max over `[r, observation.x]`, folded as the loop descends.
         let mut marker_max = 0;
         for r in (partition_start_index..=observation.x).rev() {
@@ -967,11 +1206,30 @@ impl Estimates {
         // never collapse at all. Both dispatch inputs are deterministic and identical
         // across SIMD levels: the length is a static property of the cell, the
         // threshold a pure function of the input data.
-        if len >= self.checkpoint_min_len {
+        let checked = len >= self.checkpoint_min_len;
+        let bounds = if checked {
             K::apply::<true>(row, col)
         } else {
             K::apply::<false>(row, col)
+        };
+        // Debug cross-check against the scalar reference: the shared element-count
+        // checkpoint schedule makes every kernel reduce the same prefix, so the bounds
+        // must be bit-identical — the host-SIMD-independence contract, verified on every
+        // real cell rather than only on the unit test's synthetic slices.
+        #[cfg(debug_assertions)]
+        if !K::IS_REFERENCE {
+            let reference = if checked {
+                ScalarKernel::apply::<true>(row, col)
+            } else {
+                ScalarKernel::apply::<false>(row, col)
+            };
+            debug_assert_eq!(
+                (bounds.0.to_bits(), bounds.1.to_bits()),
+                (reference.0.to_bits(), reference.1.to_bits()),
+                "kernel bounds diverged from the scalar reference at ({r}, {s})",
+            );
         }
+        bounds
     }
 }
 
@@ -983,6 +1241,12 @@ fn store_in_cdf<W, V>(
     partitions: &[structures::Partition<W, V>],
     cdf: &mut Vec<f32>,
 ) {
+    // The partitions must tile `[0, n_covariate)` in strictly ascending order — this is
+    // what makes every `value` read below hit a real block and the emitted row cover
+    // the covariate grid exactly once.
+    debug_assert!(!partitions.is_empty() && partitions[0].index >= 1);
+    debug_assert!(partitions.windows(2).all(|w| w[0].index < w[1].index));
+    debug_assert_eq!(partitions.last().unwrap().index, estimates.len());
     let partition_len = partitions[0].index;
     let value = estimates.value(0, partitions[0].index - 1);
     cdf.extend(repeat_n(1.0 - value.clamp(0.0, 1.0), partition_len));
