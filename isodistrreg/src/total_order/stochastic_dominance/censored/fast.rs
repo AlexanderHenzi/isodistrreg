@@ -164,7 +164,7 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
 
     // Remaining thresholds with the full algorithm. The runtime CPU-feature check happens once
     // here; the chosen branch monomorphizes the entire inner call tree
-    // (`generalized_pava → update_uncensored → pool → propagate_bounds*`) over the kernel's
+    // (`generalized_pava → update_threshold → pool → propagate_bounds*`) over the kernel's
     // zero-sized `Kernel` impl, so `K::apply` inlines into every callsite — no indirection in
     // the hot loop.
     dispatch_generalized_pava::<D, _, _>(
@@ -386,16 +386,34 @@ fn generalized_pava<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::F
     // step would then divide by a sub-noise-floor value and blow up — see
     // `weight_noise_floor` for the bound's derivation.
     let epsilon = weight_noise_floor(input.observations.iter().map(|o| o.weight).sum());
+    // Each iteration treats exactly one threshold: its events form one contiguous run
+    // (observations sort by response, events before censorings, covariate ascending;
+    // thresholds are exactly the unique event responses, so every threshold owns such
+    // a run), followed by the threshold's censored observations. Only the very first
+    // iteration can instead begin mid-threshold: after the uncensored-prefix bridge
+    // `data_index` sits at the censored remainder whose events the prefix already
+    // consumed, and after `initialize` it sits at whatever follows the first event.
     for threshold in start_threshold..input.n_threshold() {
-        while data_index < input.n() {
+        if data_index < input.n() {
             let observation = &input.observations[data_index];
-            if observation.y > threshold {
-                break;
-            }
-
-            if observation.observed {
-                update_uncensored::<D, K, _, _>(
+            if observation.observed && observation.y == threshold {
+                // The estimator is defined per threshold, so the whole event run is
+                // applied as one batched update: all folds run at the run's last data
+                // index and every pooled pair is swept exactly once, where per-arrival
+                // processing re-splits and re-sweeps overlapping rectangles once per
+                // arrival (measured 2.6-4.3x cell-visit multiplicity on tied-response
+                // inputs).
+                let mut run_end = data_index + 1;
+                while run_end < input.n() {
+                    let next = &input.observations[run_end];
+                    if !next.observed || next.y != threshold {
+                        break;
+                    }
+                    run_end += 1;
+                }
+                update_threshold::<D, K, _, _>(
                     data_index,
+                    run_end,
                     &mut estimates,
                     &mut partitions,
                     input,
@@ -404,12 +422,18 @@ fn generalized_pava<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::F
                     &mut marker_buf,
                     &mut left_marker_buf,
                 );
-            } else {
-                // Censored observations are deferred. They affect the K-M estimate only at the
-                // next uncensored arrival, which `update_value` picks up by walking forward
-                // through `observations` from `self.count`.
+                data_index = run_end;
             }
+        }
 
+        // The threshold's censored observations are deferred. They affect the K-M
+        // estimate only at the next event, whose walk picks them up by walking
+        // forward through `observations` from `self.count`.
+        while data_index < input.n() && input.observations[data_index].y == threshold {
+            debug_assert!(
+                !input.observations[data_index].observed,
+                "events precede censorings within a threshold",
+            );
             data_index += 1;
         }
 
@@ -418,9 +442,53 @@ fn generalized_pava<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::F
     }
 }
 
+/// Apply one threshold's events — the run of uncensored observations tied on that
+/// response, `observations[run_start..run_end]`, covariates strictly ascending by the
+/// sort order — as a single batched update. Censored observations never trigger
+/// updates and a threshold's events are contiguous, so each call handles exactly one
+/// threshold. A run of one is exactly the classical per-arrival update step —
+/// split-inheritance, leftward pooling, and the trailing flush as the accelerated
+/// extension — so there is no separate single-arrival path.
+///
+/// The estimator is defined per threshold (see `definition`), so only the state after
+/// the whole run is ever read: `store_in_cdf` runs once per threshold, and every
+/// pooling comparison made *during* the run may already use threshold-end values.
+/// Batching therefore folds every cell to the run's last data index the first time it
+/// is touched, and arranges the partition edits so that nothing built during the run is
+/// ever split again within the run:
+///
+/// - Arrivals are processed in ascending covariate order. A block formed by pooling at
+///   arrival `x_i` spans covariates `<= x_i < x_{i+1}`, so no later arrival of the run
+///   splits it — every pooled pair is swept exactly once. Per-arrival processing
+///   instead re-splits the freshly rebuilt right-hand structure at each next arrival
+///   and re-sweeps the overlapping rectangles, once per arrival.
+/// - The accelerated extension (re-adding a split block's right remainder as singleton
+///   blocks) is deferred until the remainder is actually reached — by the next arrival
+///   needing to pass it, or by the final restore. The pool calls for these re-adds pass
+///   `split_x = x_prev` (the arrival that split the block): every cell with both
+///   coordinates in the remainder lies in a sub-interval of that just-split block and
+///   contains no processed arrival, so the whole-rectangle skip and row clamp apply
+///   exactly as in the per-arrival flow.
+/// - Untouched whole blocks between arrivals are restored without pooling, like the
+///   caller's blind restore of `tmp_partition_store`: their values and their left
+///   boundary's validity are unchanged. Blocks the leftward cascades must merge them
+///   with are reached through arrival pools, whose rectangles sweep full penultimate
+///   rows (their `split_x` is the arrival covariate, to their right).
+/// - An arrival inside an untouched original block splits it by inheritance
+///   (`[block_start, x + 1)` stays one block), the same move as the per-arrival flow.
+///   An arrival inside a deferred remainder enters as a singleton block and the pool
+///   comparisons decide all merging — the canonical PAVA insertion that the extension
+///   already uses for every other remainder covariate.
+///
+/// In exact arithmetic the result equals per-arrival processing (both evaluate the
+/// per-threshold definition); in f32 a pooling comparison between near-equal heads can
+/// resolve differently because batched comparisons see threshold-end values where
+/// per-arrival comparisons see mid-run folds. The differential suites against
+/// `definition` gate both schedules the same way.
 #[allow(clippy::too_many_arguments)]
-fn update_uncensored<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::Float>(
-    data_index: usize,
+fn update_threshold<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::Float>(
+    run_start: usize,
+    run_end: usize,
     estimates: &mut Estimates,
     partitions: &mut Vec<Partition>,
     input: &CensoredContext<X, Y>,
@@ -429,34 +497,27 @@ fn update_uncensored<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::
     marker_buf: &mut Vec<u32>,
     left_marker_buf: &mut Vec<u32>,
 ) {
-    let observation = input.observations[data_index];
-    let (partition_index, (lower, upper)) =
-        routines::find_partition_bounds::<_, _, D::REVERSE>(observation.x, partitions);
-    debug_assert!(lower <= observation.x && observation.x < upper);
-
-    // Store right part of partitions
-    tmp_partition_store.extend(partitions.drain(partition_index + 1..));
+    // Threshold-end folds throughout: every walk consumes the whole run.
+    let data_index = run_end - 1;
 
     if D::FORBIDDEN_ORDERING == Ordering::Less {
         // TODO
         unimplemented!("Need to reverse the partition management and pooling");
     }
 
-    // Split the triangle and update computation of left sub-triangle
-    partitions[partition_index].index = observation.x + 1; // partition indices are exclusive
-    // Update the triangle of the range of the new partition
+    // First arrival: the per-arrival split-inheritance move on its containing block.
+    let first = input.observations[run_start];
+    let (partition_index, (lower, upper)) =
+        routines::find_partition_bounds::<_, _, D::REVERSE>(first.x, partitions);
+    debug_assert!(lower <= first.x && first.x < upper);
+    tmp_partition_store.extend(partitions.drain(partition_index + 1..));
+    partitions[partition_index].index = first.x + 1;
     estimates.update_partial_row_with_single_observation::<K, _, _>(
-        data_index,
-        lower,
-        &observation,
-        input,
-        epsilon,
+        data_index, lower, &first, input, epsilon,
     );
-    // Pooling left part of partitions (direction is the same, because we're working with survival
-    // quantities, not the CDF)
     pool::<_, _, D, K, _, _>(
         data_index,
-        observation.x,
+        first.x,
         estimates,
         partitions,
         input,
@@ -465,13 +526,105 @@ fn update_uncensored<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::
         left_marker_buf,
     );
 
-    // Accelerated extension and pooling
-    for i in observation.x + 1..upper {
-        partitions.push(Partition::new(i + 1));
-        // Direction is the same, because we're working with survival quantities, not the CDF)
+    // Covariates `[cursor, pending_end)` are not on the stack yet. With
+    // `pending_is_remainder` they are the deferred right remainder of the block that
+    // arrival `x_prev` split (re-added as singletons when reached); otherwise they are
+    // an untouched original block (restored whole). `tmp_partition_store[store_cursor..]`
+    // holds the original blocks not yet reached, in covariate order.
+    let mut cursor = first.x + 1;
+    let mut pending_end = upper;
+    let mut pending_is_remainder = true;
+    let mut x_prev = first.x;
+    let mut store_cursor = 0usize;
+
+    for arrival in run_start + 1..run_end {
+        let observation = input.observations[arrival];
+        let x = observation.x;
+        debug_assert!(x > x_prev, "tied uncensored covariates are deduplicated");
+
+        // Advance the stack up to the pending region containing x.
+        while pending_end <= x {
+            if pending_is_remainder {
+                for i in cursor..pending_end {
+                    partitions.push(Partition::new(i + 1));
+                    pool::<_, _, D, K, _, _>(
+                        data_index,
+                        x_prev,
+                        estimates,
+                        partitions,
+                        input,
+                        epsilon,
+                        marker_buf,
+                        left_marker_buf,
+                    );
+                }
+            } else {
+                partitions.push(Partition::new(pending_end));
+            }
+            cursor = pending_end;
+            pending_end = tmp_partition_store[store_cursor].index;
+            pending_is_remainder = false;
+            store_cursor += 1;
+        }
+
+        if pending_is_remainder {
+            // x lies in a deferred remainder: re-add the covariates left of it, then
+            // insert x as its own singleton block; pooling decides all merging.
+            for i in cursor..x {
+                partitions.push(Partition::new(i + 1));
+                pool::<_, _, D, K, _, _>(
+                    data_index,
+                    x_prev,
+                    estimates,
+                    partitions,
+                    input,
+                    epsilon,
+                    marker_buf,
+                    left_marker_buf,
+                );
+            }
+            partitions.push(Partition::new(x + 1));
+            estimates.update_partial_row_with_single_observation::<K, _, _>(
+                data_index,
+                x,
+                &observation,
+                input,
+                epsilon,
+            );
+        } else {
+            // x lies in an untouched original block `[cursor, pending_end)`:
+            // split-inheritance, exactly like the first arrival.
+            partitions.push(Partition::new(x + 1));
+            estimates.update_partial_row_with_single_observation::<K, _, _>(
+                data_index,
+                cursor,
+                &observation,
+                input,
+                epsilon,
+            );
+        }
         pool::<_, _, D, K, _, _>(
             data_index,
-            observation.x,
+            x,
+            estimates,
+            partitions,
+            input,
+            epsilon,
+            marker_buf,
+            left_marker_buf,
+        );
+        cursor = x + 1;
+        pending_is_remainder = true;
+        x_prev = x;
+    }
+
+    // Trailing remainder of the last split block, then the blind restore of the
+    // untouched right part — the same closing moves as the per-arrival flow.
+    for i in cursor..pending_end {
+        partitions.push(Partition::new(i + 1));
+        pool::<_, _, D, K, _, _>(
+            data_index,
+            x_prev,
             estimates,
             partitions,
             input,
@@ -480,9 +633,8 @@ fn update_uncensored<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::
             left_marker_buf,
         );
     }
-
-    // Restore right-most partitions
-    partitions.append(tmp_partition_store);
+    partitions.extend(tmp_partition_store.drain(store_cursor..));
+    tmp_partition_store.clear();
 }
 
 #[allow(clippy::too_many_arguments)]
