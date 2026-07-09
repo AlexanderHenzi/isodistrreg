@@ -174,7 +174,7 @@ def figure_censoring():
 # ---------------------------------------------------------------------------
 def figure_subagging():
     rng = np.random.default_rng(11)
-    n = 120
+    n = 200
     x = rng.uniform(0, 10, n)
     y = rng.gamma(shape=2.0, scale=(x + 1) / 4)
     raw = IDR(y, x)
@@ -183,14 +183,17 @@ def figure_subagging():
     # A high quantile is estimated from few upper-tail observations, so a single
     # fit is the most jittery here — where subagging's stabilising helps most.
     xs = np.linspace(0.2, 9.8, 300)
+    q80_true = gamma_dist.ppf(0.8, a=2.0, scale=(xs + 1) / 4)
     fig, ax = plt.subplots(figsize=(6.4, 4.0))
-    ax.plot(xs, raw.quantile(xs, 0.9), color=MUTED, lw=1.8,
+    ax.plot(xs, q80_true, color=INK, lw=1.6, ls=(0, (4, 3)),
+            label="true 80th percentile")
+    ax.plot(xs, raw.quantile(xs, 0.8), color=MUTED, lw=1.8,
             label="single fit")
-    ax.plot(xs, bag.quantile(xs, 0.9), color=BLUE, lw=2.4,
+    ax.plot(xs, bag.quantile(xs, 0.8), color=BLUE, lw=2.4,
             label=r"subagged ($50\!\times\!$)")
     ax.set_title("Subagging stabilises the fit")
     ax.set_xlabel(r"covariate $x$")
-    ax.set_ylabel(r"90th percentile of $y$")
+    ax.set_ylabel(r"80th percentile of $y$")
     ax.set_xlim(0, 10)
     ax.legend(loc="upper left")
     tidy(ax)
