@@ -63,6 +63,17 @@ use crate::total_order::stochastic_dominance::censored::structures::WALK_OBSERVE
 /// checkpoint exactly.
 const COLLAPSE_CHECK_START: usize = 128;
 
+// The checkpoint tests fire on `k == next_check` equality, so a schedule entry that is not
+// a multiple of some kernel's step is silently skipped by that kernel only — the kernels
+// would then reduce different prefixes and return SIMD-level-dependent bounds, the exact
+// failure mode this schedule exists to rule out. 32 is the largest main-loop step
+// (AVX-512); the smaller steps (16 AVX2, 4 scalar) divide it, and doubling preserves
+// divisibility for every later checkpoint.
+const _: () = assert!(
+    COLLAPSE_CHECK_START.is_multiple_of(32),
+    "checkpoints must be reachable by every kernel's main-loop step",
+);
+
 /// Minimum reduction length for the checkpointed kernel mode — the caller's dispatch
 /// threshold, kept next to the schedule it reasons about. Below it the straight-line
 /// kernel runs: reductions shorter than `COLLAPSE_CHECK_START` cannot reach a checkpoint,
@@ -78,6 +89,12 @@ pub const COLLAPSE_CHECK_MIN_LEN: usize = 384;
 /// associated functions are statically dispatched, so monomorphizing the algorithm tree over
 /// `K: Kernel` inlines them into every callsite.
 pub trait Kernel {
+    /// Marks the semantic reference implementation ([`ScalarKernel`]). Debug builds
+    /// cross-check every `apply`/`walk_scan` result of a non-reference kernel against the
+    /// scalar one at the callsites — bit-equality there is what makes fit results
+    /// independent of the host's SIMD level.
+    const IS_REFERENCE: bool = false;
+
     /// The bound reduction. `CHECKED` enables the collapse checkpoints (see
     /// `COLLAPSE_CHECK_START`); without them the reduction is the exact straight-line
     /// fold over the full slices. Callers pick per cell via the `Estimates::collapsed`
@@ -121,6 +138,13 @@ fn walk_scan_scalar(
         }
         let weight = ws[i];
         if x_flagged & WALK_OBSERVED_BIT != 0 {
+            // The at-risk weight must still be strictly positive at every event fold:
+            // `update_value`'s `weight_noise_floor` guard is what keeps walks away from
+            // drifted-to-zero denominators, and a violation here means it under-guarded
+            // (the product would blow up to inf/NaN). The factor itself may dip a few
+            // ulps below 0 for a cell's last at-risk observation — that is expected
+            // subtraction drift, not a bug, so only positivity is asserted.
+            debug_assert!(remaining_weight > 0.0);
             raw_value *= 1.0 - weight / remaining_weight;
         }
         remaining_weight -= weight;
@@ -132,6 +156,8 @@ fn walk_scan_scalar(
 pub struct ScalarKernel;
 
 impl Kernel for ScalarKernel {
+    const IS_REFERENCE: bool = true;
+
     #[inline(always)]
     fn apply<const CHECKED: bool>(row: &[f32], col: &[f32]) -> (f32, f32) {
         propagate_bounds_kernel::<CHECKED>(row, col)

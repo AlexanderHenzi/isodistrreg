@@ -6,6 +6,35 @@ use bitree::BITree;
 use std::cmp::Reverse;
 use std::iter::repeat_n;
 
+/// Slack for the debug-only monotonicity asserts on emitted CDF rows and partition
+/// values. Exact monotonicity is a property of the estimator in exact arithmetic, but not
+/// of the f32 evaluation: batched pooling folds along shorter merge paths, and the
+/// censored collapse checkpoints return midpoints of per-visit checkpoint prefixes that
+/// are mutually unordered — both wobble results by rounding noise (measured elsewhere at
+/// <= ~4e-7). The slack separates that noise from logic bugs, which violate monotonicity
+/// by orders of magnitude more.
+#[cfg(debug_assertions)]
+pub(crate) const MONOTONICITY_NOISE_SLACK: f32 = 1e-5;
+
+/// Debug-only: compare the last two stored CDF rows — the distribution function at each
+/// covariate must be non-decreasing across thresholds (up to
+/// [`MONOTONICITY_NOISE_SLACK`]). Downstream consumers (quantile extraction, the
+/// proper-CDF gates) rely on the emitted rows forming valid CDFs.
+#[cfg(debug_assertions)]
+pub(crate) fn debug_assert_last_rows_monotone(cdf: &[f32], n_covariate: usize) {
+    if cdf.len() < 2 * n_covariate {
+        return;
+    }
+    let tail = &cdf[cdf.len() - 2 * n_covariate..];
+    let (prev, curr) = tail.split_at(n_covariate);
+    for (i, (p, q)) in prev.iter().zip(curr).enumerate() {
+        assert!(
+            *q >= *p - MONOTONICITY_NOISE_SLACK,
+            "CDF decreased across thresholds at covariate {i}: {p} -> {q}",
+        );
+    }
+}
+
 /// Exact bookkeeping of the observations the classical PAVA has consumed so far.
 ///
 /// All weight arithmetic runs in f32 (see the weight contract on `fit()`), so quotients of
@@ -77,6 +106,28 @@ pub fn accelerated_pava<R: PartialOrd + Copy, S: Copy, STOP: Fn(S) -> bool, D: D
         observations.len() - *data_index > 1,
         "Need at least two observations; one to initialize, another to start the loop",
     );
+    // The sort contract the run gathering below silently depends on: observations sorted
+    // by response, and within one response the non-stop observations (events) form one
+    // contiguous prefix with strictly ascending covariates (duplicates aggregated by
+    // preprocessing). Without contiguity a run would end early and the batched update
+    // would evaluate a different estimator than the per-arrival definition.
+    #[cfg(debug_assertions)]
+    for w in observations[*data_index..].windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        debug_assert!(a.y <= b.y, "observations must be sorted by response");
+        if a.y == b.y {
+            debug_assert!(
+                !stop_condition(a.observed) || stop_condition(b.observed),
+                "a threshold's non-stop observations must precede its stop observations",
+            );
+            if !stop_condition(a.observed) && !stop_condition(b.observed) {
+                debug_assert!(
+                    a.x < b.x,
+                    "a threshold's events must be strictly ascending in covariate",
+                );
+            }
+        }
+    }
 
     let n_covariate = covariate_statistics.len();
 
@@ -138,7 +189,20 @@ pub fn accelerated_pava<R: PartialOrd + Copy, S: Copy, STOP: Fn(S) -> bool, D: D
             return (consumed_share, consumed_weight, partitions);
         }
 
+        #[cfg(debug_assertions)]
+        let cdf_len_before = cdf.len();
         store_in_cdf::<_, D>(&partitions, cdf);
+        #[cfg(debug_assertions)]
+        {
+            // The partition stack must tile the covariate grid exactly — one full row
+            // per threshold — and successive rows must form valid per-covariate CDFs.
+            debug_assert_eq!(
+                cdf.len() - cdf_len_before,
+                n_covariate,
+                "a threshold's partitions did not tile the covariate grid",
+            );
+            debug_assert_last_rows_monotone(cdf, n_covariate);
+        }
         progress.increment();
         active_threshold = observations[*data_index].y;
 
@@ -433,6 +497,31 @@ pub fn update_threshold<R, S, D: Direction>(
     partitions_to_store.clear();
 
     debug_assert!(partitions.is_sorted_by_key(|p| Reverse(p.value)));
+    #[cfg(debug_assertions)]
+    {
+        // The restored stack must tile the covariate grid in storage order (ascending
+        // block boundaries for the decreasing direction, descending for the increasing
+        // direction's reversed storage) — a gap or overlap here silently corrupts every
+        // later threshold. Pooled means divide by the summed block weight and the pool
+        // trichotomy reads finite shares, so both must stay valid through the batched
+        // splits/re-adds/restores.
+        if !D::IS_INCREASING {
+            debug_assert!(partitions.windows(2).all(|w| w[0].index < w[1].index));
+            debug_assert_eq!(partitions.last().unwrap().index, covariate_statistics.len(),);
+        } else {
+            debug_assert!(partitions.windows(2).all(|w| w[0].index > w[1].index));
+            debug_assert_eq!(
+                partitions.first().unwrap().index,
+                covariate_statistics.len(),
+            );
+        }
+        debug_assert!(
+            partitions
+                .iter()
+                .all(|p| p.weight > 0.0 && p.value.is_finite() && p.value >= 0.0),
+            "partition weights must stay positive and values finite non-negative shares",
+        );
+    }
 }
 
 pub fn find_partition_bounds<W, V, D: Direction>(

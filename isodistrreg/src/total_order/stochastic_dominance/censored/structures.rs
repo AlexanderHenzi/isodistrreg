@@ -262,12 +262,54 @@ impl Estimates {
     /// here).
     #[inline(always)]
     pub fn set_value(&mut self, idx: usize, row_idx: usize, value: f32) {
+        // The bound kernels reduce stored values with bare (NaN-propagating) hardware
+        // min/max and the pool comparisons unwrap `partial_cmp`, so a single stored NaN
+        // poisons every later reduction; infinities would survive the clips and corrupt
+        // pooled comparisons the same way. (The diagonal `(NaN, NaN)` bounds sentinel
+        // never reaches a store: `f32::max`/`f32::min` ignore NaN operands.)
+        debug_assert!(value.is_finite(), "stored a non-finite estimator value");
+        // `idx` and `row_idx` must address the SAME cell in the two mirrors — this is the
+        // safety contract of the unchecked stores below and what keeps the mirrors
+        // coherent. Recover (r, s) by inverting the triangle index and recompute the row
+        // index from it.
+        #[cfg(debug_assertions)]
+        {
+            let s = ((8 * idx + 1).isqrt() - 1) / 2;
+            let r = idx - s * (s + 1) / 2;
+            debug_assert!(r <= s && s < self.len, "idx is not a triangle index");
+            debug_assert_eq!(
+                row_idx,
+                Self::compute_row_index((r, s), self.len),
+                "idx and row_idx address different cells (({r}, {s}) vs row_idx {row_idx})",
+            );
+        }
         debug_assert!(idx < self.values.len());
         debug_assert!(row_idx < self.values_row.len());
         // SAFETY: see above — triangle indices of a valid (r, s) cell.
         unsafe {
             *self.values.get_unchecked_mut(idx) = value;
             *self.values_row.get_unchecked_mut(row_idx) = value;
+        }
+    }
+
+    /// Debug-only: the column-major triangle and its row-major mirror must hold bitwise
+    /// identical values at every cell. Every write maintains both copies through
+    /// [`Self::set_value`]; a divergence means some cell was updated through one layout
+    /// only, and the bound kernels — which read the row operand from one mirror and the
+    /// column operand from the other — would silently reduce inconsistent state.
+    #[cfg(debug_assertions)]
+    pub(crate) fn assert_mirrors_coherent(&self) {
+        for r in 0..self.len {
+            for s in r..self.len {
+                let idx = Self::compute_index((r, s), self.len);
+                let row_idx = Self::compute_row_index((r, s), self.len);
+                assert!(
+                    self.values[idx].to_bits() == self.values_row[row_idx].to_bits(),
+                    "value mirrors diverged at ({r}, {s}): {} vs {}",
+                    self.values[idx],
+                    self.values_row[row_idx],
+                );
+            }
         }
     }
 }
@@ -284,6 +326,15 @@ impl Estimates {
     ) -> Self {
         let len = consumed_weight.len();
         debug_assert_eq!(covariate_statistics.len(), len);
+        // The completion queries below test against `start_count - 1`, and the pinning
+        // argument requires the consumed prefix to be all-observed: `accelerated_pava`
+        // stops at the first censored observation, so whenever an interval's last
+        // observation lies inside the prefix, its event bit holds automatically.
+        debug_assert!(start_count >= 1);
+        debug_assert!(
+            observations[..start_count].iter().all(|o| o.observed),
+            "the uncensored-prefix bridge consumed a censored observation",
+        );
 
         let mut estimates = Estimates::new(
             len,
@@ -359,6 +410,10 @@ impl Estimates {
             } else {
                 1.0 - weight_consumed / covariate_statistics[s].weight
             };
+            // Positive covariate weights (preprocessing drops zero-weight observations
+            // and empty covariates) keep the share finite; a non-finite diagonal would
+            // poison the NaN-intolerant kernels like any other stored value.
+            debug_assert!(diag_raw.is_finite());
             let diag_cold = &mut estimates.cold[index];
             diag_cold.raw_value = diag_raw;
             diag_cold.weight = weight_consumed;
