@@ -53,6 +53,20 @@ def test_outside_range_subagging():
     assert np.allclose(result, [[0.0, 1.0]] * 2)
 
 
+def test_quantile_monotonicity():
+    rng = np.random.default_rng(11)
+    n = 120
+    x = rng.uniform(0, 10, n)
+    y = rng.gamma(shape=2.0, scale=(x + 1) / 4)
+    raw = IDR(y, x)
+
+    xs = np.linspace(0.2, 9.8, 300)
+    q90 = np.array([[0.9]])
+    result = raw.quantile(xs[:, None], q90)[:, 0]
+
+    assert np.all(np.diff(result) >= 0.0)
+
+
 # `.X` and `.thresholds` round-trip the user's input dtype:
 #   - np.float64 in  → np.float64 out
 #   - np.float32 in  → np.float32 out

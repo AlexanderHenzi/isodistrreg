@@ -57,7 +57,17 @@ impl CovariateInterpolator for Interpolation<'_> {
             } => {
                 let left = left_cdf[index];
                 let right = right_cdf[index];
-                (1.0 - share) * left + share * right
+                // Numerically-stable monotone lerp. `(1 - share) * left + share * right`
+                // does not reproduce the common value when `left == right`: for two f32
+                // endpoints that are both exactly `p` (e.g. a CDF pinned at a quantile
+                // level by Kaplan-Meier), it can round to `p - 1 ulp` for one share and
+                // exactly `p` for another. Because the CDF is stochastically ordered in
+                // the covariate (`left >= right`), that sub-ulp wobble flips a `F >= p`
+                // quantile test between adjacent covariates and breaks monotonicity of the
+                // quantile in x. This form has `right - left == 0` exactly when the
+                // endpoints agree, so it returns `left` for every share, and it is monotone
+                // in `share` for a fixed-sign delta.
+                left + share * (right - left)
             }
         }
     }
@@ -248,7 +258,96 @@ pub enum CovariateCoordinate {
 
 #[cfg(test)]
 mod test {
-    use crate::total_order::prediction::{CovariateCoordinate, search_covariate};
+    use crate::prediction::{CovariateInterpolator, quantile};
+    use crate::total_order::prediction::{CovariateCoordinate, Interpolation, search_covariate};
+
+    /// The covariate blend must reproduce a shared endpoint value EXACTLY, for every
+    /// share. `(1 - share) * v + share * v` does not: `0.9` is not representable in
+    /// f32, and that form rounds it to `0.9 - 1 ulp` for some shares while returning
+    /// exactly `0.9` for others. Downstream that sub-ulp wobble flips a `F >= 0.9`
+    /// quantile test between neighbouring covariates and breaks monotonicity of the
+    /// quantile in x (regression test for the covariate interpolation).
+    #[test]
+    fn blend_reproduces_equal_endpoints_across_shares() {
+        // Values deliberately not representable in binary (0.1, 0.9, ...) so a naive
+        // blend drifts off them.
+        let cdf: [f32; 4] = [0.1, 0.5, 0.9, 1.0];
+        for k in 0..=1000 {
+            let share = k as f32 / 1000.0;
+            let interpolation = Interpolation::Between {
+                left_cdf: &cdf,
+                right_cdf: &cdf,
+                share,
+            };
+            for index in 0..cdf.len() {
+                assert_eq!(
+                    interpolation.interpolate_index(index),
+                    cdf[index],
+                    "share {share} at index {index} did not reproduce the common value",
+                );
+            }
+        }
+    }
+
+    /// For stochastically ordered endpoints (`left >= right` pointwise, i.e. a smaller
+    /// covariate has the larger CDF), the interpolated CDF must be non-increasing in
+    /// `share` at every response index — sweeping the covariate up may only shift mass
+    /// upward. A single sub-ulp increase here is what lets a quantile move the wrong way.
+    #[test]
+    fn blend_pointwise_non_increasing_in_share() {
+        let left: [f32; 5] = [0.3, 0.9, 0.9, 0.95, 1.0];
+        let right: [f32; 5] = [0.1, 0.5, 0.9, 0.90, 1.0];
+        assert!(left.iter().zip(&right).all(|(l, r)| l >= *r));
+
+        let mut previous = [f32::INFINITY; 5];
+        for k in 0..=1000 {
+            let share = k as f32 / 1000.0;
+            let interpolation = Interpolation::Between {
+                left_cdf: &left,
+                right_cdf: &right,
+                share,
+            };
+            for index in 0..left.len() {
+                let value = interpolation.interpolate_index(index);
+                assert!(
+                    value <= previous[index],
+                    "share {share} at index {index}: {value} > {} (increased with share)",
+                    previous[index],
+                );
+                previous[index] = value;
+            }
+        }
+    }
+
+    /// End goal of the two invariants above: the lower quantile is non-decreasing as the
+    /// covariate rises. The endpoints share the exact value `0.9` at threshold index 2 —
+    /// the adversarial case that motivated the fix — so the pre-fix blend would round it
+    /// below `0.9` for some shares and bounce the quantile between `3.0` and `4.0`.
+    #[test]
+    fn quantile_non_decreasing_along_covariate_blend() {
+        let left: [f32; 5] = [0.3, 0.9, 0.9, 0.95, 1.0];
+        let right: [f32; 5] = [0.1, 0.5, 0.9, 0.90, 1.0];
+        let thresholds = [1.0f64, 2.0, 3.0, 4.0, 5.0];
+
+        let mut previous = f64::NEG_INFINITY;
+        for k in 0..=1000 {
+            let share = k as f32 / 1000.0;
+            let interpolation = Interpolation::Between {
+                left_cdf: &left,
+                right_cdf: &right,
+                share,
+            };
+            let q = quantile(&interpolation, 0.9, false, &thresholds);
+            assert!(
+                q >= previous,
+                "share {share}: quantile {q} dropped below previous {previous}",
+            );
+            previous = q;
+        }
+        // Sanity: the quantile actually moved (endpoints are not identical), so the test
+        // exercises a real transition rather than a constant.
+        assert!(previous > 2.0);
+    }
 
     #[test]
     fn exact_match() {
