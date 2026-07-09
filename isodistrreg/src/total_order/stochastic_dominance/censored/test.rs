@@ -964,6 +964,24 @@ mod differential {
         assert_all_ok(failures);
     }
 
+    /// Signed zeros: the packing sort orders by `total_cmp` (which separates -0.0 from
+    /// +0.0) while the grid and threshold aggregation merge them with `==`. Without the
+    /// pack-time canonicalization the merged threshold 0.0 assembles its events from two
+    /// sort-distinct response groups — not ascending in covariate — and the ±0.0
+    /// covariates carry non-adjacent duplicates past deduplication; both break the
+    /// strictly-ascending run contract the batched PAVA updates (and the debug entry
+    /// asserts) rely on.
+    #[test]
+    fn signed_zero_responses_and_covariates() {
+        let instance = Instance {
+            x: vec![1.0, 2.0, 0.0, -0.0, 3.0, 2.0],
+            y: vec![-0.0, -0.0, 0.0, 5.0, 0.0, -0.0],
+            observed: vec![true, true, true, true, false, false],
+            weights: vec![1.0, 0.75, 1.25, 1.0, 0.5, 1.5],
+        };
+        instance.check().unwrap();
+    }
+
     /// Regression instance for the clip-order divergence. `definition` originally clipped
     /// in (r asc, s asc, k asc) order, where the column-side inputs `(k+1, s)` were not yet
     /// clipped at the current threshold, while `fast` clips against fully-clipped values on
