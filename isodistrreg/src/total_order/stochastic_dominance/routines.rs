@@ -102,28 +102,40 @@ pub fn accelerated_pava<R: PartialOrd + Copy, S: Copy, STOP: Fn(S) -> bool, D: D
     *data_index += 1;
 
     let last_threshold = observations.last().unwrap().y;
+    // Each iteration completes one threshold: its events form one contiguous
+    // ascending-covariate run (preprocessing sorts each threshold by covariate,
+    // aggregates duplicates, and puts a threshold's events before its stop
+    // observations), applied as a single batched update, followed by the threshold's
+    // CDF row. Only the very first iteration can instead begin mid-threshold:
+    // `initialize_partitions` consumed the first observation.
     loop {
-        while observations[*data_index].y == active_threshold {
-            let observation = &observations[*data_index];
-
-            // TODO: We could do a single, compacted pava update step in which we mark all
-            //  partition elements in which a new value lands as "dirty" and don't end up splitting
-            //  some partition elements twice.
-
-            if stop_condition(observation.observed) {
-                return (consumed_share, consumed_weight, partitions);
+        if observations[*data_index].y == active_threshold
+            && !stop_condition(observations[*data_index].observed)
+        {
+            let mut run_end = *data_index + 1;
+            while run_end < observations.len() {
+                let next = &observations[run_end];
+                if next.y != active_threshold || stop_condition(next.observed) {
+                    break;
+                }
+                run_end += 1;
             }
-
-            classical_pava_update_step::<_, _, D::REVERSE>(
-                observation,
+            update_threshold::<_, _, D::REVERSE>(
+                &observations[*data_index..run_end],
                 &mut consumed_share,
                 &mut consumed_weight,
                 &mut partitions,
                 covariate_statistics,
                 partitions_to_store,
             );
+            *data_index = run_end;
+        }
 
-            *data_index += 1;
+        // A stop observation inside the current threshold ends the prefix before the
+        // threshold's row is stored.
+        if observations[*data_index].y == active_threshold {
+            debug_assert!(stop_condition(observations[*data_index].observed));
+            return (consumed_share, consumed_weight, partitions);
         }
 
         store_in_cdf::<_, D>(&partitions, cdf);
@@ -224,73 +236,201 @@ fn initialize_partitions<R, S, D: Direction>(
     );
 }
 
-/// If the IDR is increasing, should be called with D = Decreasing.
-pub fn classical_pava_update_step<R, S, D: Direction>(
-    obs: &Observation<usize, R, S, f32>,
+/// Apply one threshold's event run — `run`, tied on the response, covariates strictly
+/// ascending by the preprocessing sort and aggregation — as one batched PAVA update. A
+/// run of one is exactly the classical per-arrival update step — split-inheritance,
+/// pooling, and the trailing flush as the accelerated extension — so there is no
+/// separate single-arrival path.
+///
+/// Per-arrival processing re-adds a split block's deferred remainder once per arrival,
+/// and the next tied arrival splits the freshly rebuilt structure again — a run of k
+/// tied observations re-adds overlapping remainders up to k times (measured 10-33x the
+/// covariate-axis width per threshold on weakly-correlated tied-response inputs, where
+/// the update loop is >= 92% of the fit). Only the state after the whole run is ever
+/// read (`store_in_cdf` runs once per threshold), and the classical PAVA solution is
+/// insertion-order independent, so the run is applied in a single pass that re-adds
+/// every covariate of the affected range at most once:
+///
+/// - The consumed bookkeeping for the whole run happens first, so every partition
+///   value computed below reads threshold-end state. This is equivalent to the
+///   per-arrival flow: each value it computes spans covariates on the processed side
+///   of its arrival, and the later arrivals of the run lie strictly beyond them.
+/// - Arrivals are processed in storage order (see below), so a block built during the
+///   run spans covariates on the processed side of the arrivals and no later arrival
+///   of the run splits it again.
+/// - A split block's remainder is re-added only when the next arrival must pass it
+///   (or by the trailing flush). An arrival inside such a remainder enters through the
+///   same `add_remaining` stack pass as its remainder neighbors — its consumed share
+///   is already final, so this is the canonical classical-PAVA insertion.
+/// - An arrival inside an untouched original block splits it by inheritance, the
+///   per-arrival move. Untouched blocks between arrivals are restored verbatim without
+///   pooling, like the per-arrival flow's blind restore: their values and their
+///   boundary's validity are unchanged.
+///
+/// The two update directions are mirror images of each other, and the reversed
+/// partition storage of the `Increasing` direction absorbs the mirroring: in both
+/// directions the arrivals are processed in STORAGE order (ascending covariate for
+/// `Decreasing`, descending for `Increasing` — always from the stack's live end into
+/// the drained store), a split block keeps its storage-near part, and the pending
+/// region lies between the stack top and the next stored block. The body below is
+/// written in those storage terms, tracking the pending region by its `(near, far)`
+/// covariate edges; the only direction-dependent lines are the coordinate
+/// conversions, each folded at compile time.
+///
+/// Pooled block means accumulate along a different (shorter) merge path than the
+/// per-arrival flow, so outputs can differ within rounding noise — the same contract
+/// as `add_remaining`'s equal-value coalescing, gated by the f64-reference
+/// differential tests.
+pub fn update_threshold<R, S, D: Direction>(
+    run: &[Observation<usize, R, S, f32>],
     consumed_share: &mut [f32],
     consumed_weight: &mut ConsumedMass,
     partitions: &mut Vec<WeightedPartition>,
     covariate_statistics: &[CovariateStatistic],
     partitions_to_store: &mut Vec<WeightedPartition>,
 ) {
-    let covariate = obs.x;
+    debug_assert!(!run.is_empty());
+    debug_assert!(run.windows(2).all(|w| w[0].x < w[1].x));
 
-    consumed_weight.consume(covariate, obs.weight);
-    // Once every observation of the covariate is consumed, the share is mathematically
-    // `total/total` — exactly 1.0; the f32 running sum can sit ulps off, and rows that are
-    // mathematically flat at 1.0 must not wobble (`Fit::assert_consistent` requires every
-    // per-covariate CDF row to be sorted along the thresholds).
-    consumed_share[covariate] = if consumed_weight.range_complete(covariate, covariate) {
-        1.0
+    // Threshold-end bookkeeping for the whole run, with the exact-count pinning that
+    // keeps mathematically flat CDF rows exactly at 1.0.
+    for observation in run {
+        let covariate = observation.x;
+        consumed_weight.consume(covariate, observation.weight);
+        consumed_share[covariate] = if consumed_weight.range_complete(covariate, covariate) {
+            1.0
+        } else {
+            consumed_share[covariate] + observation.weight / covariate_statistics[covariate].weight
+        };
+    }
+
+    // Re-add covariates `[lo, hi)` as singleton blocks, in storage order.
+    fn re_add<D: Direction>(
+        lo: usize,
+        hi: usize,
+        partitions: &mut Vec<WeightedPartition>,
+        consumed_share: &[f32],
+        covariate_statistics: &[CovariateStatistic],
+    ) {
+        if !D::IS_INCREASING {
+            add_remaining::<true, _>(lo..hi, partitions, consumed_share, covariate_statistics);
+        } else {
+            add_remaining::<false, _>(
+                (lo..hi).rev(),
+                partitions,
+                consumed_share,
+                covariate_statistics,
+            );
+        }
+    }
+
+    // First arrival in storage order: the per-arrival split-inheritance move on its
+    // containing block, keeping the block's storage-near part.
+    let first_x = if !D::IS_INCREASING {
+        run[0].x
     } else {
-        consumed_share[covariate] + obs.weight / covariate_statistics[covariate].weight
+        run[run.len() - 1].x
     };
-
-    // In which partition does the new observation fall?
-    let (partition_index, (lower, upper)) = find_partition_bounds::<_, _, D>(covariate, partitions);
-    debug_assert!(lower <= covariate && covariate < upper);
-
-    // Store right part of partitions
-    // TODO: Can we avoid this copy? `partitions` needs to be very fast to scan for cdf writing...
+    let (partition_index, (lower, upper)) = find_partition_bounds::<_, _, D>(first_x, partitions);
+    debug_assert!(lower <= first_x && first_x < upper);
     partitions_to_store.extend(partitions.drain(partition_index + 1..));
-
-    // Overwrite partition in which it falls with a new partition that includes the latest
-    // observation
-    let (new_lower, new_upper_inclusive) = match D::IS_INCREASING {
-        false => (lower, covariate),
-        true => (covariate, upper - 1),
+    partitions[partition_index] = if !D::IS_INCREASING {
+        new_partition(lower, first_x, consumed_weight, covariate_statistics)
+    } else {
+        new_partition(first_x, upper - 1, consumed_weight, covariate_statistics)
     };
-    partitions[partition_index] = new_partition(
-        new_lower,
-        new_upper_inclusive,
-        consumed_weight,
-        covariate_statistics,
-    );
-
-    // Pooling toward the left (of sorted or reverse sorted partitions), merging high values
     routines::pool_partitions_from_right_can_reindex::<Decreasing, _>(
         partitions,
         !D::IS_INCREASING,
     );
 
-    // Accelerated extension and pooling
-    match D::IS_INCREASING {
-        false => add_remaining::<true, _>(
-            covariate + 1..upper,
-            partitions,
-            consumed_share,
-            covariate_statistics,
-        ),
-        true => add_remaining::<false, _>(
-            (lower..covariate).rev(),
-            partitions,
-            consumed_share,
-            covariate_statistics,
-        ),
+    // Covariates strictly between `near` and `far` (in storage order: `near` abuts the
+    // stack top, `far` the next stored block) are not on the stack yet: the deferred
+    // remainder of the last split block when `pending_is_remainder`, otherwise an
+    // untouched original block. `partitions_to_store[store_cursor..]` holds the blocks
+    // not yet reached, in storage order.
+    let (mut near, mut far) = if !D::IS_INCREASING {
+        (first_x + 1, upper)
+    } else {
+        (first_x, lower)
+    };
+    let mut pending_is_remainder = true;
+    let mut store_cursor = 0usize;
+
+    for i in 1..run.len() {
+        let observation = if !D::IS_INCREASING {
+            &run[i]
+        } else {
+            &run[run.len() - 1 - i]
+        };
+        let x = observation.x;
+
+        // Advance the stack up to the pending region containing x.
+        while if !D::IS_INCREASING { far <= x } else { x < far } {
+            if pending_is_remainder {
+                let (lo, hi) = if !D::IS_INCREASING {
+                    (near, far)
+                } else {
+                    (far, near)
+                };
+                re_add::<D>(lo, hi, partitions, consumed_share, covariate_statistics);
+            } else {
+                // The pending region is the untouched block just pulled from the store.
+                partitions.push(partitions_to_store[store_cursor - 1].clone());
+            }
+            near = far;
+            far = if !D::IS_INCREASING {
+                partitions_to_store[store_cursor].index
+            } else {
+                debug_assert_eq!(partitions_to_store[store_cursor].index, near);
+                partitions_to_store
+                    .get(store_cursor + 1)
+                    .map_or(0, |block| block.index)
+            };
+            pending_is_remainder = false;
+            store_cursor += 1;
+        }
+
+        // The storage-order position just past the arrival; also the pending region's
+        // near edge once the arrival is on the stack.
+        let past_x = if !D::IS_INCREASING { x + 1 } else { x };
+
+        if pending_is_remainder {
+            // x lies in a deferred remainder: one storage-order stack pass re-adds the
+            // covariates between the stack top and x, and inserts x itself.
+            let (lo, hi) = if !D::IS_INCREASING {
+                (near, past_x)
+            } else {
+                (past_x, near)
+            };
+            re_add::<D>(lo, hi, partitions, consumed_share, covariate_statistics);
+        } else {
+            // x lies in an untouched original block: split-inheritance, exactly like
+            // the first arrival.
+            partitions.push(if !D::IS_INCREASING {
+                new_partition(near, x, consumed_weight, covariate_statistics)
+            } else {
+                new_partition(x, near - 1, consumed_weight, covariate_statistics)
+            });
+            routines::pool_partitions_from_right_can_reindex::<Decreasing, _>(
+                partitions,
+                !D::IS_INCREASING,
+            );
+        }
+        near = past_x;
+        pending_is_remainder = true;
     }
 
-    // Restore right-most partitions (low values)
-    partitions.append(partitions_to_store);
+    // Trailing remainder of the last split block, then the blind restore of the
+    // untouched far side — the per-arrival flow's closing moves.
+    let (lo, hi) = if !D::IS_INCREASING {
+        (near, far)
+    } else {
+        (far, near)
+    };
+    re_add::<D>(lo, hi, partitions, consumed_share, covariate_statistics);
+    partitions.extend(partitions_to_store.drain(store_cursor..));
+    partitions_to_store.clear();
 
     debug_assert!(partitions.is_sorted_by_key(|p| Reverse(p.value)));
 }

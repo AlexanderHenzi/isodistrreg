@@ -216,8 +216,8 @@ fn finalize_for_censoring_only_in_final_threshold<
 ) {
     for observation in &input.observations[data_index..] {
         if observation.observed {
-            routines::classical_pava_update_step::<_, _, D::REVERSE>(
-                observation,
+            routines::update_threshold::<_, _, D::REVERSE>(
+                std::slice::from_ref(observation),
                 &mut consumed_share,
                 &mut consumed_weight,
                 &mut partitions,

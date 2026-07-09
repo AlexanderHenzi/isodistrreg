@@ -362,3 +362,56 @@ fn test_zero_comparisons() {
         ],
     )
 }
+
+/// Direction-mirror consistency on tie-heavy instances: a decreasing fit must agree
+/// with the increasing fit of the negated covariates (rows reversed) up to f32
+/// rounding — the two directions take independent code paths through the PAVA update
+/// loop (including the batched tie-run updates), so this gates them against each
+/// other on data where every threshold carries a long run of tied responses.
+#[test]
+fn tied_response_runs_mirror() {
+    use crate::structures::Increasing;
+    use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
+
+    const TOLERANCE: f32 = 1e-5;
+
+    let mut worst = 0.0f32;
+    for seed in 0..48u64 {
+        let mut rng = StdRng::seed_from_u64(9000 + seed);
+        let n = 60 + (seed as usize % 4) * 60;
+        let levels = [3usize, 10, 40][seed as usize % 3] as f64;
+        let x: Vec<f64> = (0..n).map(|_| rng.random::<f64>()).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&xv| {
+                let t = 0.4 * xv + 0.6 * rng.random::<f64>();
+                (t * levels).floor() / levels
+            })
+            .collect();
+        let w: Vec<f64> = (0..n).map(|_| rng.random_range(0.5..2.0)).collect();
+
+        let negated: Vec<f64> = x.iter().map(|&v| -v).collect();
+        let context_inc = preprocess_uncensored(&negated, &y, &w);
+        let increasing = uncensored::<Increasing, _, _>(&context_inc, &crate::NoProgress);
+        let context_dec = preprocess_uncensored(&x, &y, &w);
+        let decreasing = uncensored::<Decreasing, _, _>(&context_dec, &crate::NoProgress);
+
+        let m = context_dec.unique_covariates.len();
+        assert_eq!(context_inc.unique_covariates.len(), m);
+        assert_eq!(increasing.len(), decreasing.len());
+        let mirrored: Vec<f32> = increasing
+            .chunks_exact(m)
+            .flat_map(|row| row.iter().rev().copied())
+            .collect();
+        for (index, (a, b)) in mirrored.iter().zip(&decreasing).enumerate() {
+            let diff = (a - b).abs();
+            worst = worst.max(diff);
+            assert!(
+                diff <= TOLERANCE,
+                "seed {seed}: |mirrored - decreasing| = {diff:e} at {index}",
+            );
+        }
+    }
+    eprintln!("tied_response_runs_mirror: worst |diff| = {worst:e}");
+}
