@@ -1,5 +1,6 @@
 use crate::structures::{MAX_OBSERVATIONS, Observation};
 use crate::total_order;
+use crate::total_order::stochastic_dominance::censored::propagate_bounds::COLLAPSE_CHECK_MIN_LEN;
 use crate::total_order::structures::CovariateStatistic;
 use bitree::BITree;
 
@@ -146,6 +147,15 @@ pub struct Estimates {
     pub values_row: Vec<f32>,
     /// K-M running state of each (r, s). Indexed identically to `values`.
     pub cold: Vec<SurvivalComputationCold>,
+    /// Minimum reduction length at which the checkpointed kernel mode runs — one
+    /// comparison decides the kernel dispatch. `COLLAPSE_CHECK_MIN_LEN` when the fit's
+    /// censored share is at least 8%, `usize::MAX` (checkpoints never) below that: the
+    /// clip is provably vacuous on uncensored data, so at low censored shares the bounds
+    /// almost never collapse and checkpoint reduces on the long cells are pure overhead
+    /// with no exits to pay for them (measured: 5% censoring nets a ~1% loss, 10% a
+    /// small win). A pure function of the input data, so results stay deterministic and
+    /// host-independent.
+    pub checkpoint_min_len: usize,
     /// Exact-0 completion oracle. Consulted on every cell write so that intervals whose
     /// survival is mathematically exactly 0 are pinned to exactly 0 the moment they
     /// complete, immune to the f32 drift of the running Kaplan-Meier bookkeeping.
@@ -186,6 +196,12 @@ impl Estimates {
             };
             total
         ];
+        let censored_count = observations.iter().filter(|o| !o.observed).count();
+        let checkpoint_min_len = if censored_count * 100 >= observations.len() * 8 {
+            COLLAPSE_CHECK_MIN_LEN
+        } else {
+            usize::MAX
+        };
         // Covariate indices share their u32 with the flag in the top bit; `MAX_OBSERVATIONS`
         // keeps them below it (the largest covariate index is at most `observations.len() - 1`).
         debug_assert!(observations.len() <= MAX_OBSERVATIONS);
@@ -203,6 +219,7 @@ impl Estimates {
             values,
             values_row,
             cold,
+            checkpoint_min_len,
             completion,
             walk_x,
             walk_w,
