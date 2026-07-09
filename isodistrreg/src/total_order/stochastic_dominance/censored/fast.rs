@@ -384,8 +384,10 @@ fn generalized_pava<D: Direction, K: SweepDispatch, X: crate::Float, Y: crate::F
     // absolute round-off, so `remaining_weight` can be non-zero by O(Σw · u_32) even when
     // every observation in the cell has already been applied. Without a guard the K-M
     // step would then divide by a sub-noise-floor value and blow up — see
-    // `weight_noise_floor` for the bound's derivation.
-    let epsilon = weight_noise_floor(input.observations.iter().map(|o| o.weight).sum());
+    // `weight_noise_floor` for the bound's derivation. The total is taken from the
+    // cumulative covariate statistics — the same accumulation the guarded
+    // `total_weight` values are differences of.
+    let epsilon = weight_noise_floor(input.covariate_statistics.last().unwrap().cumulative_weight);
     // Each iteration treats exactly one threshold: its events form one contiguous run
     // (observations sort by response, events before censorings, covariate ascending;
     // thresholds are exactly the unique event responses, so every threshold owns such
