@@ -1010,6 +1010,129 @@ mod differential {
     }
 }
 
+/// One large mixed random instance for the debug-assert battery: in debug builds the
+/// fast algorithm re-validates its invariants on every step (kernel and walk
+/// cross-checks against the scalar reference, partition tiling, mirror coherence,
+/// completion range-maxes, monotonicity, ...), so a single instance combining the
+/// regimes those asserts guard exercises them at a scale the small differential sweeps
+/// cannot reach. The definitional cross-check is far too expensive at this size; release
+/// builds still verify the output is a well-formed isotonic bundle of CDFs.
+///
+/// The generator mixes the regimes deliberately:
+/// - covariate and response each half continuous, half snapped onto coarse grids —
+///   duplicate covariates and long tied-response runs drive the batched updates and the
+///   walk's tie absorption;
+/// - the covariate domain splits into an independent half `[0, 0.5)`, a slightly
+///   positive quarter `[0.5, 0.75)` and a slightly negative quarter `[0.75, 1)` — weak
+///   or adversarial dependence produces the wide pool merges whose long reductions run
+///   the collapse-checkpointed kernels, next to regions whose blocks survive untouched
+///   (blind restores);
+/// - the censoring rate varies smoothly from ~2% to ~55% across the domain with an
+///   extremely censored pocket (97%, containing grid covariates) in `[0.40, 0.45)`, and
+///   the censoring-time shape flips from early censoring (left half) to late censoring
+///   (right half).
+#[test]
+fn large_mixed_stress_instance() {
+    use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
+
+    // Sized for roughly half a CI minute in debug builds (the assert battery makes the
+    // debug fit itself the expensive part; runtime grows ~n^4 through the threshold
+    // count, so resist enlarging).
+    let mut rng = StdRng::seed_from_u64(0x57e55);
+    let n = 1000;
+    let mut xs = Vec::with_capacity(n);
+    let mut ys = Vec::with_capacity(n);
+    let mut observed = Vec::with_capacity(n);
+    let mut weights = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut x: f64 = rng.random();
+        if rng.random_bool(0.5) {
+            x = (x * 25.0).floor() / 25.0;
+        }
+        let noise: f64 = rng.random();
+        let event_time = if x < 0.5 {
+            noise
+        } else if x < 0.75 {
+            0.12 * x + 0.88 * noise
+        } else {
+            0.12 * (1.0 - x) + 0.88 * noise
+        };
+        let censor_probability = if (0.40..0.45).contains(&x) {
+            0.97
+        } else {
+            0.02 + 0.53 * x
+        };
+        let censored = rng.random_bool(censor_probability);
+        let mut y = if censored {
+            let fraction: f64 = rng.random();
+            event_time
+                * if x < 0.5 {
+                    fraction * fraction
+                } else {
+                    fraction.sqrt()
+                }
+        } else {
+            event_time
+        };
+        if rng.random_bool(0.5) {
+            y = (y * 40.0).floor() / 40.0;
+        }
+        xs.push(x);
+        ys.push(y);
+        observed.push(!censored);
+        weights.push(rng.random_range(0.5..2.0));
+    }
+
+    let context = preprocess(&xs, &ys, &observed, &weights).unwrap();
+    // Anchor the instance in the regimes the asserts guard, so future generator edits
+    // cannot silently drop coverage: enough covariates for checkpoint-length reductions,
+    // enough censoring for the checkpointed kernel mode (>= 8% share), and tied
+    // responses so the batched updates take their multi-arrival paths.
+    let n_covariate = context.n_covariate();
+    let n_threshold = context.n_threshold();
+    let events = context.observations.iter().filter(|o| o.observed).count();
+    let censored_kept = context.n() - events;
+    assert!(
+        n_covariate > 450,
+        "generator drifted: {n_covariate} covariates"
+    );
+    assert!(
+        n_threshold > 280,
+        "generator drifted: {n_threshold} thresholds"
+    );
+    assert!(
+        censored_kept * 100 >= context.n() * 8,
+        "generator drifted: checkpointed kernel mode not enabled",
+    );
+    assert!(n_threshold < events, "generator drifted: no tied responses");
+
+    let cdfs = fast::algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
+
+    assert_eq!(cdfs.len(), n_threshold * n_covariate);
+    // Well-formedness, meaningful in release builds too: values are probabilities, each
+    // covariate's column is a CDF (non-decreasing in the threshold), and each row of the
+    // increasing fit is antitonic (non-increasing in the covariate) — both up to the
+    // same f32 noise allowance as the debug-side monotonicity asserts.
+    for (t, row) in cdfs.chunks_exact(n_covariate).enumerate() {
+        for (i, &value) in row.iter().enumerate() {
+            assert!((0.0..=1.0).contains(&value), "cdfs[{t}][{i}] = {value}");
+            if i > 0 {
+                assert!(
+                    value <= row[i - 1] + 1e-5,
+                    "row {t} increases along covariates at {i}",
+                );
+            }
+            if t > 0 {
+                assert!(
+                    value >= cdfs[(t - 1) * n_covariate + i] - 1e-5,
+                    "column {i} decreases across thresholds at {t}",
+                );
+            }
+        }
+    }
+}
+
 /// Regression test for exact-1.0 pinning at *intermediate* thresholds
 /// (`CompletionIndex` interleaved into the fast algorithm; the deleted
 /// `pin_completed_mass` post-pass only repaired the final threshold row).
