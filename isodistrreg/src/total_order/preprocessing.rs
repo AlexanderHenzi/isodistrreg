@@ -255,8 +255,22 @@ pub fn preprocess<X: Float, Y: Float, S: Ord, W: Float, F: Fn(usize) -> S>(
 /// remaining censored observation is snapped to the latest threshold at or below its
 /// response, which leaves every interval Kaplan-Meier estimator unchanged (with the
 /// events-before-censorings tie convention, censored mass at a threshold stays at risk
-/// through that threshold's events); adjacent censored observations at the same covariate
-/// are merged.
+/// through that threshold's events).
+///
+/// Censored observations at the same covariate with no event between their responses —
+/// equivalently, with the same snapped threshold — are merged into one observation per
+/// (threshold, covariate), regardless of how other covariates' observations interleave
+/// with them in the response order. The merge is exact for every estimator downstream: a
+/// censored observation never carries a value, it only leaves the at-risk set, and the
+/// at-risk weight is read only at event folds — so all of a threshold gap's censored
+/// observations act between the same two events, where equal covariates make them
+/// indistinguishable from their combined weight. (The hazard-rate pipeline folds censored
+/// observations multiplicatively per covariate, where the same-covariate factors
+/// telescope: (1−w₁/R)·(1−w₂/(R−w₁)) = 1−(w₁+w₂)/R.) A censored pair with an event
+/// between them snaps to different thresholds and is never merged. Together with the
+/// per-(threshold, covariate) event dedup this bounds the observation stream by 2·t·m,
+/// which is what keeps the fits' per-cell walk work bounded by the pool sweeps' O(t·m³)
+/// instead of scaling with the raw censored count.
 pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
     x: &[X],
     y: &[Y],
@@ -317,58 +331,60 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
         let capacity_upper_bound = n - first_uncensored_index;
         let mut obs = Vec::with_capacity(capacity_upper_bound);
         let mut thresholds = Vec::with_capacity(capacity_upper_bound);
+        debug_assert!(items[first_uncensored_index].observed);
 
-        // Simultaneously deduplicate, copy over with index, and collect unique thresholds
-
-        // First item
-        let first = &items[first_uncensored_index];
-        thresholds.push(first.y);
-        obs.push(Observation {
-            x: first.x,
-            y: 0,
-            observed: true,
-            weight: 0.0, // placeholder; finalized from `last_w_accum`
-        });
-        debug_assert!(first.observed);
-        // Accumulator for the in-progress observation's weight in the caller's W precision.
-        // Invariant: while the loop is running, `last_w_accum` holds the running W-precision
-        // sum for `obs.last()`. Its `weight` field carries a 0.0 placeholder that is replaced
-        // by the narrowed accumulator when the observation is finalized — either when a new
-        // observation is pushed, or after the loop ends.
-        let mut last_w_accum: W = first.weight;
-        // Remaining items
-        for item in &items[first_uncensored_index + 1..] {
-            let response_equal = item.y == *thresholds.last().unwrap();
-            let last_observation = obs.last().unwrap();
-            let censoring_equal = item.observed == last_observation.observed;
-            let covariate_equal = item.x == last_observation.x;
-
-            let is_duplicate = response_equal && censoring_equal && covariate_equal;
-            // Adjacent (in response order) censored observations at the same covariate
-            // have no event between them, so they share the threshold index and only
-            // their combined weight matters for every interval Kaplan-Meier estimator.
-            let is_mergeable_censored =
-                !item.observed && !last_observation.observed && covariate_equal;
-            if is_duplicate || is_mergeable_censored {
-                last_w_accum = last_w_accum + item.weight;
-            } else {
-                // Finalize the previous in-progress observation: narrow once.
-                obs.last_mut().unwrap().weight = last_w_accum.to_f32().unwrap();
-                if !response_equal && item.observed {
-                    thresholds.push(item.y);
-                }
-                obs.push(Observation {
-                    x: item.x,
-                    // If an observation is censored, we point to the previous (lower) threshold value here
-                    y: thresholds.len() - 1,
-                    observed: item.observed,
-                    weight: 0.0, // placeholder; finalized from `last_w_accum`
-                });
-                last_w_accum = item.weight;
+        // From the first event on, the stream alternates maximal runs of two kinds: one
+        // threshold's events (equal response, covariates ascending, duplicates adjacent)
+        // and one threshold gap's censored observations (everything until the next event,
+        // sorted by raw response then covariate, so equal covariates need not be
+        // adjacent). Both kinds aggregate per covariate, so one run = one batch: gather
+        // (covariate, weight) pairs with weights in W precision, sort the censored batch
+        // by covariate to make its interleaved duplicates adjacent, merge equal
+        // covariates (narrowing each total to f32 once), and emit under the current
+        // threshold index — which an event run has just pushed, and a censored run
+        // inherits as its snapping target.
+        let mut scratch: Vec<(X, W)> = Vec::new();
+        for run in items[first_uncensored_index..]
+            .chunk_by(|a, b| a.observed == b.observed && (!a.observed || a.y == b.y))
+        {
+            let observed = run[0].observed;
+            if observed {
+                thresholds.push(run[0].y);
             }
+            for item in run {
+                // Adjacent duplicates (all event duplicates, and censored duplicates
+                // tied on the raw response) accumulate immediately.
+                match scratch.last_mut() {
+                    Some((x, weight)) if *x == item.x => *weight = *weight + item.weight,
+                    _ => scratch.push((item.x, item.weight)),
+                }
+            }
+            if !observed {
+                scratch.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+            }
+            let y = thresholds.len() - 1;
+            let mut batch = scratch.drain(..);
+            let (mut covariate, mut w_accum) = batch.next().unwrap();
+            for (x, weight) in batch {
+                if x == covariate {
+                    w_accum = w_accum + weight;
+                } else {
+                    obs.push(Observation {
+                        x: covariate,
+                        y,
+                        observed,
+                        weight: w_accum.to_f32().unwrap(),
+                    });
+                    (covariate, w_accum) = (x, weight);
+                }
+            }
+            obs.push(Observation {
+                x: covariate,
+                y,
+                observed,
+                weight: w_accum.to_f32().unwrap(),
+            });
         }
-        // Finalize the last in-progress observation.
-        obs.last_mut().unwrap().weight = last_w_accum.to_f32().unwrap();
 
         (obs, thresholds)
     };
@@ -663,6 +679,137 @@ mod test_censored {
                 thresholds: vec![4.0],
             }
         );
+    }
+
+    #[test]
+    fn test_censored_duplicates_merge_across_interleaving() {
+        // Censored 2.3 and 2.7 at covariate 5.0 with a censored 2.5 at covariate 9.0
+        // sorting between them: no event lies in (2.3, 2.7], so all three snap to the
+        // threshold of the event at 2.0 and the covariate-5.0 pair merges despite not
+        // being adjacent in the response order. Dyadic weights keep every sum exact.
+        let context = preprocess(
+            &[5.0, 5.0, 9.0, 5.0],
+            &[2.0, 2.3, 2.5, 2.7],
+            &[true, false, false, false],
+            &[1.0, 0.25, 1.5, 0.5],
+        )
+        .unwrap();
+        assert_eq!(
+            context,
+            CensoredContext {
+                observations: vec![
+                    Observation {
+                        x: 0,
+                        y: 0,
+                        observed: true,
+                        weight: 1.0,
+                    },
+                    Observation {
+                        x: 0,
+                        y: 0,
+                        observed: false,
+                        weight: 0.75,
+                    },
+                    Observation {
+                        x: 1,
+                        y: 0,
+                        observed: false,
+                        weight: 1.5,
+                    },
+                ],
+                covariate_statistics: vec![
+                    CovariateStatistic {
+                        weight: 1.75,
+                        cumulative_weight: 1.75,
+                    },
+                    CovariateStatistic {
+                        weight: 1.5,
+                        cumulative_weight: 3.25,
+                    },
+                ],
+                unique_covariates: vec![5.0, 9.0],
+                thresholds: vec![2.0],
+            }
+        );
+    }
+
+    #[test]
+    fn test_censored_duplicates_split_by_event() {
+        // Same covariate pair, but now an event at 2.5 lies in (2.3, 2.7]: the two
+        // censored observations snap to different thresholds — the 2.3 one leaves the
+        // risk set before the 2.5 event, the 2.7 one after — and must NOT merge.
+        let context = preprocess(
+            &[5.0, 5.0, 9.0, 5.0],
+            &[2.0, 2.3, 2.5, 2.7],
+            &[true, false, true, false],
+            &[1.0, 0.25, 1.5, 0.5],
+        )
+        .unwrap();
+        assert_eq!(
+            context,
+            CensoredContext {
+                observations: vec![
+                    Observation {
+                        x: 0,
+                        y: 0,
+                        observed: true,
+                        weight: 1.0,
+                    },
+                    Observation {
+                        x: 0,
+                        y: 0,
+                        observed: false,
+                        weight: 0.25,
+                    },
+                    Observation {
+                        x: 1,
+                        y: 1,
+                        observed: true,
+                        weight: 1.5,
+                    },
+                    Observation {
+                        x: 0,
+                        y: 1,
+                        observed: false,
+                        weight: 0.5,
+                    },
+                ],
+                covariate_statistics: vec![
+                    CovariateStatistic {
+                        weight: 1.75,
+                        cumulative_weight: 1.75,
+                    },
+                    CovariateStatistic {
+                        weight: 1.5,
+                        cumulative_weight: 3.25,
+                    },
+                ],
+                unique_covariates: vec![5.0, 9.0],
+                thresholds: vec![2.0, 2.5],
+            }
+        );
+    }
+
+    #[test]
+    fn test_interleaved_and_adjacent_censored_duplicates_agree() {
+        // The merge key is (snapped threshold, covariate): moving a censored response
+        // within its threshold gap (2.7 -> 2.3 here, no event between either way) must
+        // not change the preprocessed context at all.
+        let interleaved = preprocess(
+            &[5.0, 5.0, 9.0, 5.0],
+            &[2.0, 2.3, 2.5, 2.7],
+            &[true, false, false, false],
+            &[1.0, 0.25, 1.5, 0.5],
+        )
+        .unwrap();
+        let adjacent = preprocess(
+            &[5.0, 5.0, 9.0, 5.0],
+            &[2.0, 2.3, 2.5, 2.3],
+            &[true, false, false, false],
+            &[1.0, 0.25, 1.5, 0.5],
+        )
+        .unwrap();
+        assert_eq!(interleaved, adjacent);
     }
 
     #[test]
