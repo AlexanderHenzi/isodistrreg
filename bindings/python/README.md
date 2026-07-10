@@ -8,8 +8,19 @@ references.
 
 ## Installation
 
-1. Download the right `.whl` for your platform from the artifacts of a recent [GitHub Actions](https://github.com/AlexanderHenzi/isodistrreg/actions) run artifacts
-2. Run `pip install /path/to/wheel/xxx.whl`
+```
+pip install isodistrreg
+```
+
+Pre-built wheels are provided for Linux, macOS, and Windows on CPython 3.13+.
+On other platforms pip builds from the source distribution, which requires a
+[Rust toolchain](https://rustup.rs).
+
+The scikit-learn–compatible estimator is available through an optional extra:
+
+```
+pip install "isodistrreg[scikit-learn]"
+```
 
 ## Examples
 
