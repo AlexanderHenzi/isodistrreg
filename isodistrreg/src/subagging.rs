@@ -447,8 +447,12 @@ macro_rules! impl_idr_fit_for {
                                 .copy_from_slice(&x[sample * dimension..(sample + 1) * dimension]);
                             sub_y[i] = y[sample];
                         }
-                        assert!(sub_x.iter().all(|v| !v.is_nan()));
-                        assert!(sub_y.iter().all(|v| !v.is_nan()));
+                        // Internal invariant (the copy loop filled every slot of the
+                        // NaN-seeded buffers) — debug-only: the scan is O(subsample ·
+                        // dimension) per subsample, and user-facing NaN rejection already
+                        // happened in `validate` at the fit boundary.
+                        debug_assert!(sub_x.iter().all(|v| !v.is_nan()));
+                        debug_assert!(sub_y.iter().all(|v| !v.is_nan()));
 
                         let mut sub_y_observed = None;
                         if let Some(observed) = y_observed {
