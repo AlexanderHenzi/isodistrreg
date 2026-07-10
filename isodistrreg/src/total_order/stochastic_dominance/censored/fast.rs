@@ -28,8 +28,9 @@ use sweep::{SweepArgs, SweepDispatch};
 ///
 /// - observations sorted by threshold index, each threshold's events forming one
 ///   contiguous run (strictly ascending covariate, duplicates aggregated) before the
-///   threshold's censored observations — the run gathering, the batched update, and the
-///   walk ranges of `update_value` all assume this order;
+///   threshold's censored observations (also strictly ascending covariate, merged per
+///   (threshold, covariate) — what bounds the walk stream by 2·t·m) — the run gathering,
+///   the batched update, and the walk ranges of `update_value` all assume this order;
 /// - the first observation is an event at threshold 0 and every threshold owns at least
 ///   one event (thresholds are exactly the unique event responses), so the threshold
 ///   loop consumes every observation;
@@ -77,6 +78,13 @@ fn assert_preprocessing_contract<X: crate::Float, Y: crate::Float>(
                 assert!(
                     a.x < b.x,
                     "a threshold's events must be strictly ascending in covariate",
+                );
+            }
+            if !a.observed && !b.observed {
+                assert!(
+                    a.x < b.x,
+                    "a threshold's censored observations must be merged per covariate \
+                     and strictly ascending",
                 );
             }
         }
