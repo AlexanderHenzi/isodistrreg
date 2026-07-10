@@ -1,0 +1,118 @@
+name: Release
+
+# Publishes the Python package to PyPI via Trusted Publishing (OIDC).
+#
+# Triggers:
+#   * Publishing a GitHub Release (the intended path — cut a release tagged
+#     `vX.Y.Z` after the version-bump PR is merged).
+#   * Manual dispatch, as a backstop for re-runs.
+#
+# Requires a PyPI Trusted Publisher configured for this repo with:
+#   workflow = release.yml, environment = pypi.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.3.2
+      - name: Build sdist
+        working-directory: bindings/python
+        run: uv run --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  build_wheels:
+    name: Build wheel (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: "2_34"
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "2_34"
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          working-directory: bindings/python
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --out ${{ github.workspace }}/dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-wheel-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: [build_sdist, build_wheels]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/isodistrreg
+    permissions:
+      id-token: write # OIDC token for Trusted Publishing
+      contents: read
+    steps:
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+      - uses: astral-sh/setup-uv@v8.3.2
+      - name: Check metadata
+        run: uv run --with twine twine check --strict dist/*
+      - name: Verify release tag matches built version
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          SDIST=$(ls dist/isodistrreg-*.tar.gz | head -1)
+          BUILT_VERSION=$(basename "$SDIST" .tar.gz | sed 's/^isodistrreg-//')
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$BUILT_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: release tag ($TAG_VERSION) != built version ($BUILT_VERSION)"
+            echo "Bump the version or fix the tag before releasing."
+            exit 1
+          fi
+          echo "Version check passed: $BUILT_VERSION"
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          print-hash: true
