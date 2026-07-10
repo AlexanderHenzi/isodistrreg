@@ -15,9 +15,9 @@ osqp = { workspace = true, optional = true }
 itertools = { workspace = true }
 rayon = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
-rand = { version = "0.10.1", optional = true }
-bitree = "1.0"
-num-traits = "0.2"
+rand = { version = "0.10.2", optional = true }
+bitree = "1.0.1"
+num-traits = "0.2.19"
 
 [features]
 parallel = ["rayon"]
@@ -26,4 +26,4 @@ subagging = ["rand"]
 
 [dev-dependencies]
 approx = "0.5.1"
-rand = "0.10.1"
+rand = "0.10.2"

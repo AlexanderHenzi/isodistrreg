@@ -1,6 +1,6 @@
 [project]
 name = "isodistrreg"
-version = "0.5.1"
+version = "0.5.2"
 description = "Isotonic Distributional Regression (IDR)"
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
@@ -46,7 +46,7 @@ scikit-learn = [
 [dependency-groups]
 dev = [
     "black>=26.5.1",
-    "mypy>=2.1.0",
+    "mypy>=2.2.0",
     "pre-commit>=4.6.0",
 ]
 test = [
