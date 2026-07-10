@@ -23,5 +23,5 @@ extendr-api = "0.9.0"
 isodistrreg = { workspace = true, features = ["parallel", "partial-order", "serde", "subagging"] }
 itertools = { workspace = true }
 osqp = { workspace = true }
-indicatif = "0.18"
-crossbeam-channel = "0.5"
+indicatif = "0.18.6"
+crossbeam-channel = "0.5.16"

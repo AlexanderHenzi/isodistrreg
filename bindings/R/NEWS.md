@@ -1,3 +1,11 @@
+# isodistrreg 0.5.2
+
+* Faster fitting and prediction, especially for censored and larger datasets.
+* Fixed an incorrect fit when data mixed negative and positive zero (`-0`/`0`).
+* Fixed a prediction rounding bug that could break quantile monotonicity in the
+  covariate.
+* Updated Rust and R build dependencies.
+
 # isodistrreg 0.5.1
 
 * `idrbag()` now returns a proper `"idr"` prediction object and validates its

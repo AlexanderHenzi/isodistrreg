@@ -90,7 +90,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: bindings/python/uv.lock
@@ -107,7 +107,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: bindings/python/uv.lock
@@ -130,7 +130,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
       - name: Build sdist
         working-directory: bindings/python
         run: uv run --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
@@ -188,7 +188,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
       - name: Download all dist artifacts
         uses: actions/download-artifact@v8
         with:
