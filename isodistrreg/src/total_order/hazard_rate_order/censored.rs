@@ -72,7 +72,9 @@ pub fn algorithm<D: Direction, X: crate::Float, Y: crate::Float>(
     let mut survival: Vec<_> = {
         // Compute hazard rates in a sparse way
         let first_observation = &observations[data_index];
-        assert!(first_observation.observed);
+        // Preprocessing contract (the first observation is an event) — debug-only, like
+        // the equivalent check in the stochastic-dominance fast path.
+        debug_assert!(first_observation.observed);
         estimators[first_observation.x] -= first_observation.weight / at_risk[first_observation.x];
         if data_index + 1 == last_positive[first_observation.x] {
             // This event consumes the group's whole remaining mass — death, exactly.

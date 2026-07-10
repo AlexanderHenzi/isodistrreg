@@ -293,7 +293,9 @@ pub fn median(elements: impl IntoIterator<Item = f64>) -> f64 {
 
 #[must_use]
 pub fn select(mut elements: Vec<f64>, index: usize) -> f64 {
-    assert!(index < elements.len());
+    // Debug-only: fires once per recursion level; in release an out-of-range index still
+    // panics on the slice indexing below rather than corrupting silently.
+    debug_assert!(index < elements.len());
 
     match elements.len() {
         0 => unreachable!(),
@@ -391,7 +393,10 @@ fn median5(mut a: f64, mut b: f64, mut c: f64, mut d: f64, mut e: f64) -> f64 {
 #[must_use]
 #[inline(always)]
 pub fn select4(mut a: f64, mut b: f64, mut c: f64, mut d: f64, index: usize) -> f64 {
-    assert!(index < 4);
+    // Debug-only: these leaf selectors run once per 4-element group of every quickselect
+    // (O(n) per call, O(m²) medians in the median functional); the `match` below still
+    // hits `unreachable!()` on an invalid index in release.
+    debug_assert!(index < 4);
 
     sort2(&mut a, &mut b); // a <= b
     sort2(&mut c, &mut d); // c <= d
@@ -411,7 +416,8 @@ pub fn select4(mut a: f64, mut b: f64, mut c: f64, mut d: f64, index: usize) -> 
 #[must_use]
 #[inline(always)]
 pub fn select3(mut a: f64, mut b: f64, mut c: f64, index: usize) -> f64 {
-    assert!(index < 3);
+    // Debug-only: see `select4`.
+    debug_assert!(index < 3);
 
     // (0,1), (1,2), (0,1)
     sort2(&mut a, &mut b);
@@ -429,7 +435,8 @@ pub fn select3(mut a: f64, mut b: f64, mut c: f64, index: usize) -> f64 {
 #[must_use]
 #[inline(always)]
 pub fn select2(a: f64, b: f64, index: usize) -> f64 {
-    assert!(index < 2);
+    // Debug-only: see `select4`.
+    debug_assert!(index < 2);
 
     match index {
         0 => a.min(b),
