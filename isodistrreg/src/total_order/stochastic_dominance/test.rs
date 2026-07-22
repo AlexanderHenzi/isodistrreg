@@ -25,7 +25,7 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
 
     {
         // Uncensored
-        validate(x.chunks_exact(1), &y, None, Some(&weight)).unwrap();
+        validate(x.as_chunks::<1>().0, &y, None, Some(&weight)).unwrap();
         let context = preprocess_uncensored(&x, &y, &weight);
         let cdfs = uncensored::<Increasing, _, _>(&context, &crate::NoProgress);
         assert_eq!(context.unique_covariates.len(), N_COVARIATE);
@@ -39,7 +39,13 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
 
         // Uncensored, reverse ordering
         let reversed_covariates = x.iter().map(|v| -v).collect::<Vec<_>>();
-        validate(reversed_covariates.chunks_exact(1), &y, None, Some(&weight)).unwrap();
+        validate(
+            reversed_covariates.as_chunks::<1>().0,
+            &y,
+            None,
+            Some(&weight),
+        )
+        .unwrap();
         let context_rev = preprocess_uncensored(&reversed_covariates, &y, &weight);
         let reversed_cdfs = uncensored::<Decreasing, _, _>(&context_rev, &crate::NoProgress);
         assert_eq!(context_rev.unique_covariates.len(), N_COVARIATE);
@@ -61,7 +67,7 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
     {
         // Censored
         let observed = [true; N];
-        validate(x.chunks_exact(1), &y, Some(&observed), Some(&weight)).unwrap();
+        validate(x.as_chunks::<1>().0, &y, Some(&observed), Some(&weight)).unwrap();
 
         // Definition
         let context = preprocess_censored(&x, &y, &observed, &weight).unwrap();

@@ -277,7 +277,7 @@ pub fn preprocess_censored<X: Float, Y: Float, W: Float>(
     observed: &[bool],
     weights: &[W],
 ) -> Result<CensoredContext<X, Y>, Error> {
-    let n = validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
+    let n = validate(x.as_chunks::<1>().0, y, Some(observed), Some(weights))?;
 
     let (observations_response_sorted, thresholds) = {
         // Sort packed values rather than argsort indices: the comparator then reads its

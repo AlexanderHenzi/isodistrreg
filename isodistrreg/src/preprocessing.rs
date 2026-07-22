@@ -1,8 +1,8 @@
 use crate::Float;
 use crate::error::Error;
 
-pub fn validate<'a, X: Float, Y: Float, W: Float>(
-    covariates: impl Iterator<Item = &'a [X]>,
+pub fn validate<X: Float, Y: Float, W: Float>(
+    covariates: impl IntoIterator<Item = impl AsRef<[X]>>,
     responses: &[Y],
     censoring: Option<&[bool]>,
     weights: Option<&[W]>,
@@ -10,7 +10,7 @@ pub fn validate<'a, X: Float, Y: Float, W: Float>(
     let n = {
         let mut i = 0;
         for vs in covariates {
-            if vs.iter().any(|v| !v.is_finite()) {
+            if vs.as_ref().iter().any(|v| !v.is_finite()) {
                 return Err(Error::NonFiniteFloats);
             }
             i += 1;

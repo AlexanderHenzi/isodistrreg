@@ -262,7 +262,7 @@ mod test {
         expected: [[f64; N_COVARIATE]; N_THRESHOLD],
     ) {
         let expected_flat: Vec<_> = expected.iter().flatten().copied().collect();
-        validate(x.chunks_exact(1), &y, None, Some(&weight)).unwrap();
+        validate(x.as_chunks::<1>().0, &y, None, Some(&weight)).unwrap();
         let context = preprocess_uncensored(&x, &y, &weight);
         let cdfs = algorithm::<Increasing, _, _>(&context, &crate::NoProgress);
         assert_eq!(context.unique_covariates.len(), N_COVARIATE);

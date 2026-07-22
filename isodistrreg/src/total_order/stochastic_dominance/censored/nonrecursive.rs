@@ -13,7 +13,7 @@ pub fn algorithm(
     observed: &[bool],
     weight: &[f64],
 ) -> Result<((usize, usize), Vec<f64>), Error> {
-    validate(x.chunks_exact(1), y, Some(observed), Some(weight))?;
+    validate(x.as_chunks::<1>().0, y, Some(observed), Some(weight))?;
 
     // Check that covariate and responses are unique
     assert_eq!(
@@ -207,7 +207,7 @@ fn format_censored(
     weights: &[f64],
 ) -> Result<AlgorithmInput, Error> {
     validate(
-        covariate.chunks_exact(1),
+        covariate.as_chunks::<1>().0,
         response,
         Some(observed),
         Some(weights),
@@ -292,7 +292,7 @@ pub fn algorithm_single<D: Direction, EM: ExecutionMode>(
     observed: &[bool],
     weights: &[f64],
 ) -> Result<Vec<f64>, Error> {
-    validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
+    validate(x.as_chunks::<1>().0, y, Some(observed), Some(weights))?;
 
     let PreprocessingResult {
         below_threshold,
@@ -395,7 +395,7 @@ fn format_censored_single(
     observed: &[bool],
     weights: &[f64],
 ) -> Result<PreprocessingResult, Error> {
-    validate(x.chunks_exact(1), y, Some(observed), Some(weights))?;
+    validate(x.as_chunks::<1>().0, y, Some(observed), Some(weights))?;
 
     // Zero-weight observations are dropped before anything is aggregated — same
     // contract as `format_censored`.

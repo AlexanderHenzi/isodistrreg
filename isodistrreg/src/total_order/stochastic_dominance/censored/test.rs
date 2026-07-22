@@ -23,7 +23,7 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
     // fast). Done once, then reused. The narrow happens through the literal value's f64
     // representation, so it matches what `as f32` produces from the algorithm's f64 inputs.
     let expected_flat_f32: Vec<f32> = expected_flat.iter().map(|&v| v as f32).collect();
-    validate(x.chunks_exact(1), &y, Some(&observed), Some(&weight)).unwrap();
+    validate(x.as_chunks::<1>().0, &y, Some(&observed), Some(&weight)).unwrap();
 
     fn unique_with_filter_sort<const N: usize>(vs: &[f64; N], filter: &[bool; N]) -> Vec<f64> {
         let mut filtered: Vec<_> = vs

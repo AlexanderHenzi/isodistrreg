@@ -61,7 +61,7 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
         settings: Self::Config,
         progress: &dyn ProgressTracker,
     ) -> Result<Self, Error> {
-        let n = validate(covariates.chunks_exact(1), responses, censoring, weights)?;
+        let n = validate(covariates.as_chunks::<1>().0, responses, censoring, weights)?;
 
         let mut weights_allocation = None;
         let weights_to_use = weights.unwrap_or_else(|| {
