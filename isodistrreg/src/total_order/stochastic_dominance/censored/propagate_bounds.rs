@@ -93,6 +93,7 @@ pub trait Kernel {
     /// cross-check every `apply`/`walk_scan` result of a non-reference kernel against the
     /// scalar one at the callsites — bit-equality there is what makes fit results
     /// independent of the host's SIMD level.
+    #[cfg(debug_assertions)]
     const IS_REFERENCE: bool = false;
 
     /// The bound reduction. `CHECKED` enables the collapse checkpoints (see
@@ -156,6 +157,7 @@ fn walk_scan_scalar(
 pub struct ScalarKernel;
 
 impl Kernel for ScalarKernel {
+    #[cfg(debug_assertions)]
     const IS_REFERENCE: bool = true;
 
     #[inline(always)]
