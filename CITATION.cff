@@ -1,0 +1,89 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite the article under
+  "preferred-citation". To refer to the algorithm for the efficient
+  computation of isotonic distributional regression, or to the estimator
+  for right-censored responses (S-IDR), please cite the corresponding
+  entry under "references".
+title: "isodistrreg: Isotonic Distributional Regression"
+abstract: >-
+  Distributional regression under stochastic order restrictions for numeric
+  and binary response variables and partially ordered covariates, including
+  right-censored responses via Survival-IDR. Implemented in Rust, with
+  bindings for Python and R.
+type: software
+version: 0.5.2
+date-released: "2026-07-10"
+license: GPL-2.0-or-later
+repository-code: "https://github.com/AlexanderHenzi/isodistrreg"
+keywords:
+  - statistics
+  - regression
+  - distributional
+  - isotonic
+  - survival
+authors:
+  - family-names: Heuvel
+    name-particle: van den
+    given-names: Bram
+    email: bram.vandenheuvel@stat.math.ethz.ch
+  - family-names: Henzi
+    given-names: Alexander
+    email: henzi.alexander@gmail.com
+  - family-names: Bladt
+    given-names: Martin
+    email: martinbladt@math.ku.dk
+  - family-names: Ziegel
+    given-names: Johanna
+    email: johanna.ziegel@stat.math.ethz.ch
+preferred-citation:
+  type: article
+  title: "Isotonic distributional regression"
+  authors:
+    - family-names: Henzi
+      given-names: Alexander
+    - family-names: Ziegel
+      given-names: Johanna
+    - family-names: Gneiting
+      given-names: Tilmann
+  journal: >-
+    Journal of the Royal Statistical Society: Series B (Statistical
+    Methodology)
+  year: 2021
+  volume: 83
+  issue: 5
+  start: 963
+  end: 993
+  doi: 10.1111/rssb.12450
+references:
+  - type: article
+    title: >-
+      Accelerating the pool-adjacent-violators algorithm for isotonic
+      distributional regression
+    authors:
+      - family-names: Henzi
+        given-names: Alexander
+      - family-names: Moesching
+        given-names: Alexandre
+      - family-names: Duembgen
+        given-names: Lutz
+    journal: "Methodology and Computing in Applied Probability"
+    year: 2022
+    doi: 10.1007/s11009-022-09937-2
+  - type: article
+    title: "Survival Isotonic Distributional Regression"
+    authors:
+      - family-names: Bladt
+        given-names: Martin
+      - family-names: Henzi
+        given-names: Alexander
+      - family-names: Heuvel
+        name-particle: van den
+        given-names: Bram
+      - family-names: Ziegel
+        given-names: Johanna
+    year: 2026
+    month: 8
+    doi: 10.48550/arXiv.2608.02914
+    url: "https://arxiv.org/abs/2608.02914"
+    notes: "arXiv preprint arXiv:2608.02914"
