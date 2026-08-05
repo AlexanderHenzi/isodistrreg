@@ -4,7 +4,7 @@ bibentry(
   bibtype      = "Article",
   title        = "Isotonic distributional regression",
   author       = c(person("Alexander", "Henzi"),
-                   person("Johanna F", "Ziegel"),
+                   person("Johanna", "Ziegel"),
                    person("Tilmann", "Gneiting")),
   journal      = "Journal of the Royal Statistical Society: Series B (Statistical Methodology)",
   year         = "2021",
@@ -12,7 +12,7 @@ bibentry(
   number       = "5",
   pages        = "963-993",
   doi = "https://doi.org/10.1111/rssb.12450",
-  textVersion = "Henzi, A., Ziegel, J.F. and Gneiting, T. (2021), Isotonic distributional regression. J R Stat Soc Series B, 83: 963-993. https://doi.org/10.1111/rssb.12450"
+  textVersion = "Henzi, A., Ziegel, J. and Gneiting, T. (2021), Isotonic distributional regression. J R Stat Soc Series B, 83: 963-993. https://doi.org/10.1111/rssb.12450"
 )
 
 bibentry(
@@ -26,4 +26,18 @@ bibentry(
   journal      = "Methodology and computing in applied probability",
   textVersion  = "Henzi, A., Moesching, A. & Duembgen, L. Accelerating the Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression. Methodol Comput Appl Probab (2022). https://doi.org/10.1007/s11009-022-09937-2",
   header = "To refer to the algorithm for the efficient computation of isotonic distributional regression, please cite:"
+)
+
+bibentry(
+  bibtype      = "Misc",
+  title        = "Survival Isotonic Distributional Regression",
+  author       = c(person("Martin", "Bladt"),
+                   person("Alexander", "Henzi"),
+                   person("Bram", "van den Heuvel"),
+                   person("Johanna", "Ziegel")),
+  year         = "2026",
+  note         = "arXiv:2608.02914",
+  doi          = "10.48550/arXiv.2608.02914",
+  textVersion  = "Bladt, M., Henzi, A., van den Heuvel, B. and Ziegel, J. (2026). Survival Isotonic Distributional Regression. arXiv:2608.02914. https://doi.org/10.48550/arXiv.2608.02914",
+  header = "To refer to the estimator for right-censored responses (S-IDR), please cite:"
 )

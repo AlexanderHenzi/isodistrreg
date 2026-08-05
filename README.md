@@ -116,7 +116,7 @@ example. Partial-order support lives behind an optional feature in the Rust crat
 
 ## References
 
-Henzi, A., Ziegel, J.F. and Gneiting, T. (2021). Isotonic distributional
+Henzi, A., Ziegel, J. and Gneiting, T. (2021). Isotonic distributional
 regression. *J R Stat Soc Series B*, 83: 963–993.
 <https://doi.org/10.1111/rssb.12450>
 
@@ -124,5 +124,9 @@ Henzi, A., Moesching, A. and Duembgen, L. (2022). Accelerating the
 Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression.
 *Methodol Comput Appl Probab*.
 <https://doi.org/10.1007/s11009-022-09937-2>
+
+Bladt, M., Henzi, A., van den Heuvel, B. and Ziegel, J. (2026). Survival
+Isotonic Distributional Regression. *arXiv preprint* arXiv:2608.02914.
+<https://arxiv.org/abs/2608.02914>
 
 <sub>Figures reproduced by [`doc/make_figures.py`](doc/make_figures.py) — needs the Python bindings plus `numpy`, `scipy` and `matplotlib`.</sub>

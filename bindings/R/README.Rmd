@@ -121,9 +121,11 @@ hist(pitIdr, main = "PIT of IDR calibrated forecasts", freq = FALSE)
 
 ## References
 
-Henzi, A., Ziegel, J.F. and Gneiting, T. (2021), Isotonic distributional regression. J R Stat Soc Series B, 83: 963-993. https://doi.org/10.1111/rssb.12450
+Henzi, A., Ziegel, J. and Gneiting, T. (2021), Isotonic distributional regression. J R Stat Soc Series B, 83: 963-993. https://doi.org/10.1111/rssb.12450
 
 Henzi, A., Moesching, A. & Duembgen, L. Accelerating the Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression. Methodol Comput Appl Probab (2022). https://doi.org/10.1007/s11009-022-09937-2
+
+Bladt, M., Henzi, A., van den Heuvel, B. and Ziegel, J. (2026). Survival Isotonic Distributional Regression. arXiv:2608.02914. https://doi.org/10.48550/arXiv.2608.02914
 
 The dataframe `precipData_caseStudy.rda` contains all data for the case
 study in the 2021 IDR paper.

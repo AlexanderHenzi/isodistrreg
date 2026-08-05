@@ -2,7 +2,7 @@
 # These functions are used in "simulation_example.R" for the computation of
 # distributional regression models in the simulation study of
 
-# Alexander Henzi, Johanna F. Ziegel, and Tilmann Gneiting. Isotonic
+# Alexander Henzi, Johanna Ziegel, and Tilmann Gneiting. Isotonic
 # Distributional Regression. arXiv e-prints, art. arXiv:1909.03725, Sep 2019.
 # URL https://arxiv.org/abs/1909.03725.
 

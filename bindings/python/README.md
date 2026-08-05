@@ -3,8 +3,7 @@
 Python bindings for Isotonic Distributional Regression (IDR) and Survival-IDR
 (S-IDR), built with [PyO3](https://pyo3.rs) and
 [maturin](https://www.maturin.rs). See the [main
-README](https://github.com/AlexanderHenzi/isodistrreg) for background and
-references.
+README](https://github.com/AlexanderHenzi/isodistrreg) for background.
 
 ## Installation
 
@@ -122,3 +121,18 @@ y = np.arange(5)
 idr_fit = IDR(X = X, y = y)
 idr_fit.cdf_grid(X, y) # (CDF at all covariate-threshold-combinations)
 ```
+
+## References
+
+Henzi, A., Ziegel, J. and Gneiting, T. (2021). Isotonic distributional
+regression. *J R Stat Soc Series B*, 83: 963–993.
+<https://doi.org/10.1111/rssb.12450>
+
+Henzi, A., Moesching, A. and Duembgen, L. (2022). Accelerating the
+Pool-Adjacent-Violators Algorithm for Isotonic Distributional Regression.
+*Methodol Comput Appl Probab*.
+<https://doi.org/10.1007/s11009-022-09937-2>
+
+Bladt, M., Henzi, A., van den Heuvel, B. and Ziegel, J. (2026). Survival
+Isotonic Distributional Regression. *arXiv preprint* arXiv:2608.02914.
+<https://arxiv.org/abs/2608.02914>

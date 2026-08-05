@@ -139,6 +139,10 @@
 #'   Methodol Comput Appl Probab (2022).
 #'   https://doi.org/10.1007/s11009-022-09937-2
 #'
+#' Bladt, M., Henzi, A., van den Heuvel, B. and Ziegel, J. (2026). Survival
+#' Isotonic Distributional Regression. arXiv:2608.02914.
+#' https://doi.org/10.48550/arXiv.2608.02914
+#'
 #' Stellato, B., Banjac, G., Goulart, P., Bemporad, A., & Boyd, S. (2020).
 #' OSQP: An operator splitting solver for quadratic programs. Mathematical
 #' Programming Computation, 1-36.

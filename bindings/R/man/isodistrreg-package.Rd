@@ -15,7 +15,10 @@ estimate conditional distributions under monotonicity constraints.
 Read the arXiv preprint `Isotonic Distributional Regression' on
 \url{https://arxiv.org/abs/1909.03725} (published article:
 \doi{10.1111/rssb.12450}) or by calling
-\code{browseVignettes(package = "isodistrreg")}.
+\code{browseVignettes(package = "isodistrreg")}. The extension to
+right-censored responses (S-IDR), used when \code{y_observed} is supplied to
+\code{\link{idr}}, is described in the arXiv preprint `Survival Isotonic
+Distributional Regression' on \url{https://arxiv.org/abs/2608.02914}.
 }
 
 \section{The \pkg{isodistrreg} package}{
@@ -122,9 +125,13 @@ hist(pitIdr, main = "PIT of IDR calibrated forecasts", freq = FALSE)
 }
 }
 \references{
-Henzi, A., Ziegel, J.F. and Gneiting, T. (2021), Isotonic
+Henzi, A., Ziegel, J. and Gneiting, T. (2021), Isotonic
   distributional regression. J R Stat Soc Series B, 83: 963-993.
   https://doi.org/10.1111/rssb.12450
+
+  Bladt, M., Henzi, A., van den Heuvel, B. and Ziegel, J. (2026). Survival
+  Isotonic Distributional Regression. arXiv:2608.02914.
+  https://doi.org/10.48550/arXiv.2608.02914
 }
 \seealso{
 Useful links:
