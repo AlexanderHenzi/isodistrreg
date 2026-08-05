@@ -95,8 +95,8 @@ points(grd, trueCdf, type = "l", col = 2)
 }
 \references{
 Alexander Henzi, Gian-Reto Kleger & Johanna Ziegel (2021) Distributional
-(Single) Index Models, Journal of the American Statistical Association, DOI:
-<10.1080/01621459.2021.1938582>
+(Single) Index Models, Journal of the American Statistical Association.
+\doi{10.1080/01621459.2021.1938582}
 }
 \seealso{
 \code{\link{idr}} for more information on IDR,

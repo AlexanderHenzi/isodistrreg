@@ -11,8 +11,8 @@ bibentry(
   volume       = "83",
   number       = "5",
   pages        = "963-993",
-  doi = "https://doi.org/10.1111/rssb.12450",
-  textVersion = "Henzi, A., Ziegel, J. and Gneiting, T. (2021), Isotonic distributional regression. J R Stat Soc Series B, 83: 963-993. https://doi.org/10.1111/rssb.12450"
+  doi          = "10.1111/rssb.12450",
+  textVersion  = "Henzi, A., Ziegel, J. and Gneiting, T. (2021), Isotonic distributional regression. J R Stat Soc Series B, 83: 963-993. https://doi.org/10.1111/rssb.12450"
 )
 
 bibentry(
