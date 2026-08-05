@@ -6,6 +6,16 @@ library(tomledit)
 # get R package crate name
 # FIXME make this programattic
 cargo_path <- "src/rust/Cargo.toml"
+
+# Idempotent: the tarball build bootstraps up front so that vendor.R resolves
+# the R-only dependency graph, and pkgbuild then runs this again via
+# Config/build/bootstrap. A second pass would fail in fs::dir_copy() below,
+# whose destination already exists.
+if (any(grepl("^\\s*\\[workspace\\]", readLines(cargo_path)))) {
+  message(cargo_path, " is already bootstrapped")
+  quit(save = "no", status = 0)
+}
+
 cargo_toml <- read_toml(cargo_path)
 crate_name <- get_item(cargo_toml, c("package", "name"))
 

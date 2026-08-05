@@ -12,6 +12,7 @@
 .gitlab-ci.yml
 .lintr
 bootstrap.R
+^vendor\.R$
 
 ^simulation_example\.R$
 ^simulation_example_functions\.R$

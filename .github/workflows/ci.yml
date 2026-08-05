@@ -311,6 +311,60 @@ jobs:
           path: bindings/*.tar.gz
           if-no-files-found: error
 
+  # The tarball that gets submitted to CRAN. Differs from build_r_package in
+  # how the offline crate sources are produced: bootstrap first, so that cargo
+  # resolves the R-only dependency graph instead of the whole workspace, then
+  # vendor.R instead of rextendr::vendor_crates() so the tree can be pruned of
+  # files cargo never reads. Together those keep the tarball under CRAN's 10 MB
+  # limit.
+  build_r_package_cran:
+    name: Build R package (CRAN tarball)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/R/src/rust
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake gfortran \
+            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
+            libuv1-dev \
+            texinfo texlive
+      - uses: r-lib/actions/setup-renv@v2
+        with:
+          working-directory: bindings/R
+      - name: Build tarball
+        working-directory: bindings/R
+        run: |
+          Rscript -e "install.packages(c('pkgbuild', 'rextendr', 'tomledit', 'fs', 'jsonlite'))"
+          Rscript bootstrap.R
+          Rscript vendor.R
+          Rscript -e "pkgbuild::build('.')"
+      - name: Check tarball size
+        working-directory: bindings
+        run: |
+          PKG_TARBALL="$(ls -1t *.tar.gz | head -n 1)"
+          SIZE="$(stat -c %s "$PKG_TARBALL")"
+          LIMIT=$((10 * 1000 * 1000))
+          awk -v s="$SIZE" -v l="$LIMIT" -v f="$PKG_TARBALL" \
+            'BEGIN { printf "%s is %.2f MB, limit %.0f MB\n", f, s / 1e6, l / 1e6 }'
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "::error file=bindings/R/vendor.R::$PKG_TARBALL exceeds CRAN's 10 MB tarball limit"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r-package-cran
+          path: bindings/*.tar.gz
+          if-no-files-found: error
+
   check_r_package:
     name: R CMD check
     needs: build_r_package
@@ -344,7 +398,7 @@ jobs:
 
   check_r_package_cran:
     name: R CMD check --as-cran
-    needs: build_r_package
+    needs: build_r_package_cran
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -362,7 +416,7 @@ jobs:
             devscripts tidy qpdf ghostscript texlive-fonts-extra libv8-dev
       - uses: actions/download-artifact@v8
         with:
-          name: r-package
+          name: r-package-cran
           path: bindings
       - uses: r-lib/actions/setup-renv@v2
         with:
