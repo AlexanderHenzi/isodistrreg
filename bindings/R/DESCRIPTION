@@ -28,7 +28,7 @@ Description: Distributional regression under stochastic order restrictions for
     numeric and binary response variables and partially ordered covariates,
     including right-censored responses via Survival-IDR. See Henzi, Ziegel,
     Gneiting (2021) <doi:10.1111/rssb.12450> and Bladt, Henzi, van den Heuvel,
-    Ziegel (2026) <arXiv:2608.02914>.
+    Ziegel (2026) <doi:10.48550/arXiv.2608.02914>.
 License: GPL (>= 2)
 Depends: 
     R (>= 4.2)
