@@ -19,8 +19,8 @@ pub fn preprocess_uncensored<X: Float, Y: Float, W: Float>(
         .chain(
             context
                 .observations
-                .array_windows()
-                .filter_map(|[left, right]| (right.y != left.y).then_some(right.y)),
+                .windows(2)
+                .filter_map(|w| (w[1].y != w[0].y).then_some(w[1].y)),
         )
         .collect();
     context
