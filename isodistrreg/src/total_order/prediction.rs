@@ -148,7 +148,7 @@ impl IntoIterator for Interpolation<'_> {
 #[must_use]
 pub fn search_covariate<X: Float>(target: X, slice: &[X]) -> CovariateCoordinate {
     debug_assert!(!slice.is_empty());
-    debug_assert!(slice.array_windows().all(|[l, r]| l < r));
+    debug_assert!(slice.windows(2).all(|w| w[0] < w[1]));
 
     match slice.binary_search_by(|c| c.partial_cmp(&target).unwrap()) {
         Ok(index) => CovariateCoordinate::Exact(index),

@@ -122,7 +122,7 @@ pub fn search_response<Y: Float>(target: Y, thresholds: &[Y]) -> ResponseCoordin
     // An empty threshold grid (e.g. a fit on fully censored data) represents the
     // sub-CDF that is 0 everywhere; binary_search on an empty slice yields Err(0)
     // and thus StrictlyBelowAll, which interpolates to 0.
-    debug_assert!(thresholds.array_windows().all(|[l, r]| l < r));
+    debug_assert!(thresholds.windows(2).all(|w| w[0] < w[1]));
 
     match thresholds.binary_search_by(|t| t.partial_cmp(&target).unwrap()) {
         Err(0) => ResponseCoordinate::StrictlyBelowAll,
@@ -143,7 +143,7 @@ pub struct SortedResponseSearcher<'a, Y> {
 
 impl<'a, Y: Float> SortedResponseSearcher<'a, Y> {
     pub fn new(thresholds: &'a [Y]) -> Self {
-        debug_assert!(thresholds.array_windows().all(|[l, r]| l < r));
+        debug_assert!(thresholds.windows(2).all(|w| w[0] < w[1]));
 
         Self { thresholds, idx: 1 }
     }
