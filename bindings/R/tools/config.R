@@ -33,6 +33,11 @@ if (!is_not_cran) {
   ""
 )
 
+# Regenerating `R/extendr-wrappers.R` is a development-time step. CRAN builds
+# install the committed wrappers as-is: regenerating them there would require a
+# second, debug-profile build of the whole dependency tree during `** libs`.
+.document <- ifelse(is_not_cran, "yes", "no")
+
 # when DEBUG env var is present we use `--debug` build
 .profile <- ifelse(is_debug, "", "--release")
 .clean_targets <- ifelse(is_debug, "", "$(TARGET_DIR)")
@@ -98,6 +103,7 @@ mv_txt <- readLines(mv_fp)
 
 # replace placeholder values
 new_txt <- gsub("@CRAN_FLAGS@", .cran_flags, mv_txt) |>
+  gsub("@DOCUMENT@", .document, x = _) |>
   gsub("@PROFILE@", .profile, x = _) |>
   gsub("@CLEAN_TARGET@", .clean_targets, x = _) |>
   gsub("@LIBDIR@", .libdir, x = _) |>
