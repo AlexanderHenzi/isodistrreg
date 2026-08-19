@@ -2,7 +2,7 @@ Package: isodistrreg
 Type: Package
 Title: Isotonic Distributional Regression (IDR)
 Version: 0.5.2
-Date: 2026-07-10
+Date: 2026-08-19
 Authors@R:
   c(person(
         "Bram",
