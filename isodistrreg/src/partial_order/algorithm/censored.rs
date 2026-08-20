@@ -6,7 +6,8 @@ use crate::partial_order::{
 use crate::progress::ProgressTracker;
 use crate::structures::{Direction, Observation};
 
-/// Censored partial-order solver. Unlike the uncensored sibling this is OSQP-free — it solves
+/// Censored partial-order solver. Unlike the uncensored sibling this needs no quadratic
+/// program — it solves
 /// each threshold via Kaplan-Meier with clipping, so `X`/`Y` flow through at the caller's
 /// precision (no f64 widening). `X: PartialOrd` is consumed by the transitive-reduction step
 /// and `Y` carries through to `KaplanMeier<Y>: Functional` (whose bounds we propagate here).
@@ -129,7 +130,8 @@ fn algorithm_inner<
             &functional,
         );
 
-        // OSQP-free per-threshold solution. `KaplanMeier` already produces `f32` (narrowed
+        // Per-threshold solution without a quadratic program. `KaplanMeier` already
+        // produces `f32` (narrowed
         // inside `Functional::evaluate`), so the algorithm body's clipping triangle, PAV
         // accumulators and per-threshold output are all f32 — no widening boundary here.
         cdfs.extend(solution);

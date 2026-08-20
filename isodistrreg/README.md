@@ -8,21 +8,21 @@ for background and references.
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `partial-order` | off | Partial-order covariates (requires OSQP) |
-| `subagging` | off | Subagging for partial-order IDR |
+| `partial-order` | off | Partial-order covariates (multivariate) |
+| `subagging` | off | Multiple fits on subsets of the data |
 
 ## Usage
 
 ```toml
 [dependencies]
-isodistrreg = "0.5"
+isodistrreg = "0.6"
 ```
 
 Enable optional features as needed:
 
 ```toml
 [dependencies]
-isodistrreg = { version = "0.5", features = ["partial-order"] }
+isodistrreg = { version = "0.6", features = ["partial-order"] }
 ```
 
 ## Precision

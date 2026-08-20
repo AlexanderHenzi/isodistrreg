@@ -7,7 +7,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.5.2"
+version = "0.6.0"
 authors = [
     "Alexander Henzi",
     "Bram van den Heuvel",
@@ -37,7 +37,7 @@ unsafe_code = "forbid"
 
 [workspace.dependencies]
 isodistrreg = { path = "isodistrreg", features = ["partial-order"] }
-osqp = "1.0.1"
+faer = { version = "0.23", default-features = false, features = ["std", "sparse-linalg"] }
 itertools = "0.15.0"
 serde = "1.0.228"
 rayon = "1.12.0"

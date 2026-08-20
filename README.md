@@ -111,8 +111,7 @@ on the covariate space — component-wise ordering, the increasing convex order
 (useful for comparing forecast ensembles), or groups of these. This is how IDR
 post-processes an entire weather-forecast ensemble at once; the
 [R package README](bindings/R/README.md) walks through a full precipitation
-example. Partial-order support lives behind an optional feature in the Rust crate
-(it depends on the OSQP solver).
+example. Partial-order support lives behind an optional feature in the Rust crate.
 
 ## References
 

@@ -57,8 +57,9 @@
 #'   The conditional CDFs are estimated at each threshold in \code{unique(y)}.
 #'   This is the set where the CDFs may have jumps. If \code{X} contains more
 #'   than one variable, the CDFs are estimated by solving
-#'   \code{length(unique(y))} quadratic programs using osqp. This might take a
-#'   while if the training dataset is large.
+#'   \code{length(unique(y))} quadratic programs with a built-in operator
+#'   splitting solver (see references). This might take a while if the training
+#'   dataset is large.
 #'
 #'   Use the argument \code{groups} to group \emph{exchangeable} covariates.
 #'   Exchangeable covariates are indistinguishable except from the order in
@@ -142,10 +143,6 @@
 #' Bladt, M., Henzi, A., van den Heuvel, B. and Ziegel, J. (2026). Survival
 #' Isotonic Distributional Regression. arXiv:2608.02914.
 #' https://doi.org/10.48550/arXiv.2608.02914
-#'
-#' Stellato, B., Banjac, G., Goulart, P., Bemporad, A., & Boyd, S. (2020).
-#' OSQP: An operator splitting solver for quadratic programs. Mathematical
-#' Programming Computation, 1-36.
 #'
 #' @examples
 #' data("rain")

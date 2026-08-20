@@ -28,22 +28,16 @@ if (!requireNamespace("jsonlite", quietly = TRUE)) {
 
 # Directories at a crate's root that `cargo build` never reads. Matched at the
 # root only, so a crate's own src/tests/ module is never touched.
-root_drop <- c("tests", "benches", "fuzz", ".github", "ci")
+root_drop <- c("tests", "test_data", "benches", "fuzz", ".github", "ci")
 
-# cargo never builds a *dependency's* examples, but a -sys crate's bundled
-# build system may still reference them, so examples/ is dropped by default and
-# kept where that was checked.
-keep_examples <- "osqp-sys"
+# cargo never builds a *dependency's* examples, so examples/ is dropped
+# everywhere. A crate bundling its own build system could reference them; none in
+# the current dependency set does. If one is added, name it here with the reason.
+keep_examples <- character(0)
 
-# Bundled upstream source trees carrying their own website or docs.
-#
-# osqp-sys vendors the OSQP C sources; its generated site/ and docs/ are 4.4 MB.
-# Dropping osqp/tests/ is safe because build.rs passes OSQP_BUILD_UNITTESTS=OFF,
-# which gates the add_subdirectory(tests). Two things must survive:
-# osqp/examples/, referenced unconditionally as OSQP_EXAMPLES_DIR in
-# CMakeLists.txt, and osqp/README.md, whose absence makes build.rs shell out to
-# `git submodule update`.
-extra_drop <- list("osqp-sys" = c("osqp/site/", "osqp/docs/", "osqp/tests/"))
+# Directories to drop from specific crates, beyond the shared rules. Empty: no
+# dependency bundles an upstream source tree with its own website or docs.
+extra_drop <- list()
 
 message("* vendoring ", manifest)
 unlink(vendor_dir, recursive = TRUE)

@@ -54,7 +54,7 @@ pub trait IsotonicDistributionalRegressionFit: Sized {
     /// Weights `W` are independent of the covariate (`X`) and response (`Y`) precisions — the
     /// caller can pass `f32` or `f64`-typed weights regardless of `X`/`Y`. The implementation
     /// narrows once on read to whatever precision its algorithm operates in (`f32` for the
-    /// total-order kernels, `f64` for the OSQP-backed partial-order solver).
+    /// total-order kernels, `f64` for the partial-order solver).
     ///
     /// Since the total-order kernels run their weight arithmetic in f32, it is up to the
     /// caller to keep the weights (and their sum) within f32's finite range and not too

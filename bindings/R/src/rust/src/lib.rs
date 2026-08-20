@@ -126,9 +126,9 @@ impl IDR {
         )
         .unwrap();
 
-        let mut osqp_settings = osqp::Settings::default();
+        let mut solver_settings = partial_order::SolverSettings::default();
         if let Some(user_settings) = settings.into_option() {
-            osqp_settings = parse_settings(user_settings, osqp_settings);
+            solver_settings = parse_settings(user_settings, solver_settings);
         }
 
         // The fit runs on a worker thread when a progress bar is enabled, so the main thread is
@@ -170,7 +170,7 @@ impl IDR {
                         x_order_parsed,
                         y_order_parsed,
                         decreasing,
-                        (config, partial_order::Config { osqp_settings }),
+                        (config, partial_order::Config { solver_settings }),
                         progress,
                     )
                     .unwrap_or_else(|e| panic!("invalid input: {e}"));
@@ -358,9 +358,12 @@ impl IDR {
     }
 }
 
-fn parse_settings(user_settings: List, mut existing: osqp::Settings) -> osqp::Settings {
+fn parse_settings(
+    user_settings: List,
+    mut existing: partial_order::SolverSettings,
+) -> partial_order::SolverSettings {
     // Missing keys (`$` yields NULL) keep the defaults; present-but-invalid values must
-    // produce a clear error here rather than an unwrap panic or an OSQP setup failure.
+    // produce a clear error here rather than an unwrap panic or a solver setup failure.
     if let Ok(value) = user_settings.dollar("verbose")
         && !value.is_null()
     {
