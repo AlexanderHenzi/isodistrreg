@@ -393,7 +393,7 @@ jobs:
         working-directory: bindings/R
         run: |
           PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
-          Rscript -e "install.packages(c('testthat', 'osqp'))"
+          Rscript -e "install.packages(c('testthat'))"
           R CMD check --no-manual --no-build-vignettes "$PKG_TARBALL"
 
   check_r_package_cran:
@@ -425,5 +425,5 @@ jobs:
         working-directory: bindings/R
         run: |
           PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
-          Rscript -e "install.packages(c('testthat', 'osqp', 'V8'))"
+          Rscript -e "install.packages(c('testthat', 'V8'))"
           R CMD check --as-cran "$PKG_TARBALL"
