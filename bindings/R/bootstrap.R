@@ -7,10 +7,11 @@ library(tomledit)
 # FIXME make this programattic
 cargo_path <- "src/rust/Cargo.toml"
 
-# Idempotent: the tarball build bootstraps up front so that vendor.R resolves
-# the R-only dependency graph, and pkgbuild then runs this again via
-# Config/build/bootstrap. A second pass would fail in fs::dir_copy() below,
-# whose destination already exists.
+# Idempotent: the tarball build bootstraps up front so that
+# rextendr::vendor_crates() resolves the R-only dependency graph instead of the
+# whole workspace, and pkgbuild then runs this again via Config/build/bootstrap.
+# A second pass would fail in fs::dir_copy() below, whose destination already
+# exists.
 if (any(grepl("^\\s*\\[workspace\\]", readLines(cargo_path)))) {
   message(cargo_path, " is already bootstrapped")
   quit(save = "no", status = 0)
