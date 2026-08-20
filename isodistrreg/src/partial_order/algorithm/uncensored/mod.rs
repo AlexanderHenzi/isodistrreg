@@ -1,6 +1,12 @@
+pub mod admm;
 pub mod hazard_rate_order;
 
-use crate::partial_order::algorithm::uncensored::hazard_rate_order::update_constraint_matrix;
+use crate::partial_order::algorithm::uncensored::admm::constraints::Constraints;
+use crate::partial_order::algorithm::uncensored::admm::hildreth::{self, Hildreth};
+use crate::partial_order::algorithm::uncensored::admm::kkt::KktFactor;
+use crate::partial_order::algorithm::uncensored::admm::polish::Polisher;
+use crate::partial_order::algorithm::uncensored::admm::{polish, solver};
+use crate::partial_order::algorithm::uncensored::hazard_rate_order::update_constraint_coefficients;
 use crate::partial_order::routines::derive_transitive_reduction;
 use crate::partial_order::{
     AlgorithmOutput, Config, OrderingInfo, QualityIndicators, UncensoredContext,
@@ -9,7 +15,6 @@ use crate::progress::ProgressTracker;
 use crate::routines::transpose;
 use crate::structures::{Direction, Increasing};
 use crate::total_order::tonic_regression_pre_sorted;
-use std::borrow::Cow;
 use std::iter::repeat_n;
 
 #[must_use]
@@ -59,10 +64,9 @@ pub fn algorithm<D: Direction, const HRO: bool>(
 
     // TODO: Remove covariates that are unconstraint
 
-    // Build A `(constraints.len() x n_covariate)` matrix in CSC. We do an antitonic
+    // Build the coefficients of A, one pair per cover edge. We do an antitonic
     // (non-increasing) regression, so we reverse the order.
-    let mut constraint_matrix =
-        build_order_constraints::<D::REVERSE, HRO>(&constraint_edges, context.n_covariate());
+    let mut coefficients = build_order_coefficients::<D::REVERSE, HRO>(&constraint_edges);
 
     // --- Energy coordinates -------------------------------------------------------------
     // OSQP's termination tolerances are absolute on the problem it is handed (eps_abs, plus
@@ -102,14 +106,8 @@ pub fn algorithm<D: Direction, const HRO: bool>(
         .iter()
         .map(|w| (w * weight_scale).sqrt())
         .collect();
-    scale_constraints_to_energy(&mut constraint_matrix, &constraint_edges, &sqrt_weight);
+    scale_coefficients_to_energy(&mut coefficients, &constraint_edges, &sqrt_weight);
 
-    // In energy coordinates P is the identity (upper triangular only).
-    let identity_diagonal = vec![1.0; context.n_covariate()];
-    let weight_matrix = build_diagonal_matrix(&identity_diagonal);
-
-    // State variables maintained as we iterate over the data
-    let mut data_index = 0;
     // Construct the linear cost vector `q` in the original x-coordinates. It is the negative
     // of the element-wise product of (grouped) weights and mean response. Together with a
     // diagonal P = diag(w), it represents each component of the loss like (with p_i share of
@@ -126,7 +124,9 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     // total weight of the covariate, so we can equivalently use q_i = -sum_j(w_ij if y_ij <= z).
     //
     // The QP is solved in energy coordinates (see above): `q` keeps accumulating raw weights
-    // across thresholds and `q_energy` is the mapped copy passed to OSQP before each solve.
+    // across thresholds and `q_energy` is the mapped copy handed to the solver before each
+    // solve. The accumulation stays in f64 regardless of the solver's working precision:
+    // it is a running sum over every observation, so narrowing it would drift.
     //
     // Under HRO, we work in the reverse direction because we model the survival function.
     let mut q: Vec<f64> = if HRO {
@@ -137,128 +137,100 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     // q_energy[i] = q[i] * weight_scale / sqrt_weight[i]; buffers reused across thresholds.
     let q_to_energy: Vec<f64> = sqrt_weight.iter().map(|sw| weight_scale / sw).collect();
     let mut q_energy = vec![0.0; context.n_covariate()];
-    let mut warm_start = vec![0.0; context.n_covariate()];
     fn map_into(dst: &mut [f64], src: &[f64], factor: &[f64]) {
         for ((d, &s), &f) in dst.iter_mut().zip(src).zip(factor) {
             *d = s * f;
         }
     }
 
+    let settings = solver::Settings {
+        verbose: config.solver_settings.verbose,
+        eps_abs: config.solver_settings.eps_abs,
+        eps_rel: config.solver_settings.eps_rel,
+        max_iter: config.solver_settings.max_iter,
+    };
+    // Only `n_threshold - 1` solves happen: at the last threshold every CDF is 1 (every
+    // survival 0), which is filled in analytically below.
+    let n_solve = context.n_threshold() - 1;
+    let data_bounds = threshold_data_bounds(&context.y);
+    debug_assert_eq!(data_bounds.len(), context.n_threshold() + 1);
+
     // We collect these results each iteration
     let mut cdfs = Vec::with_capacity(context.n_threshold() * context.n_covariate());
-    let mut iter_limit_hit_count = 0;
-
-    // First iteration
-    let mut current_threshold = None;
-    while data_index < context.n() {
-        match current_threshold {
-            None => current_threshold = Some(context.y[data_index]),
-            Some(existing_value) => {
-                if context.y[data_index] > existing_value {
-                    break;
-                }
+    let stats = if HRO {
+        // The hazard-rate constraints are rebuilt from the previous threshold's fit, so the
+        // sequence cannot be cut anywhere: threshold `t` is not even a well-posed problem
+        // until `t - 1` has been solved.
+        let mut solver_state = SolverState::new(context.n_covariate(), &constraint_edges);
+        // The warm start is x = 1, the survival before any threshold, i.e. u = sqrt_weight.
+        solver_state.workspace.x.copy_from_slice(&sqrt_weight);
+        // The previous threshold's solution in x-coordinates, read as the survival S.
+        let mut survival = vec![0.0; context.n_covariate()];
+        for threshold in 0..n_solve {
+            for observation in data_bounds[threshold]..data_bounds[threshold + 1] {
+                q[context.x_indices[observation]] += context.weight[observation];
             }
-        }
-        let covariate_index = context.x_indices[data_index];
-        if HRO {
-            q[covariate_index] += context.weight[data_index];
-        } else {
-            q[covariate_index] -= context.weight[data_index];
-        }
-        data_index += 1;
-    }
-
-    map_into(&mut q_energy, &q, &q_to_energy);
-    let mut problem = osqp::Problem::new(
-        weight_matrix,
-        &q_energy,
-        // TODO: This cloning only happens for the HRO case, is it optimized away for the SD case?
-        constraint_matrix.clone(),
-        &vec![0.0; constraint_edges.len()],
-        // TODO: The upper bound 1.0 is redundant, but in v1.0.0 osqp introduced a termination check
-        //  via a duality-gap test which can't be computed without an upper bound. Once this
-        //  termination criterion can be turned off via the rust api, this upper bound can be set to
-        //  f64::INFINITY also (although it should be tested whether this actually improves the
-        //  performance). The osqp solution then (still) should be clamped up to 1.0 to counteract
-        //  numerical errors as a post-processing step regardless.
-        &vec![1.0; constraint_edges.len()],
-        &config.osqp_settings,
-    )
-    .expect("Failed to setup OSQP problem");
-
-    // Initial solve; the warm start is x = 1 (HRO survival) or x = 0 (SD CDF), i.e.
-    // u = sqrt_weight or u = 0 in energy coordinates.
-    if HRO {
-        warm_start.copy_from_slice(&sqrt_weight);
-    }
-    problem.warm_start_x(&warm_start);
-    let status = problem.solve();
-    if let osqp::Status::MaxIterationsReached(_) = status {
-        iter_limit_hit_count += 1;
-    }
-    let solution = status.solution().expect("Need OSQP to find a solution");
-    let old_length = cdfs.len();
-    // Map the primal solution back from energy coordinates: x_i = u_i / sqrt_weight[i].
-    cdfs.extend(
-        solution
-            .x()
-            .iter()
-            .zip(&sqrt_weight)
-            .map(|(u, sw)| (u / sw).clamp(0.0, 1.0)),
-    );
-    progress.increment();
-    let mut primal_variable = &cdfs[old_length..];
-
-    let last_threshold = *context.thresholds.last().unwrap();
-    loop {
-        // Bounds check not needed, because last threshold is not yet done
-        let active_threshold = context.y[data_index];
-        if active_threshold == last_threshold {
-            break;
-        }
-
-        while context.y[data_index] == active_threshold {
-            let covariate_index = context.x_indices[data_index];
-            if HRO {
-                q[covariate_index] += context.weight[data_index];
-            } else {
-                q[covariate_index] -= context.weight[data_index];
+            if threshold > 0 {
+                // A's values change with S, so its factorization has to be refreshed. The
+                // pattern does not change, so the symbolic phase is untouched.
+                update_constraint_coefficients::<D>(
+                    &mut coefficients,
+                    &constraint_edges,
+                    &survival,
+                    &sqrt_weight,
+                );
+                solver_state.workspace.invalidate_factor();
             }
-            data_index += 1;
-        }
-
-        // Warm-started remaining non-trivial solves. OSQP warm-starts by default, but we prefer to
-        // restart at the value clamped between 0 and 1 (mapped into energy coordinates).
-        map_into(&mut warm_start, primal_variable, &sqrt_weight);
-        problem.warm_start_x(&warm_start);
-        // Pass the updated linear cost
-        map_into(&mut q_energy, &q, &q_to_energy);
-        problem.update_lin_cost(&q_energy);
-        if HRO {
-            update_constraint_matrix::<D>(
-                &mut constraint_matrix,
-                &constraint_edges,
-                primal_variable,
+            map_into(&mut q_energy, &q, &q_to_energy);
+            let constraints = Constraints {
+                edges: &constraint_edges,
+                coef: &coefficients,
+                n: context.n_covariate(),
+            };
+            solver_state.solve_threshold(
+                &constraints,
+                &q_energy,
+                &settings,
                 &sqrt_weight,
+                threshold,
+                &mut survival,
             );
-            problem.update_A(constraint_matrix.clone());
+            cdfs.extend_from_slice(&survival);
+            progress.increment();
         }
-        let status = problem.solve();
-        if let osqp::Status::MaxIterationsReached(_) = status {
-            iter_limit_hit_count += 1;
+        solver_state.stats
+    } else {
+        // Under stochastic dominance `A` is the same matrix at every threshold and `q` is a
+        // prefix sum over the response-sorted data, so only `q` moves from one threshold
+        // to the next and the matrix handed to the solver never changes. Consecutive
+        // problems are therefore near-identical, which is exactly what the warm start
+        // carried in the solver state exploits: the factorization built for the first
+        // solve serves the whole sequence.
+        let mut solver_state = SolverState::new(context.n_covariate(), &constraint_edges);
+        let mut fitted = vec![0.0; context.n_covariate()];
+        let constraints = Constraints {
+            edges: &constraint_edges,
+            coef: &coefficients,
+            n: context.n_covariate(),
+        };
+        for threshold in 0..n_solve {
+            for observation in data_bounds[threshold]..data_bounds[threshold + 1] {
+                q[context.x_indices[observation]] -= context.weight[observation];
+            }
+            map_into(&mut q_energy, &q, &q_to_energy);
+            solver_state.solve_threshold(
+                &constraints,
+                &q_energy,
+                &settings,
+                &sqrt_weight,
+                threshold,
+                &mut fitted,
+            );
+            cdfs.extend_from_slice(&fitted);
+            progress.increment();
         }
-        let solution = status.solution().expect("Need OSQP to find a solution");
-        let old_length = cdfs.len();
-        cdfs.extend(
-            solution
-                .x()
-                .iter()
-                .zip(&sqrt_weight)
-                .map(|(u, sw)| (u / sw).clamp(0.0, 1.0)),
-        );
-        progress.increment();
-        primal_variable = &cdfs[old_length..];
-    }
+        solver_state.stats
+    };
 
     // Finish the last trivial threshold
     cdfs.extend(repeat_n(if HRO { 0.0 } else { 1.0 }, context.n_covariate()));
@@ -293,9 +265,28 @@ pub fn algorithm<D: Direction, const HRO: bool>(
         }
     }
 
-    let convergence_fraction = 1.0 - iter_limit_hit_count as f64 / context.n_threshold() as f64;
+    if config.solver_settings.verbose {
+        let SolveStats {
+            unconverged,
+            polished,
+            iterations,
+            refactorizations,
+            rho_low,
+            rho_high,
+            f32_solves,
+        } = stats;
+        eprintln!(
+            "solver: {n_solve} solves, {unconverged} unconverged, \
+             {polished} polished, {iterations} iterations, \
+             {refactorizations} refactorizations, rho in [{rho_low:.3e}, {rho_high:.3e}], \
+             {f32_solves} solved with an f32 factor"
+        );
+    }
+    // The last threshold is filled in analytically above, so it is not a solve and must not
+    // dilute the fraction.
+    let convergence_fraction = 1.0 - stats.unconverged as f64 / n_solve as f64;
 
-    // OSQP and the warm-started PAVA above run in f64; narrow once at the algorithm boundary
+    // The solver and the warm-started PAVA above run in f64; narrow once at the algorithm boundary
     // to match `AlgorithmOutput::cdfs`.
     AlgorithmOutput {
         cdfs: cdfs.into_iter().map(|v| v as f32).collect(),
@@ -307,117 +298,199 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     }
 }
 
-/// Build A as CSC from constraints (x_i <= x_j).
+/// Where each threshold's observations sit in the response-sorted data: threshold `t` owns
+/// `bounds[t]..bounds[t + 1]`.
 ///
-/// We create one row per edge with -1 at i and +1 at j for the constraint a^T x = x_j - x_i >= 0.
-/// If HRO, the signs of these coefficients get flipped, because then we're fitting a survival curve
-/// and not a CDF.
-///
-/// The ±1 coefficients are in the original x-coordinates; `algorithm` rescales them into
-/// energy coordinates with `scale_constraints_to_energy` before handing them to OSQP.
-///
-/// A has shape m x n, with m = number of edges and n = number of unique covariate rows.
-pub fn build_order_constraints<D: Direction, const HRO: bool>(
-    constraints: &[(usize, usize)],
-    n_covariate: usize,
-) -> osqp::CscMatrix<'_> {
-    let m = constraints.len();
-    let n = n_covariate;
-
-    // Count nonzeros per column (each constraint contributes to two columns).
-    let mut col_counts = vec![0usize; n];
-    for &(i, j) in constraints {
-        col_counts[i] += 1;
-        col_counts[j] += 1;
+/// The threshold sequence is the runs of equal responses, so one pass over `y` recovers it.
+/// Having the boundaries up front keeps the accumulation of `q` a plain indexed walk
+/// instead of a scan that has to re-detect where each threshold begins.
+fn threshold_data_bounds(y: &[f64]) -> Vec<usize> {
+    let mut bounds = vec![0usize];
+    let mut observation = 0;
+    while observation < y.len() {
+        let value = y[observation];
+        while observation < y.len() && y[observation] == value {
+            observation += 1;
+        }
+        bounds.push(observation);
     }
-
-    // Build indptr via exclusive prefix sum of counts.
-    let mut indptr = Vec::with_capacity(n + 1);
-    indptr.push(0);
-    for c in 0..n {
-        let next = indptr[c] + col_counts[c];
-        indptr.push(next);
-    }
-    let nnz = *indptr.last().unwrap_or(&0);
-
-    // Allocate CSC storage.
-    let mut indices = vec![0usize; nnz];
-    let mut data = vec![0.0f64; nnz];
-
-    // Running insertion pointers per column start at indptr[c].
-    let mut next = indptr[..n].to_vec();
-
-    // Fill columns in one pass. Row indices per column are increasing by construction.
-    for (r, &(i, j)) in constraints.iter().enumerate() {
-        let p_i = next[i];
-        indices[p_i] = r;
-        data[p_i] = if D::IS_INCREASING != HRO { -1.0 } else { 1.0 };
-        next[i] += 1;
-
-        let p_j = next[j];
-        indices[p_j] = r;
-        data[p_j] = if D::IS_INCREASING != HRO { 1.0 } else { -1.0 };
-        next[j] += 1;
-    }
-
-    osqp::CscMatrix {
-        nrows: m,
-        ncols: n,
-        indptr: Cow::Owned(indptr),
-        indices: Cow::Owned(indices),
-        data: Cow::Owned(data),
-    }
+    bounds
 }
 
-/// Rescale the ±1 coefficients of a matrix built by `build_order_constraints` into energy
-/// coordinates `u_i = sqrt_weight[i] * x_i`.
-///
-/// Expressing the row's constraint in `u` divides the column-`c` coefficient by
-/// `sqrt_weight[c]`; multiplying the whole row by `min(sqrt_weight[i], sqrt_weight[j])` (a
-/// positive row scaling, hence an equivalent constraint) then brings the largest
-/// |coefficient| back to exactly 1. With both coefficients in [-1, 1] and of opposite sign,
-/// row values stay in [-1, 1] for x in [0, 1]^n, keeping the QP's fixed row upper bound of
-/// 1.0 redundant (an OSQP duality-gap workaround, see `algorithm`).
-///
-/// This is exactly the S = 1 case of the HRO rule in `update_constraint_matrix`, applied
-/// once up front: the SD matrix is constant across thresholds, and the HRO matrix starts
-/// from the plain order before the first per-threshold ratio update.
-fn scale_constraints_to_energy(
-    matrix: &mut osqp::CscMatrix,
-    constraints: &[(usize, usize)],
-    sqrt_weight: &[f64],
-) {
-    debug_assert_eq!(matrix.nrows, constraints.len());
-    debug_assert_eq!(matrix.ncols, sqrt_weight.len());
+/// What the sequence of solves did, for diagnostics and the caller's convergence
+/// accounting.
+#[derive(Clone, Copy)]
+struct SolveStats {
+    unconverged: usize,
+    polished: usize,
+    iterations: u64,
+    refactorizations: u64,
+    rho_low: f64,
+    rho_high: f64,
+    f32_solves: usize,
+}
 
-    let indptr = match &matrix.indptr {
-        Cow::Borrowed(s) => *s,
-        Cow::Owned(v) => v.as_slice(),
-    };
-    let indices = match &matrix.indices {
-        Cow::Borrowed(s) => *s,
-        Cow::Owned(v) => v.as_slice(),
-    };
-    let data = matrix.data.to_mut();
-
-    for (col, &sw_col) in sqrt_weight.iter().enumerate() {
-        for pos in indptr[col]..indptr[col + 1] {
-            let (i, j) = constraints[indices[pos]];
-            data[pos] *= sqrt_weight[i].min(sqrt_weight[j]) / sw_col;
+impl SolveStats {
+    fn new() -> Self {
+        Self {
+            unconverged: 0,
+            polished: 0,
+            iterations: 0,
+            refactorizations: 0,
+            rho_low: f64::INFINITY,
+            rho_high: 0.0,
+            f32_solves: 0,
         }
     }
 }
 
-/// Build a diagonal `osqp::CscMatrix` (no such method is available in the OSQP interface,
-/// surprisingly).
-fn build_diagonal_matrix(diag: &[f64]) -> osqp::CscMatrix<'_> {
-    let n = diag.len();
-    osqp::CscMatrix {
-        nrows: n,
-        ncols: n,
-        indptr: Cow::Owned((0..=n).collect()),
-        indices: Cow::Owned((0..n).collect()),
-        data: Cow::Owned(diag.to_vec()),
+/// Everything the threshold sequence solves with.
+///
+/// Sized once per fit and reused across thresholds. The pattern of the ADMM
+/// system is the cover graph plus a diagonal and never changes, so the symbolic
+/// factorization in `KktFactor::new` is the only one a block performs; its later thresholds
+/// refresh values only. `workspace` carries the iterate and the adapted `rho` from one
+/// threshold to the next, which is the warm start.
+///
+/// Bundled rather than kept as four locals so the threshold loop reads as the sequence of
+/// solves it is, with the reused state named once.
+struct SolverState {
+    workspace: solver::Workspace,
+    factor: KktFactor,
+    polisher: Polisher,
+    certifier: Hildreth,
+    stats: SolveStats,
+}
+
+impl SolverState {
+    fn new(n_covariate: usize, edges: &[(usize, usize)]) -> Self {
+        Self {
+            workspace: solver::Workspace::new(n_covariate, edges.len()),
+            factor: KktFactor::new(n_covariate, edges),
+            polisher: Polisher::new(n_covariate, edges.len()),
+            certifier: Hildreth::new(n_covariate, edges.len()),
+            stats: SolveStats::new(),
+        }
+    }
+
+    /// Solve one threshold, writing the fit -- mapped back out of energy coordinates and
+    /// clamped to `[0, 1]` -- into `out`.
+    fn solve_threshold(
+        &mut self,
+        constraints: &Constraints<'_>,
+        q_energy: &[f64],
+        settings: &solver::Settings,
+        sqrt_weight: &[f64],
+        threshold: usize,
+        out: &mut [f64],
+    ) {
+        let outcome = solver::solve(
+            constraints,
+            q_energy,
+            settings,
+            &mut self.workspace,
+            &mut self.factor,
+        );
+        self.stats.iterations += u64::from(outcome.iterations);
+        self.stats.refactorizations += u64::from(outcome.refactorizations);
+        self.stats.rho_low = self.stats.rho_low.min(outcome.rho);
+        self.stats.rho_high = self.stats.rho_high.max(outcome.rho);
+        if outcome.used_f32 {
+            self.stats.f32_solves += 1;
+        }
+        if outcome.status != solver::Status::Solved {
+            self.stats.unconverged += 1;
+            // Stalled. Dual coordinate ascent needs no factorization and is monotone in
+            // the dual objective, so it can still make progress where the splitting has
+            // stopped, and the point it implies is taken only if it is feasible and
+            // strictly better -- the same gate the polish uses.
+            self.certifier
+                .seed_from_admm_dual(constraints, q_energy, &self.workspace.y);
+            self.certifier.run(constraints, hildreth::STALL_SWEEPS);
+            self.certifier
+                .take_if_better(constraints, q_energy, &mut self.workspace.x);
+            if settings.verbose {
+                eprintln!(
+                    "  threshold {threshold}: not converged (r_prim {:.2e}, r_dual {:.2e}), \
+                     certified gap {:.2e}",
+                    outcome.primal_residual,
+                    outcome.dual_residual,
+                    self.certifier.certified_gap(q_energy, &self.workspace.x),
+                );
+            }
+        }
+
+        // Polish to the exact minimizer over the identified active set. The gate inside
+        // only accepts a feasible point with a strictly lower objective, so this can move
+        // the answer towards the optimum but never away from it; the solver's own iterate
+        // stands whenever the active set was not identified cleanly.
+        let report = polish::polish(
+            constraints,
+            q_energy,
+            &self.workspace.clipped,
+            &self.workspace.x,
+            &mut self.polisher,
+        );
+        if report.accepted {
+            self.stats.polished += 1;
+        }
+        let primal = if report.accepted {
+            &self.polisher.u
+        } else {
+            &self.workspace.x
+        };
+
+        // Map the primal solution back from energy coordinates: x_i = u_i / sqrt_weight[i].
+        for ((value, &u), &sw) in out.iter_mut().zip(primal).zip(sqrt_weight) {
+            *value = (u / sw).clamp(0.0, 1.0);
+        }
+    }
+}
+
+/// Build the coefficients of A from the cover edges (x_i <= x_j).
+///
+/// Row `r` encodes edge `constraints[r] = (i, j)` and carries exactly two nonzeros, -1 at
+/// `i` and +1 at `j`, for the constraint `a^T x = x_j - x_i >= 0`. If HRO, the signs get
+/// flipped, because then we're fitting a survival curve and not a CDF.
+///
+/// The returned pair is `(coefficient at i, coefficient at j)`; the edge list itself
+/// supplies the column indices, so no sparse index structure is needed. The ±1
+/// coefficients are in the original x-coordinates; `algorithm` rescales them into energy
+/// coordinates with `scale_coefficients_to_energy` before the first solve.
+pub fn build_order_coefficients<D: Direction, const HRO: bool>(
+    constraints: &[(usize, usize)],
+) -> Vec<(f64, f64)> {
+    let coefficients = if D::IS_INCREASING != HRO {
+        (-1.0, 1.0)
+    } else {
+        (1.0, -1.0)
+    };
+    vec![coefficients; constraints.len()]
+}
+
+/// Rescale the ±1 coefficients built by `build_order_coefficients` into energy coordinates
+/// `u_i = sqrt_weight[i] * x_i`.
+///
+/// Expressing the row's constraint in `u` divides the column-`c` coefficient by
+/// `sqrt_weight[c]`; multiplying the whole row by `min(sqrt_weight[i], sqrt_weight[j])` (a
+/// positive row scaling, hence an equivalent constraint) then brings the largest
+/// |coefficient| back to exactly 1. Keeping the coefficients bounded by 1 keeps every row
+/// of the ADMM system on a common scale, so the solver's absolute residual tolerance means
+/// the same thing on every constraint.
+///
+/// This is exactly the S = 1 case of the HRO rule in `update_constraint_coefficients`,
+/// applied once up front: the SD coefficients are constant across thresholds, and the HRO
+/// ones start from the plain order before the first per-threshold ratio update.
+fn scale_coefficients_to_energy(
+    coefficients: &mut [(f64, f64)],
+    constraints: &[(usize, usize)],
+    sqrt_weight: &[f64],
+) {
+    debug_assert_eq!(coefficients.len(), constraints.len());
+    for (coefficient, &(i, j)) in coefficients.iter_mut().zip(constraints) {
+        let scale = sqrt_weight[i].min(sqrt_weight[j]);
+        coefficient.0 *= scale / sqrt_weight[i];
+        coefficient.1 *= scale / sqrt_weight[j];
     }
 }
 
@@ -425,7 +498,7 @@ fn build_diagonal_matrix(diag: &[f64]) -> osqp::CscMatrix<'_> {
 mod test {
     use crate::IsotonicDistributionalRegressionFit;
     use crate::partial_order::structures::Fit;
-    use crate::partial_order::{Config, CovariateGroups, Csr, OrderingInfo};
+    use crate::partial_order::{Config, CovariateGroups, Csr, OrderingInfo, SolverSettings};
     use crate::structures::StochasticOrder;
 
     /// Per-step survival ratios are nondecreasing along the covariate order. Same
@@ -442,7 +515,7 @@ mod test {
             StochasticOrder::HazardRateOrder,
             false,
             Config {
-                osqp_settings: osqp::Settings::default()
+                solver_settings: SolverSettings::default()
                     .verbose(false)
                     .eps_abs(1e-8)
                     .eps_rel(1e-8)
@@ -595,7 +668,7 @@ mod test {
         let groups = CovariateGroups::parse([("sd", [0, 1])], 2).unwrap();
 
         let config = Config {
-            osqp_settings: osqp::Settings::default()
+            solver_settings: SolverSettings::default()
                 .verbose(false)
                 .eps_abs(1e-8)
                 .eps_rel(1e-8)
@@ -661,7 +734,7 @@ mod test {
         let groups = CovariateGroups::parse(groups, 5).unwrap();
 
         let config = Config {
-            osqp_settings: osqp::Settings::default()
+            solver_settings: SolverSettings::default()
                 .verbose(false)
                 .eps_abs(1e-8)
                 .eps_rel(1e-8)
@@ -796,7 +869,7 @@ mod test {
             StochasticOrder::StochasticDominance,
             false,
             Config {
-                osqp_settings: osqp::Settings::default()
+                solver_settings: SolverSettings::default()
                     .verbose(false)
                     .eps_abs(1e-6)
                     .eps_rel(1e-6)

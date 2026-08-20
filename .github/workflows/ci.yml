@@ -69,7 +69,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake gfortran \
+            pkg-config gfortran \
             libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
             libuv1-dev
       - run: cargo fmt --check
@@ -240,7 +240,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake gfortran \
+            pkg-config gfortran \
             libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
             libuv1-dev
       - run: cargo test --all-features
@@ -265,7 +265,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake gfortran \
+            pkg-config gfortran \
             libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
             libuv1-dev
       - uses: r-lib/actions/setup-renv@v2
@@ -292,7 +292,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake gfortran \
+            pkg-config gfortran \
             libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
             libuv1-dev \
             texinfo texlive
@@ -333,7 +333,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake gfortran \
+            pkg-config gfortran \
             libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
             libuv1-dev \
             texinfo texlive
@@ -378,7 +378,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake gfortran \
+            pkg-config gfortran \
             libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
             libuv1-dev \
             texinfo texlive
@@ -393,7 +393,7 @@ jobs:
         working-directory: bindings/R
         run: |
           PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
-          Rscript -e "install.packages(c('testthat'))"
+          Rscript -e "install.packages('testthat')"
           R CMD check --no-manual --no-build-vignettes "$PKG_TARBALL"
 
   check_r_package_cran:
@@ -409,7 +409,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake gfortran \
+            pkg-config gfortran \
             libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
             libuv1-dev \
             texinfo texlive \

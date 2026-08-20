@@ -233,8 +233,8 @@ def test_all_four_combinations_produce_equal_cdfs(x_dtype, y_dtype):
 @pytest.mark.parametrize("x_dtype", _DTYPES)
 @pytest.mark.parametrize("y_dtype", _DTYPES)
 def test_partial_order_all_four_combinations(x_dtype, y_dtype):
-    # Multivariate (partial-order) path goes through OSQP, which is hardcoded f64.
-    # The wrapper upcasts on entry to OSQP and narrows on exit; storage stays at
+    # The multivariate (partial-order) path solves in f64. The wrapper upcasts on
+    # entry to the solver and narrows on exit; storage stays at
     # the user's chosen precision.
     X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]], dtype=x_dtype)
     y = np.array([1.0, 2.0, 3.0, 4.0], dtype=y_dtype)
@@ -399,14 +399,14 @@ def test_f32_and_f64_weights_produce_equal_cdfs(w_dtype):
 
 def test_partial_order_accepts_f32_weights():
     # The partial-order solver runs in f64 internally; f32 weights are narrowed
-    # at preprocessing. Exercises the OSQP path to make sure W=f32 doesn't
+    # at preprocessing. Exercises the partial-order path to make sure W=f32 doesn't
     # break the Vec<f64> Context layout.
     X = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]])
     y = np.array([10.0, 20.0, 30.0])
     weight = np.array([1.0, 1.0, 1.0], dtype=np.float32)
     fit = IDR(y, X, sample_weight=weight)
     means = fit.predict(X.astype(np.float64))
-    # OSQP convergence tolerance ~1e-5, hence the loose atol.
+    # Solver convergence tolerance ~1e-5, hence the loose atol.
     np.testing.assert_allclose(means, [10.0, 20.0, 30.0], atol=1e-4)
 
 
@@ -430,11 +430,19 @@ def test_settings_rejects_unknown_top_level_key():
         IDR(y, X, settings={"unknown_key": 42})
 
 
-def test_settings_osqp_settings_still_accepted():
+def test_settings_solver_settings_accepted():
     # Sanity check that the known-key path didn't regress. Use a multivariate X
-    # so the partial-order (OSQP) path actually runs and the max_iter knob is
-    # exercised.
+    # so the partial-order path actually runs and the max_iter knob is exercised.
     X = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]])
     y = np.array([10.0, 20.0, 30.0])
-    fit = IDR(y, X, settings={"osqp_settings": {"max_iter": 100}})
+    fit = IDR(y, X, settings={"solver_settings": {"max_iter": 100}})
     assert fit.X.shape == (3, 2)
+
+
+def test_settings_osqp_settings_names_its_replacement():
+    # The key was renamed, not dropped. Silently ignoring the old spelling would
+    # leave a caller's tuning quietly unapplied, so it must name the new key.
+    X = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]])
+    y = np.array([10.0, 20.0, 30.0])
+    with pytest.raises(ValueError, match="solver_settings"):
+        IDR(y, X, settings={"osqp_settings": {"max_iter": 100}})

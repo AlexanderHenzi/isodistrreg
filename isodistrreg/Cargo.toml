@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-osqp = { workspace = true, optional = true }
+faer = { workspace = true, optional = true }
 itertools = { workspace = true }
 rayon = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
@@ -21,7 +21,7 @@ num-traits = "0.2.19"
 
 [features]
 parallel = ["rayon"]
-partial-order = ["osqp"]
+partial-order = ["faer"]
 subagging = ["rand"]
 
 [dev-dependencies]

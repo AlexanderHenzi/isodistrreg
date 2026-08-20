@@ -78,10 +78,10 @@ class TestSettingsValidation:
         "settings",
         [{"max_iter": 0}, {"eps_abs": -1.0}, {"eps_rel": -1.0}, {"eps_abs": np.nan}],
     )
-    def test_invalid_osqp_settings(self, settings):
+    def test_invalid_solver_settings(self, settings):
         X2 = np.array([[1.0, 0.0], [2.0, 1.0], [3.0, 2.0]])
         with pytest.raises(ValueError):
-            IDR([1.0, 2.0, 3.0], X2, settings={"osqp_settings": settings})
+            IDR([1.0, 2.0, 3.0], X2, settings={"solver_settings": settings})
 
 
 class TestFromCdfsValidation:

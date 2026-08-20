@@ -92,7 +92,7 @@ use std::sync::{Mutex, OnceLock};
 ///     If True, sample with replacement (bootstrap). Default is False.
 /// settings : dict, optional
 ///     Solver settings. For multivariate covariates this may contain an
-///     ``"osqp_settings"`` dict with keys ``"verbose"`` (bool),
+///     ``"solver_settings"`` dict with keys ``"verbose"`` (bool),
 ///     ``"eps_abs"`` (float), ``"eps_rel"`` (float), ``"max_iter"``
 ///     (int). Univariate covariates currently have no tunable knobs.
 /// seed : int, optional
@@ -663,7 +663,7 @@ fn quantile_of<X: Float, Y: Float>(
 /// Trades the old "PyArrayLike<f64, AllowTypeChange>" widening for a typed extract at the
 /// user's precision; storage in the returned `Fit<X, Y>` matches the user's input dtype, and
 /// weights are passed through at `W` so the kernels narrow once on read (to `f32` for the
-/// total-order family, `f64` for the OSQP-backed partial-order family).
+/// total-order family, `f64` for the partial-order family).
 #[allow(clippy::too_many_arguments)]
 fn fit_typed<X: Float + Element, Y: Float + Element, W: Float + Element>(
     py: Python<'_>,
@@ -1538,11 +1538,11 @@ fn parse_config(
     // No fields are shared between them
 
     // Partial order config fields
-    if let Some(map) = config.remove("osqp_settings") {
+    if let Some(map) = config.remove("solver_settings") {
         any_partial_order_options = true;
-        let mut settings = mem::take(&mut partial_order_config.osqp_settings);
+        let mut settings = mem::take(&mut partial_order_config.solver_settings);
         let settings_map = map.extract::<HashMap<String, Py<PyAny>>>(py).map_err(|_| {
-            Error::ConfigParseError("osqp_settings should be a dictionary with string keys")
+            Error::ConfigParseError("solver_settings should be a dictionary with string keys")
         })?;
 
         for (key, value) in &settings_map {
@@ -1581,26 +1581,31 @@ fn parse_config(
                 }
                 _ => {
                     return Err(Error::ConfigParseError(
-                        "unknown osqp_settings key, they need to be added individually in the isodistrreg rust package",
+                        "unknown solver_settings key, they need to be added individually in the isodistrreg rust package",
                     ));
                 }
             }
         }
 
-        partial_order_config.osqp_settings = settings;
+        partial_order_config.solver_settings = settings;
     }
 
     // Reject any leftover top-level keys. Anything still in `config` here is unrecognized.
-    // `epsilon` is called out by name because older versions accepted it for the total-order
-    // path; silently ignoring it on upgrade would be a backwards-compatibility trap.
+    // `epsilon` and `osqp_settings` are called out by name because older versions accepted
+    // them; silently ignoring either on upgrade would be a backwards-compatibility trap.
     if let Some(key) = config.keys().next() {
         if key == "epsilon" {
             return Err(Error::ConfigParseError(
-                "unknown settings key: 'epsilon' was removed (total-order Config no longer has tunable parameters); known keys: 'osqp_settings'",
+                "unknown settings key: 'epsilon' was removed (total-order Config no longer has tunable parameters); known keys: 'solver_settings'",
+            ));
+        }
+        if key == "osqp_settings" {
+            return Err(Error::ConfigParseError(
+                "unknown settings key: 'osqp_settings' was renamed to 'solver_settings' (the key names inside it are unchanged)",
             ));
         }
         return Err(Error::ConfigParseError(
-            "unknown settings key, known keys: 'osqp_settings'",
+            "unknown settings key, known keys: 'solver_settings'",
         ));
     }
 

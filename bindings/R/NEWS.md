@@ -1,3 +1,21 @@
+# isodistrreg 0.6.0
+
+* Multivariate (partial order) fits now use a quadratic-program solver built
+  into the package instead of OSQP. Installation no longer needs CMake or a C
+  toolchain, which removes a class of installation failure on platforms where
+  CMake is absent or misconfigured. `pars` keeps the same options with the same
+  meanings and the same defaults, so existing code fits the same models.
+* Fixed two failures on hazard-rate-order fits of larger datasets: one aborted
+  the fit outright, the other silently reported full convergence. Both are now
+  reported through `diagnostic$convergence_fraction`.
+* `diagnostic$convergence_fraction` now reports what it documents. It could
+  previously only ever be `1`, so a fit that did not converge was
+  indistinguishable from one that did.
+* Rust users: `Config`'s `osqp_settings` field is now `solver_settings`, and its
+  type is owned by the crate rather than by the solver. Python users: the
+  `"osqp_settings"` settings key is now `"solver_settings"`; the keys inside it
+  are unchanged.
+
 # isodistrreg 0.5.2
 
 * Faster fitting and prediction, especially for censored and larger datasets.

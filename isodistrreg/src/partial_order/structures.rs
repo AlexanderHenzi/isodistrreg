@@ -33,7 +33,7 @@ pub struct Fit<X: Float, Y: Float> {
     ///
     /// Represents a covariate-major matrix with in each minor index a CDF value for the
     /// corresponding threshold. CDF values are **f32** — matching the total-order convention.
-    /// The OSQP solver runs in f64 internally; we downcast at the algorithm output boundary.
+    /// The solver runs in f64 internally; we downcast at the algorithm output boundary.
     pub cdfs: Vec<f32>,
     /// Global average CDF, disregarding completely the covariates.
     ///
@@ -66,21 +66,76 @@ pub struct Fit<X: Float, Y: Float> {
     pub quality_indicators: QualityIndicators,
 }
 
-#[derive(Clone)]
-pub struct Config {
-    /// Settings passed to OSQP.
-    pub osqp_settings: osqp::Settings,
+/// Default absolute tolerance on the solver's primal and dual residuals.
+pub const DEFAULT_EPS_ABS: f64 = 1e-5;
+/// Default relative tolerance, applied to each residual's own scale.
+pub const DEFAULT_EPS_REL: f64 = 1e-5;
+/// Default cap on solver iterations per threshold.
+pub const DEFAULT_MAX_ITER: u32 = 10_000;
+
+/// Settings for the quadratic programs solved on the partial-order path.
+///
+/// The solver stops when both residuals are within tolerance:
+///
+/// ```text
+///     ||A u - z||_inf      <= eps_abs + eps_rel * max(||A u||_inf, ||z||_inf)
+///     ||u + q + A^T y||_inf <= eps_abs + eps_rel * max(||u||_inf, ||A^T y||_inf, ||q||_inf)
+/// ```
+///
+/// so `eps_abs` bounds the residuals outright and `eps_rel` scales that bound by the size
+/// of the quantities being differenced. Loosening either trades accuracy for iterations.
+/// The penalty parameter and over-relaxation are tuned internally and are not exposed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolverSettings {
+    /// Log per-threshold residuals to stderr.
+    pub verbose: bool,
+    /// Absolute residual tolerance.
+    pub eps_abs: f64,
+    /// Relative residual tolerance.
+    pub eps_rel: f64,
+    /// Iteration cap per threshold. Exceeding it lowers the reported
+    /// [`QualityIndicators::convergence_fraction`] rather than failing the fit.
+    pub max_iter: u32,
 }
-impl Default for Config {
+
+impl Default for SolverSettings {
     fn default() -> Self {
         Self {
-            osqp_settings: osqp::Settings::default()
-                .verbose(false)
-                .eps_abs(1e-5)
-                .eps_rel(1e-5)
-                .max_iter(10_000),
+            verbose: false,
+            eps_abs: DEFAULT_EPS_ABS,
+            eps_rel: DEFAULT_EPS_REL,
+            max_iter: DEFAULT_MAX_ITER,
         }
     }
+}
+
+impl SolverSettings {
+    #[must_use]
+    pub fn verbose(mut self, value: bool) -> Self {
+        self.verbose = value;
+        self
+    }
+    #[must_use]
+    pub fn eps_abs(mut self, value: f64) -> Self {
+        self.eps_abs = value;
+        self
+    }
+    #[must_use]
+    pub fn eps_rel(mut self, value: f64) -> Self {
+        self.eps_rel = value;
+        self
+    }
+    #[must_use]
+    pub fn max_iter(mut self, value: u32) -> Self {
+        self.max_iter = value;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Config {
+    /// Settings for the quadratic-program solver.
+    pub solver_settings: SolverSettings,
 }
 
 /// Data structures needed in the `find_neighbors` method.
@@ -236,7 +291,7 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                     },
                 };
             }
-            // Upcast once at the algorithm boundary — OSQP runs in f64.
+            // Upcast once at the algorithm boundary — the solver runs in f64.
             let algorithm_context_f64 = algorithm_context.to_f64();
             let algo_result = match response_order {
                 StochasticOrder::StochasticDominance => match decreasing {
@@ -324,7 +379,8 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
                         };
                         Ok(empty)
                     } else {
-                        // Censored solver is OSQP-free (Kaplan-Meier with clipping) — runs
+                        // The censored solver needs no quadratic program (Kaplan-Meier
+                        // with clipping) — it runs
                         // directly in the caller's X/Y precision, no f64 widening needed.
                         let mut result = match decreasing {
                             false => censored::<Increasing, _, _>(&algorithm_context, progress),
@@ -578,7 +634,7 @@ impl FromStr for PartialOrder {
 /// Pre-processing results that the algorithm needs for the uncensored partial-order solver.
 ///
 /// Weights are stored as `f64` because the partial-order solver runs in `f64` end-to-end
-/// (OSQP requires `f64`). Preprocessing converts the caller's `W: Float` weights into `f64`
+/// in `f64`. Preprocessing converts the caller's `W: Float` weights into `f64`
 /// here so the algorithm doesn't have to.
 pub struct UncensoredContext<X, Y> {
     /// Unique covariates in a flattened covariate-major matrix
@@ -619,8 +675,8 @@ impl<X, Y> UncensoredContext<X, Y> {
 }
 
 impl<X: Float, Y: Float> UncensoredContext<X, Y> {
-    /// Convert to an f64/f64 context for the OSQP-backed algorithm. Used at the partial-order
-    /// algorithm boundary where OSQP requires f64 inputs regardless of the user's `X`/`Y`.
+    /// Convert to an f64/f64 context. Used at the partial-order algorithm boundary, which
+    /// solves in f64 regardless of the user's `X`/`Y`.
     /// Weights are already `f64` (see field docs), so this only widens covariates and responses.
     #[must_use]
     pub fn to_f64(&self) -> UncensoredContext<f64, f64> {
@@ -663,7 +719,7 @@ impl<X: PartialOrd, Y: PartialOrd> UncensoredContext<X, Y> {
 
 /// Pre-processing results for the censored partial-order solver.
 ///
-/// The censored solver is OSQP-free (Kaplan-Meier with clipping), so `X` and `Y` flow through
+/// The censored solver needs no quadratic program (Kaplan-Meier with clipping), so `X` and `Y` flow through
 /// at the caller's precision. Weights are still stored as `f64` because `KaplanMeier` and the
 /// pooling accumulators run in `f64`; preprocessing converts the caller's `W: Float` weights
 /// into `f64` here.
@@ -726,7 +782,7 @@ impl<X, Y> CensoredContext<X, Y> {
 }
 
 pub struct AlgorithmOutput {
-    /// Algorithm output CDF values, in f32. OSQP and downstream PAVA run in f64 internally;
+    /// Algorithm output CDF values, in f32. The solver and downstream PAVA run in f64;
     /// each algorithm narrows once at its return boundary to match `Fit::cdfs`.
     pub cdfs: Vec<f32>,
     pub ordering_info: OrderingInfo,
@@ -856,13 +912,13 @@ pub struct QualityIndicators {
 #[cfg(test)]
 mod test {
     use super::Fit;
-    use crate::partial_order::{Config, CovariateGroups};
+    use crate::partial_order::{Config, CovariateGroups, SolverSettings};
     use crate::structures::StochasticOrder;
     use crate::{IsotonicDistributionalRegressionFit, NoProgress};
 
     fn tight_config() -> Config {
         Config {
-            osqp_settings: osqp::Settings::default()
+            solver_settings: SolverSettings::default()
                 .verbose(false)
                 .eps_abs(1e-8)
                 .eps_rel(1e-8)
