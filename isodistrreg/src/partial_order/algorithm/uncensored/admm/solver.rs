@@ -15,8 +15,17 @@
 //! The cone is the nonnegative orthant, so the projection is `max(0, .)` and the entries
 //! it clips are, bit for bit, the active constraint set. `Workspace::clipped` records them
 //! for the polishing step.
+//!
+//! The iteration is wrapped in certified exact-finish attempts (see [`try_finish`]): a
+//! predictor before the first iteration and correctors at failing residual checks, each
+//! accepting only on a duality gap of at most `0.5 * eps_abs^2` -- by strong convexity a
+//! guarantee of `||u - u*|| <= eps_abs`, strictly stronger than the residual test. Warm
+//! starts make consecutive thresholds share their active structure, so most solves never
+//! reach the first iteration at all, and the ones that do stop as soon as the projection
+//! clips settle rather than when the residuals finish crawling.
 use super::constraints::Constraints;
 use super::kkt::KktFactor;
+use super::polish::{self, Polisher};
 
 /// Regularization added to `P` in the ADMM system. OSQP's default.
 pub(crate) const SIGMA: f64 = 1e-6;
@@ -63,6 +72,24 @@ pub(crate) const F64_ERROR_PER_COND: f64 = f64::EPSILON;
 /// magnitude below the target leaves the termination test meaningful.
 pub(crate) const F32_ERROR_MARGIN: f64 = 0.1;
 
+/// Active-set refinement rounds for the predictor attempt at a solve's entry.
+///
+/// Each round polishes a candidate active set, peels its exact multipliers, and either
+/// certifies or drops the most negative multiplier's row -- the dual's exact signal for a
+/// pool that wants to split, applied one row at a time exactly as the classical primal
+/// active-set method does (dropping several at once was observed to limit-cycle).
+/// Consecutive thresholds differ by a bounded cascade of such splits plus the merges the
+/// repair loop restores, so this cap either finishes the threshold outright or
+/// establishes that the structure genuinely moved and the splitting iteration should run.
+const PREDICTOR_ROUNDS: u32 = 16;
+
+/// Refinement rounds for corrector attempts at failed residual checks.
+///
+/// Mid-iteration the clip record is noisy, and measured across instances a corrector that
+/// cannot certify within a few exchanges almost never certifies with more -- the deep
+/// marches are the predictor's job -- so the in-loop probes stay shallow.
+const CORRECTOR_ROUNDS: u32 = 4;
+
 /// Why the iteration stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Status {
@@ -87,14 +114,19 @@ pub(crate) struct Outcome {
     pub(crate) status: Status,
     pub(crate) iterations: u32,
     pub(crate) refactorizations: u32,
-    /// Primal residual `||A u - z||_inf` at the returned iterate.
+    /// Primal residual `||A u - z||_inf` at the returned iterate. Zero when the solve
+    /// finished through a certified exact polish, whose acceptance implies feasibility.
     pub(crate) primal_residual: f64,
-    /// Dual residual `||u + q + A^T y||_inf` at the returned iterate.
+    /// Dual residual `||u + q + A^T y||_inf` at the returned iterate. Zero when the solve
+    /// finished through a certified exact polish.
     pub(crate) dual_residual: f64,
     /// The penalty the solve ended on, carried into the next threshold.
     pub(crate) rho: f64,
     /// Whether the final factorization was stored in f32.
     pub(crate) used_f32: bool,
+    /// The iterate in `Workspace::x` is a polished point whose duality gap certifies
+    /// `||u - u*|| <= eps_abs`; the caller's own polish pass would be redundant.
+    pub(crate) finished_exact: bool,
 }
 
 /// Iterate state plus every scratch buffer, reused across the threshold sequence.
@@ -115,6 +147,13 @@ pub(crate) struct Workspace {
     aty: Vec<f64>,
     relaxed: Vec<f64>,
     column_scratch: Vec<f64>,
+    /// Refined active-set candidate handed between finish rounds; lives here rather than
+    /// in the `Polisher` because the polish call mutably borrows the polisher while the
+    /// seed is read.
+    seed_scratch: Vec<bool>,
+    /// Rows already dropped in the current finish attempt; never dropped twice, which
+    /// keeps the active-set exchange from cycling through a degenerate set of splits.
+    dropped_scratch: Vec<bool>,
     rho: f64,
     /// `rho` the current factor was built with; `f64::NAN` when there is no factor yet.
     factor_rho: f64,
@@ -134,6 +173,8 @@ impl Workspace {
             aty: vec![0.0; n],
             relaxed: vec![0.0; m],
             column_scratch: vec![0.0; n],
+            seed_scratch: vec![false; m],
+            dropped_scratch: vec![false; m],
             rho: RHO_INITIAL,
             factor_rho: f64::NAN,
             factor_used_f32: false,
@@ -166,19 +207,163 @@ fn norm_inf(v: &[f64]) -> f64 {
     worst
 }
 
+/// `f(u) - g(lambda)`: the duality gap of a primal point against explicit multipliers,
+/// with `g(lambda) = -0.5 ||A^T lambda - q||^2` the dual of `min 0.5||u||^2 + q^T u`
+/// s.t. `A u >= 0`. Valid as an optimality bound for any `lambda >= 0` by weak duality.
+///
+/// Summed with Kahan compensation: acceptance compares the gap against
+/// `0.5 * eps_abs^2 ~ 5e-11` while `f` and `g` are sums of `n` order-one terms, so a
+/// plain sequential sum would drown the threshold in its own rounding for a few thousand
+/// covariates. The per-coordinate terms `0.5 u_c^2 + q_c u_c + 0.5 v_c^2` are formed
+/// first -- each is order one, and the near-total cancellation happens across
+/// coordinates, exactly where the compensation acts.
+///
+/// `v_scratch` is an `n`-length buffer; its contents on entry are ignored.
+fn certified_gap(
+    a: &Constraints<'_>,
+    q: &[f64],
+    u: &[f64],
+    multipliers: &[f64],
+    v_scratch: &mut [f64],
+) -> f64 {
+    a.mul_transpose(multipliers, v_scratch);
+    let mut sum = 0.0f64;
+    let mut compensation = 0.0f64;
+    for ((&u_c, &q_c), &aty_c) in u.iter().zip(q).zip(v_scratch.iter()) {
+        let v_c = aty_c - q_c;
+        let term = 0.5 * u_c * u_c + q_c * u_c + 0.5 * v_c * v_c;
+        let adjusted = term - compensation;
+        let next = sum + adjusted;
+        compensation = (next - sum) - adjusted;
+        sum = next;
+    }
+    sum
+}
+
+/// Try to finish the solve exactly: polish a candidate active set and accept it only on a
+/// rigorous duality-gap certificate.
+///
+/// The first candidate is the projection-clip record (the previous threshold's active set
+/// on a fresh solve). Polishing it yields the exact minimizer over its equalities, and
+/// peeling the active forest yields that point's exact multipliers, so when the set is
+/// right the gap is rounding-level and certifies immediately -- no iteration, and on the
+/// predictor call no factorization either. When multipliers come out negative, their
+/// support is the dual's exact instruction for which rows to drop (a pool splitting as
+/// the threshold moves), and the next round polishes that; the repair loop inside
+/// `polish` re-adds any row the split point violates. Either the process closes the gap
+/// within a few rounds or the structure genuinely moved and the splitting iteration runs.
+///
+/// Acceptance at `gap <= 0.5 * eps_abs^2` converts, by strong convexity of the
+/// unit-quadratic objective, into `||u - u*|| <= eps_abs` -- a guarantee at least as
+/// strong as the residual test, typically available long before the residuals crawl
+/// under their tolerances.
+///
+/// On success `ws.x` holds the certified point and `ws.clipped` its active set (the seed
+/// for the next threshold's attempt); on failure both are untouched.
+fn try_finish(
+    a: &Constraints<'_>,
+    q: &[f64],
+    ws: &mut Workspace,
+    polisher: &mut Polisher,
+    gap_tolerance: f64,
+    rounds: u32,
+) -> Option<f64> {
+    let m = a.m();
+    ws.dropped_scratch[..m].fill(false);
+    for round in 0..rounds {
+        let report = if round == 0 {
+            polish::polish(a, q, |r| ws.clipped[r], &ws.x, polisher)
+        } else {
+            polish::polish(a, q, |r| ws.seed_scratch[r], &ws.x, polisher)
+        };
+        let peel = polisher.peel_multipliers(a, q, Some(&ws.dropped_scratch));
+        if report.feasible {
+            let gap = certified_gap(a, q, &polisher.u, &polisher.multipliers, &mut ws.aty);
+            if gap <= gap_tolerance {
+                ws.x.copy_from_slice(&polisher.u);
+                ws.clipped.copy_from_slice(polisher.active());
+                return Some(gap);
+            }
+            if peel.negative == 0 {
+                // Stationary with nonnegative multipliers yet a large gap: some component
+                // was not polishable (inconsistent ratios with data on it), which more
+                // rounds cannot fix.
+                return None;
+            }
+        } else if peel.negative == 0 && !polisher.any_inconsistent() {
+            // Infeasible with no refinement signal: nothing left to drop.
+            return None;
+        }
+        if polisher.any_inconsistent() {
+            // The clip record can glue the degenerate zero-survival region to live
+            // covariates. Keep exactly the edges the peel priced strictly positive: that
+            // disintegrates every inconsistent component wholesale and lets the repair
+            // loop rebuild the region from consistent equalities.
+            for (seed_r, &lambda_r) in ws.seed_scratch[..m].iter_mut().zip(&polisher.multipliers) {
+                *seed_r = lambda_r > 0.0;
+            }
+        } else {
+            // The classical active-set step: drop only the most negative multiplier's
+            // row. Dropping several at once re-merges via the repair loop and was
+            // observed to limit-cycle; one at a time makes each round a strict exchange,
+            // and never re-dropping a row the repair loop re-added keeps the exchange
+            // out of degenerate split cycles.
+            if peel.worst_row == usize::MAX {
+                // Every negative multiplier's row was already dropped once: no fresh
+                // exchange is left to try.
+                return None;
+            }
+            for (seed_r, &active_r) in ws.seed_scratch[..m].iter_mut().zip(polisher.active()) {
+                *seed_r = active_r;
+            }
+            ws.seed_scratch[peel.worst_row] = false;
+            ws.dropped_scratch[peel.worst_row] = true;
+        }
+    }
+    None
+}
+
 /// Solve `min 0.5 u^T u + q^T u  s.t.  A u >= 0`, leaving the primal iterate in `ws.x`.
 ///
 /// `ws` carries the warm start in and the solution out. `factor` must have been built
 /// with `KktFactor::new` for the same `n` and edge list; this routine refreshes its
 /// numeric values whenever `rho` moves or `Workspace::invalidate_factor` was called.
+///
+/// `polisher` drives the exact-finish attempts: one before the first iteration
+/// (consecutive thresholds usually share their active set, so the previous solution's
+/// structure plus the new `q` is often already the answer -- in which case the
+/// factorization is never touched at all), and one at every residual check that fails.
 pub(crate) fn solve(
     a: &Constraints<'_>,
     q: &[f64],
     settings: &Settings,
     ws: &mut Workspace,
     factor: &mut KktFactor,
+    polisher: &mut Polisher,
 ) -> Outcome {
     debug_assert_eq!(q.len(), a.n);
+    let gap_tolerance = 0.5 * settings.eps_abs * settings.eps_abs;
+
+    // Predictor: the warm-started structure certifies without a single iteration on most
+    // thresholds. Runs before the spectral bound and the factorization refresh, so an
+    // exact finish here skips the numeric factorization entirely -- on the hazard-rate
+    // path, where `A` changes every threshold, that is the dominant saving.
+    if let Some(gap) = try_finish(a, q, ws, polisher, gap_tolerance, PREDICTOR_ROUNDS) {
+        if settings.verbose {
+            eprintln!("  admm predictor finish, certified gap {gap:.3e}");
+        }
+        return Outcome {
+            status: Status::Solved,
+            iterations: 0,
+            refactorizations: 0,
+            primal_residual: 0.0,
+            dual_residual: 0.0,
+            rho: ws.rho,
+            used_f32: ws.factor_used_f32,
+            finished_exact: true,
+        };
+    }
+
     let lambda_max_bound = a.spectral_norm_squared_bound(&mut ws.column_scratch);
     let norm_q = norm_inf(q);
     let rho_limit = rho_ceiling(lambda_max_bound, settings.eps_abs);
@@ -202,6 +387,15 @@ pub(crate) fn solve(
     let mut iterations = settings.max_iter;
     let mut primal_residual = f64::INFINITY;
     let mut dual_residual = f64::INFINITY;
+
+    // Exponential backoff for corrector attempts. When the iterate's structure is still
+    // far from the answer -- degenerate near-equal pools mid-grind -- every attempt fails
+    // the certificate, and paying several edge-list passes per residual check adds up.
+    // Doubling the wait after each failure keeps a hard solve's attempt cost logarithmic
+    // in its iteration count while an easy solve still exits on the first check.
+    let mut checks_failed = 0u32;
+    let mut next_attempt = 1u32;
+    let mut previous_worst_ratio = f64::INFINITY;
 
     for iteration in 1..=settings.max_iter {
         // rhs = sigma x - q + A^T (rho z - y); reuse `w` to hold `rho z - y`.
@@ -298,6 +492,34 @@ pub(crate) fn solve(
             iterations = iteration;
             break;
         }
+
+        // Corrector: the residuals are still crawling, but the *structure* of the iterate
+        // -- which rows the projection clips -- typically settles orders of magnitude
+        // earlier, and once it has, the polished point is exact and certifiable. This is
+        // what cuts off the slow tail of the splitting iteration.
+        checks_failed += 1;
+        if checks_failed >= next_attempt || last {
+            next_attempt = checks_failed
+                .saturating_mul(2)
+                .max(next_attempt.saturating_mul(2));
+            if let Some(gap) = try_finish(a, q, ws, polisher, gap_tolerance, CORRECTOR_ROUNDS) {
+                if settings.verbose {
+                    eprintln!(
+                        "  admm iter {iteration:>5}  corrector finish, certified gap {gap:.3e}"
+                    );
+                }
+                return Outcome {
+                    status: Status::Solved,
+                    iterations: iteration,
+                    refactorizations,
+                    primal_residual: 0.0,
+                    dual_residual: 0.0,
+                    rho: ws.rho,
+                    used_f32: ws.factor_used_f32,
+                    finished_exact: true,
+                };
+            }
+        }
         if last {
             break;
         }
@@ -315,10 +537,25 @@ pub(crate) fn solve(
         } else {
             0.0
         };
+        // An endgame plateau overrides the adoption deadband. The deadband exists to
+        // avoid refactorization churn while the iteration is making progress -- but a
+        // residual ratio stuck at, say, 5 sits exactly inside it, and the iteration then
+        // decays at a fraction of a percent per sweep until the budget burns. Barely
+        // improving residuals mean the current `rho` has nothing more to give. The
+        // near-convergence gate matters: early in a solve the residuals wander without
+        // shrinking monotonically, and treating that as a plateau chases `rho` far past
+        // any useful value.
+        let worst_ratio =
+            (r_prim / eps_prim.max(residual_floor)).max(r_dual / eps_dual.max(residual_floor));
+        let plateaued = worst_ratio > previous_worst_ratio * 0.95 && worst_ratio <= 32.0;
+        previous_worst_ratio = worst_ratio;
         if rel_dual > 0.0 && rel_prim > 0.0 {
             let candidate = (ws.rho * (rel_prim / rel_dual).sqrt()).clamp(RHO_MIN, rho_limit);
             let drift = candidate / ws.rho;
-            if drift > ADAPTIVE_RHO_TOLERANCE || drift < 1.0 / ADAPTIVE_RHO_TOLERANCE {
+            let outside_deadband =
+                drift > ADAPTIVE_RHO_TOLERANCE || drift < 1.0 / ADAPTIVE_RHO_TOLERANCE;
+            let meaningful = drift > 1.05 || drift < 1.0 / 1.05;
+            if outside_deadband || (plateaued && meaningful) {
                 ws.rho = candidate;
                 refresh_factor(
                     a,
@@ -340,6 +577,7 @@ pub(crate) fn solve(
         dual_residual,
         rho: ws.rho,
         used_f32: ws.factor_used_f32,
+        finished_exact: false,
     }
 }
 

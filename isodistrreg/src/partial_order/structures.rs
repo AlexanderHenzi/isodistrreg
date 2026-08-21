@@ -198,9 +198,11 @@ impl<X: Float, Y: Float> IsotonicDistributionalRegressionFit for Fit<X, Y> {
     ///   where `P = diag(w_j)` and `q_j = -w_j * F_j(z)` with `F_j(z)` the empirical CDF of the
     ///   responses attached to row j at threshold z. Warm start and cost updates are used
     ///   to accelerate repeated solves.
-    /// - Clamp to [0,1], record whether the solver hit the iteration limit, compute a diagnostic
-    ///   "precision" (maximal downward step across thresholds), run a final PAVA along thresholds
-    ///   to ensure monotonicity in z, and append a trailing column of ones.
+    /// - Clamp to [0,1], record whether the solver hit the iteration limit, and make the
+    ///   emitted CDFs exactly monotone in both the threshold and the covariate direction
+    ///   (a per-threshold sweep along the cover edges plus a clip against the previous
+    ///   threshold's row; the largest absorbed violation is the diagnostic "precision").
+    ///   A trailing column of ones is appended for the last threshold.
     ///
     /// # Returns
     ///
@@ -905,7 +907,11 @@ impl Csr {
 #[derive(Copy, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct QualityIndicators {
+    /// Largest monotonicity violation -- in the threshold or the covariate direction --
+    /// that the output composition absorbed while making the emitted CDFs exactly
+    /// monotone in both. Solver round-off, so typically at the solve tolerance or below.
     pub precision: f64,
+    /// Fraction of threshold solves that converged within the iteration budget.
     pub convergence_fraction: f64,
 }
 

@@ -5,6 +5,19 @@
   toolchain, which removes a class of installation failure on platforms where
   CMake is absent or misconfigured. `pars` keeps the same options with the same
   meanings and the same defaults, so existing code fits the same models.
+* Multivariate fits are much faster — an order of magnitude and more on
+  stochastic-dominance fits of realistic size, several-fold under the
+  hazard-rate order. The solver exploits that each threshold's program is
+  isotonic regression on a fixed graph: consecutive thresholds are finished
+  from the previous threshold's pool structure under a rigorous optimality
+  certificate whenever that structure still fits, and each covariate's fitted
+  CDF is written as exactly 0 or 1 outside its data-determined transition
+  window, shrinking every solve to the covariates actually in transition.
+* Multivariate fitted CDFs are now exactly monotone — non-decreasing across
+  thresholds and ordered along the covariate partial order, bitwise rather
+  than up to solver tolerance. `diagnostic$precision` now reports the largest
+  round-off violation absorbed in either direction (previously: across
+  thresholds only).
 * Fixed two failures on hazard-rate-order fits of larger datasets: one aborted
   the fit outright, the other silently reported full convergence. Both are now
   reported through `diagnostic$convergence_fraction`.

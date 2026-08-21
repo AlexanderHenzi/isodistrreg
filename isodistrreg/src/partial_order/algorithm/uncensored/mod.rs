@@ -13,8 +13,7 @@ use crate::partial_order::{
 };
 use crate::progress::ProgressTracker;
 use crate::routines::transpose;
-use crate::structures::{Direction, Increasing};
-use crate::total_order::tonic_regression_pre_sorted;
+use crate::structures::Direction;
 use std::iter::repeat_n;
 
 #[must_use]
@@ -134,14 +133,8 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     } else {
         vec![0.0; context.n_covariate()]
     };
-    // q_energy[i] = q[i] * weight_scale / sqrt_weight[i]; buffers reused across thresholds.
+    // q_energy[i] = q[i] * weight_scale / sqrt_weight[i]; gathered per band below.
     let q_to_energy: Vec<f64> = sqrt_weight.iter().map(|sw| weight_scale / sw).collect();
-    let mut q_energy = vec![0.0; context.n_covariate()];
-    fn map_into(dst: &mut [f64], src: &[f64], factor: &[f64]) {
-        for ((d, &s), &f) in dst.iter_mut().zip(src).zip(factor) {
-            *d = s * f;
-        }
-    }
 
     let settings = solver::Settings {
         verbose: config.solver_settings.verbose,
@@ -155,113 +148,255 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     let data_bounds = threshold_data_bounds(&context.y);
     debug_assert_eq!(data_bounds.len(), context.n_threshold() + 1);
 
+    // --- Exact pin windows ----------------------------------------------------------------
+    // Isotonic projection preserves bounds, so a covariate's fitted value is *exactly* 0 or
+    // 1 outside a data-determined threshold window (see `pin_windows`). Outside its window
+    // a covariate contributes nothing to the QP, and its constraint rows are vacuous, so
+    // each run of thresholds is solved on the subgraph of in-window covariates only -- the
+    // band where the CDF actually transitions. On response-correlated data that band is a
+    // small fraction of the graph; on adversarial data it is everything and the reduction
+    // degenerates to the full problem at no extra cost beyond the window sweep.
+    //
+    // Just as important as the size reduction: the pinned regions are exactly where the
+    // fitted surface is flat, i.e. where constraint rows are degenerate (margin zero) and
+    // the active set is ambiguous. Excluding them keeps the solver's active-set estimate --
+    // and with it the exact-finish certificates -- sharp.
+    let (miny, maxy) = covariate_response_extremes(context);
+    let windows = pin_windows(
+        &constraint_edges,
+        context.n_covariate(),
+        &miny,
+        &maxy,
+        D::IS_INCREASING,
+    );
+
+    let n_covariate = context.n_covariate();
+    let n_edges = constraint_edges.len();
     // We collect these results each iteration
-    let mut cdfs = Vec::with_capacity(context.n_threshold() * context.n_covariate());
-    let stats = if HRO {
-        // The hazard-rate constraints are rebuilt from the previous threshold's fit, so the
-        // sequence cannot be cut anywhere: threshold `t` is not even a well-posed problem
-        // until `t - 1` has been solved.
-        let mut solver_state = SolverState::new(context.n_covariate(), &constraint_edges);
+    let mut cdfs = Vec::with_capacity(context.n_threshold() * n_covariate);
+    let mut stats = SolveStats::new();
+
+    // Warm-start carriers across band rebuilds, in the full index space: the primal in
+    // energy coordinates, the dual per cover edge, and the active-set record per cover
+    // edge. A covariate entering the band comes from its pinned state (value zero, dual
+    // zero on its edges), which is exactly the fresh entries' initialization.
+    let mut full_x = if HRO {
         // The warm start is x = 1, the survival before any threshold, i.e. u = sqrt_weight.
-        solver_state.workspace.x.copy_from_slice(&sqrt_weight);
-        // The previous threshold's solution in x-coordinates, read as the survival S.
-        let mut survival = vec![0.0; context.n_covariate()];
-        for threshold in 0..n_solve {
-            for observation in data_bounds[threshold]..data_bounds[threshold + 1] {
-                q[context.x_indices[observation]] += context.weight[observation];
-            }
-            if threshold > 0 {
-                // A's values change with S, so its factorization has to be refreshed. The
-                // pattern does not change, so the symbolic phase is untouched.
-                update_constraint_coefficients::<D>(
-                    &mut coefficients,
-                    &constraint_edges,
-                    &survival,
-                    &sqrt_weight,
-                );
-                solver_state.workspace.invalidate_factor();
-            }
-            map_into(&mut q_energy, &q, &q_to_energy);
-            let constraints = Constraints {
-                edges: &constraint_edges,
-                coef: &coefficients,
-                n: context.n_covariate(),
-            };
-            solver_state.solve_threshold(
-                &constraints,
-                &q_energy,
-                &settings,
-                &sqrt_weight,
-                threshold,
-                &mut survival,
-            );
-            cdfs.extend_from_slice(&survival);
-            progress.increment();
-        }
-        solver_state.stats
+        sqrt_weight.clone()
     } else {
-        // Under stochastic dominance `A` is the same matrix at every threshold and `q` is a
-        // prefix sum over the response-sorted data, so only `q` moves from one threshold
-        // to the next and the matrix handed to the solver never changes. Consecutive
-        // problems are therefore near-identical, which is exactly what the warm start
-        // carried in the solver state exploits: the factorization built for the first
-        // solve serves the whole sequence.
-        let mut solver_state = SolverState::new(context.n_covariate(), &constraint_edges);
-        let mut fitted = vec![0.0; context.n_covariate()];
-        let constraints = Constraints {
-            edges: &constraint_edges,
-            coef: &coefficients,
-            n: context.n_covariate(),
+        vec![0.0; n_covariate]
+    };
+    let mut full_y = vec![0.0; n_edges];
+    let mut full_clip = vec![false; n_edges];
+    // The previously *emitted* row in x-coordinates. It anchors the threshold-direction
+    // clip below, and on the hazard-rate path it is also what the next threshold's ratio
+    // constraints are rebuilt from -- which is why that path cannot cut the threshold
+    // sequence: threshold `t` is not even a well-posed problem until `t - 1` has been
+    // solved. Before any threshold the CDF is 0 everywhere (the survival 1).
+    let mut previous_fit = vec![if HRO { 1.0 } else { 0.0 }; n_covariate];
+    let mut row = vec![0.0; n_covariate];
+    // Largest monotonicity violation the composition below had to absorb, reported as
+    // `QualityIndicators::precision`.
+    let mut precision = 0.0f64;
+
+    let mut band: Option<(SubInstance, SolverState)> = None;
+    let mut chunk_start = 0usize;
+    while chunk_start < n_solve {
+        let chunk_end = (chunk_start + CHUNK_THRESHOLDS).min(n_solve);
+        let z_first = context.thresholds[chunk_start];
+        let z_last = context.thresholds[chunk_end - 1];
+
+        // In-window at some threshold of this chunk. The hazard-rate path has no lower
+        // pin (survival = 1 has no closed-form certificate under ratio constraints), so
+        // only the upper window bounds it.
+        let active: Vec<usize> = (0..n_covariate)
+            .filter(|&c| windows.one[c] > z_first && (HRO || windows.zero[c] <= z_last))
+            .collect();
+
+        // Rebuild the band only when the active set moved; while it is unchanged the
+        // existing state -- symbolic factorization included -- continues seamlessly. On
+        // data where nothing pins, this collapses to one build for the whole fit.
+        let moved = match &band {
+            Some((instance, _)) => instance.active != active,
+            None => !active.is_empty(),
         };
-        for threshold in 0..n_solve {
-            for observation in data_bounds[threshold]..data_bounds[threshold + 1] {
-                q[context.x_indices[observation]] -= context.weight[observation];
+        if moved {
+            if let Some((instance, state)) = band.take() {
+                instance.scatter_state(&state, &mut full_x, &mut full_y, &mut full_clip);
+                stats.merge(state.stats);
             }
-            map_into(&mut q_energy, &q, &q_to_energy);
-            solver_state.solve_threshold(
-                &constraints,
-                &q_energy,
-                &settings,
-                &sqrt_weight,
-                threshold,
-                &mut fitted,
-            );
-            cdfs.extend_from_slice(&fitted);
+            if !active.is_empty() {
+                let instance = SubInstance::build(
+                    active,
+                    n_covariate,
+                    &constraint_edges,
+                    &coefficients,
+                    &sqrt_weight,
+                    &q_to_energy,
+                );
+                let mut state = SolverState::new(instance.active.len(), &instance.edges);
+                instance.gather_state(&mut state, &full_x, &full_y, &full_clip);
+                band = Some((instance, state));
+            }
+        }
+
+        for threshold in chunk_start..chunk_end {
+            let z = context.thresholds[threshold];
+            for observation in data_bounds[threshold]..data_bounds[threshold + 1] {
+                let covariate = context.x_indices[observation];
+                if HRO {
+                    q[covariate] += context.weight[observation];
+                } else {
+                    q[covariate] -= context.weight[observation];
+                }
+            }
+
+            if let Some((instance, state)) = band.as_mut() {
+                if HRO && threshold > 0 {
+                    // A's values change with S, so its factorization has to be refreshed.
+                    // The pattern does not change, so the symbolic phase is untouched.
+                    for (slot, &covariate) in instance.scratch.iter_mut().zip(&instance.active) {
+                        *slot = previous_fit[covariate];
+                    }
+                    update_constraint_coefficients::<D>(
+                        &mut instance.coefficients,
+                        &instance.edges,
+                        &instance.scratch,
+                        &instance.sqrt_weight,
+                    );
+                    state.workspace.invalidate_factor();
+                }
+                for (slot, (&covariate, &scale)) in instance
+                    .q_energy
+                    .iter_mut()
+                    .zip(instance.active.iter().zip(&instance.q_scale))
+                {
+                    *slot = q[covariate] * scale;
+                }
+                let constraints = Constraints {
+                    edges: &instance.edges,
+                    coef: &instance.coefficients,
+                    n: instance.active.len(),
+                };
+                let mut fitted = std::mem::take(&mut instance.fitted);
+                state.solve_threshold(
+                    &constraints,
+                    &instance.q_energy,
+                    &settings,
+                    &instance.sqrt_weight,
+                    threshold,
+                    &mut fitted,
+                );
+                instance.fitted = fitted;
+            }
+
+            // Assemble the output row: exact pins outside the window, solved values
+            // inside. On the hazard-rate path the pinned zeros feed the next threshold's
+            // ratio constraints as exact zeros, which is what routes those rows onto the
+            // plain-order fallback.
+            for (c, (value, (&one_c, &zero_c))) in row
+                .iter_mut()
+                .zip(windows.one.iter().zip(&windows.zero))
+                .enumerate()
+            {
+                *value = if z >= one_c {
+                    if HRO { 0.0 } else { 1.0 }
+                } else if !HRO && z < zero_c {
+                    0.0
+                } else {
+                    let (instance, _) = band
+                        .as_ref()
+                        .expect("an in-window covariate must be inside the band");
+                    instance.fitted[instance.map[c]]
+                };
+            }
+
+            // --- Inherent monotonicity, both directions -------------------------------
+            // The exact optimum satisfies the covariate order and is monotone in the
+            // threshold, but a solve only enforces either to tolerance. Both properties
+            // are therefore established here, on the emitted values themselves, the same
+            // way PAVA earns its guarantee: by construction.
+            //
+            //  1. One sweep over the band's cover edges in topological order pins every
+            //     edge inequality exactly: the read endpoint is final before any edge
+            //     leaving it is processed, and the written endpoint only moves further in
+            //     the enforced direction. Transitivity then covers all comparable pairs,
+            //     and edges outside the band hold already -- a pinned endpoint's
+            //     inequality is vacuous for values in [0, 1], and the pin windows are
+            //     closed in exactly the directions that make pins mutually consistent.
+            //  2. Clipping against the previously emitted row makes the threshold
+            //     direction exact, and cannot break step 1: the previous row satisfies
+            //     the same edge inequalities by induction, and min/max are monotone in
+            //     both arguments, so the clipped row inherits the order from its two
+            //     ordered inputs.
+            //
+            // Both moves act only on solver noise -- the exact solution is a fixed point
+            // -- and the largest absorbed violation is reported as the fit's `precision`.
+            if let Some((instance, _)) = band.as_ref() {
+                // The fit direction decides which way each cover edge points: the CDF is
+                // antitone in the covariate order for an increasing fit (the survival
+                // antitone for a decreasing one), so exactly one of `min` and `max`
+                // repairs toward feasibility.
+                if D::IS_INCREASING != HRO {
+                    for &(source, target) in &instance.sweep_edges {
+                        let step = row[target] - row[source];
+                        if step > 0.0 {
+                            if step > precision {
+                                precision = step;
+                            }
+                            row[target] = row[source];
+                        }
+                    }
+                } else {
+                    for &(source, target) in &instance.sweep_edges {
+                        let step = row[source] - row[target];
+                        if step > 0.0 {
+                            if step > precision {
+                                precision = step;
+                            }
+                            row[target] = row[source];
+                        }
+                    }
+                }
+            }
+            for (value, &previous) in row.iter_mut().zip(previous_fit.iter()) {
+                // CDFs may not fall across thresholds; survivals may not rise.
+                let step = if HRO {
+                    *value - previous
+                } else {
+                    previous - *value
+                };
+                if step > 0.0 {
+                    if step > precision {
+                        precision = step;
+                    }
+                    *value = previous;
+                }
+            }
+            previous_fit.copy_from_slice(&row);
+            cdfs.extend_from_slice(&row);
             progress.increment();
         }
-        solver_state.stats
-    };
+        chunk_start = chunk_end;
+    }
+    if let Some((_, state)) = band.take() {
+        stats.merge(state.stats);
+    }
+    let stats = stats;
 
     // Finish the last trivial threshold
     cdfs.extend(repeat_n(if HRO { 0.0 } else { 1.0 }, context.n_covariate()));
     progress.increment();
 
     // Convert to covariate-major (a sequence of cdfs, one for each covariate)
-    // TODO: This transpose can be avoided by computing the isotonic regressions first, then
-    //  overwriting all at once (but this would require more memory for the regressions)
     transpose(&mut cdfs, context.n_threshold(), context.n_covariate());
 
-    // From survival curve to CDF
+    // From survival curve to CDF. `1 - s` and the later f64 -> f32 narrowing are both
+    // monotone maps, so the two monotonicity guarantees established row by row above
+    // survive them exactly.
     if HRO {
         for s in &mut cdfs {
             *s = 1.0 - *s;
-        }
-    }
-
-    // Diagnostics before PAVA: precision = abs(min negative step across thresholds)
-    let precision = cdfs
-        .chunks_exact(context.n_threshold())
-        .flat_map(|cdf| cdf.windows(2).map(|w| w[1] - w[0]))
-        .reduce(f64::min) // min
-        .map(|diff| if diff < 0.0 { -diff } else { 0.0 })
-        .unwrap();
-
-    // Apply PAVA along thresholds for each row, then append 1.0
-    for cdf in cdfs.chunks_mut(context.n_threshold()) {
-        let increasing =
-            tonic_regression_pre_sorted::<Increasing, _, _>(cdf.iter().map(|&v| (v, 1.0)));
-        for (initial, cleaned) in cdf.iter_mut().zip(increasing) {
-            *initial = cleaned;
         }
     }
 
@@ -269,6 +404,7 @@ pub fn algorithm<D: Direction, const HRO: bool>(
         let SolveStats {
             unconverged,
             polished,
+            exact_finishes,
             iterations,
             refactorizations,
             rho_low,
@@ -277,7 +413,8 @@ pub fn algorithm<D: Direction, const HRO: bool>(
         } = stats;
         eprintln!(
             "solver: {n_solve} solves, {unconverged} unconverged, \
-             {polished} polished, {iterations} iterations, \
+             {exact_finishes} exact finishes, {polished} polished, \
+             {iterations} iterations, \
              {refactorizations} refactorizations, rho in [{rho_low:.3e}, {rho_high:.3e}], \
              {f32_solves} solved with an f32 factor"
         );
@@ -286,8 +423,8 @@ pub fn algorithm<D: Direction, const HRO: bool>(
     // dilute the fraction.
     let convergence_fraction = 1.0 - stats.unconverged as f64 / n_solve as f64;
 
-    // The solver and the warm-started PAVA above run in f64; narrow once at the algorithm boundary
-    // to match `AlgorithmOutput::cdfs`.
+    // The solver runs in f64; narrow once at the algorithm boundary to match
+    // `AlgorithmOutput::cdfs`.
     AlgorithmOutput {
         cdfs: cdfs.into_iter().map(|v| v as f32).collect(),
         ordering_info: OrderingInfo::from_edges(constraint_edges, context.n_covariate()),
@@ -317,12 +454,235 @@ fn threshold_data_bounds(y: &[f64]) -> Vec<usize> {
     bounds
 }
 
+/// Thresholds sharing one band of in-window covariates.
+///
+/// The pin windows change with every threshold, but rebuilding the band -- and with it
+/// the solver state and its symbolic factorization -- per threshold would forfeit the
+/// warm start. A run of this many thresholds shares the union of its windows instead:
+/// covariates whose window opens mid-run are simply solved as free variables while their
+/// exact pin overrides the output, so the fit is unchanged and only the reduction is
+/// coarser. Sixteen keeps the union close to the per-threshold band (a window spans many
+/// thresholds on any realistic response distribution) while amortizing a rebuild to a
+/// sixteenth of a solve each.
+const CHUNK_THRESHOLDS: usize = 16;
+
+/// Smallest and largest response observed at each covariate.
+fn covariate_response_extremes(context: &UncensoredContext<f64, f64>) -> (Vec<f64>, Vec<f64>) {
+    let n = context.n_covariate();
+    let mut miny = vec![f64::INFINITY; n];
+    let mut maxy = vec![f64::NEG_INFINITY; n];
+    for (&covariate, &response) in context.x_indices.iter().zip(&context.y) {
+        if response < miny[covariate] {
+            miny[covariate] = response;
+        }
+        if response > maxy[covariate] {
+            maxy[covariate] = response;
+        }
+    }
+    (miny, maxy)
+}
+
+/// The exact pin thresholds of every covariate.
+///
+/// `one[c]` and `zero[c]` bound the window outside which covariate `c`'s fitted value is
+/// known in closed form, threshold by threshold:
+///
+///  * for `z >= one[c]` the fitted CDF is exactly 1 (fitted survival exactly 0 under the
+///    hazard-rate order);
+///  * for `z < zero[c]` the fitted CDF is exactly 0 (stochastic dominance only; the
+///    hazard-rate ratio constraints admit no such closed form on the survival-1 side).
+///
+/// The argument, for an increasing fit (CDF antitone in the covariate order, `x_i >= x_j`
+/// on every cover edge `i` before `j`): let `L` be the lower closure of `c`. If every
+/// observation of every covariate in `L` has response `<= z`, take the optimum `x*` and
+/// raise it to 1 on `L`. The result is still feasible -- `L` is lower-closed, so every
+/// edge into `L` comes from inside `L`, and edges leaving `L` only see their lower side
+/// raised to the maximum -- and its objective cannot be worse, since each raised
+/// coordinate reaches its data value exactly. Strict convexity then forces `x* = 1` on
+/// `L`. Hence `one[c] = max` of the response maxima over the lower closure, and by the
+/// mirrored argument `zero[c] = min` of the response minima over the upper closure; a
+/// decreasing fit (CDF isotone) swaps the closures. Both sweeps propagate along the cover
+/// edges, whose endpoints are topologically ordered (`i < j`), in `O(n + m log m)`.
+///
+/// The bounds are exact, not conservative: the projection onto the monotone cone maps
+/// `[0, 1]`-valued data to `[0, 1]`-valued fits, which is what makes the raised point
+/// feasible. That is also why the pinned values can be written into the output verbatim
+/// -- they are *more* accurate than anything an iterative solve would produce.
+struct PinWindows {
+    /// Fit is exactly 1 (CDF) / 0 (survival) for thresholds at or above this.
+    one: Vec<f64>,
+    /// Fit is exactly 0 (CDF) for thresholds strictly below this.
+    zero: Vec<f64>,
+}
+
+fn pin_windows(
+    edges: &[(usize, usize)],
+    n: usize,
+    miny: &[f64],
+    maxy: &[f64],
+    increasing: bool,
+) -> PinWindows {
+    debug_assert_eq!(miny.len(), n);
+    debug_assert_eq!(maxy.len(), n);
+    let mut one = maxy.to_vec();
+    let mut zero = miny.to_vec();
+    // Propagation along a cover edge must see its source's final value, so the edges are
+    // walked in topological order of the propagation direction; `i < j` on every edge
+    // makes sorting by the receiving endpoint sufficient.
+    let mut order: Vec<usize> = (0..edges.len()).collect();
+    if increasing {
+        // `one` accumulates over lower closures, `zero` over upper closures.
+        order.sort_unstable_by_key(|&r| edges[r].1);
+        for &r in &order {
+            let (i, j) = edges[r];
+            one[j] = one[j].max(one[i]);
+        }
+        order.sort_unstable_by_key(|&r| std::cmp::Reverse(edges[r].0));
+        for &r in &order {
+            let (i, j) = edges[r];
+            zero[i] = zero[i].min(zero[j]);
+        }
+    } else {
+        // Mirrored: `one` over upper closures, `zero` over lower closures.
+        order.sort_unstable_by_key(|&r| std::cmp::Reverse(edges[r].0));
+        for &r in &order {
+            let (i, j) = edges[r];
+            one[i] = one[i].max(one[j]);
+        }
+        order.sort_unstable_by_key(|&r| edges[r].1);
+        for &r in &order {
+            let (i, j) = edges[r];
+            zero[j] = zero[j].min(zero[i]);
+        }
+    }
+    PinWindows { one, zero }
+}
+
+/// One band's quadratic program: the full problem restricted to the in-window covariates,
+/// in a compact index space.
+///
+/// Restriction is exact, not approximate: a pinned covariate's rows are vacuous (a pin at
+/// 1 only relaxes `x_i >= x_j` rows below it, a pin at 0 only rows above, and the pinned
+/// sets are closed in the respective direction, so no row ever constrains a free
+/// covariate through a pinned one), and its objective term is constant. The reduced
+/// optimum therefore *is* the full optimum on the band.
+struct SubInstance {
+    /// Band index -> covariate.
+    active: Vec<usize>,
+    /// Covariate -> band index, `usize::MAX` outside the band.
+    map: Vec<usize>,
+    /// Cover edges with both endpoints in the band, in band indices.
+    edges: Vec<(usize, usize)>,
+    /// The global row each band row came from, for the dual warm-start carriers.
+    edge_ids: Vec<usize>,
+    coefficients: Vec<(f64, f64)>,
+    sqrt_weight: Vec<f64>,
+    /// `q_to_energy` restricted to the band.
+    q_scale: Vec<f64>,
+    q_energy: Vec<f64>,
+    fitted: Vec<f64>,
+    scratch: Vec<f64>,
+    /// The band's cover edges as full-space covariate pairs, ordered by the receiving
+    /// endpoint so the monotonicity sweep reads only finalized values. Every cover edge
+    /// with a pinned endpoint holds exactly without repair -- pins are closed in the
+    /// consistent directions and dominate any value in [0, 1] -- so this list is also the
+    /// complete set of edges the sweep ever has to visit.
+    sweep_edges: Vec<(usize, usize)>,
+}
+
+impl SubInstance {
+    fn build(
+        active: Vec<usize>,
+        n: usize,
+        edges: &[(usize, usize)],
+        coefficients: &[(f64, f64)],
+        sqrt_weight: &[f64],
+        q_to_energy: &[f64],
+    ) -> Self {
+        let mut map = vec![usize::MAX; n];
+        for (k, &covariate) in active.iter().enumerate() {
+            map[covariate] = k;
+        }
+        let mut sub_edges = Vec::new();
+        let mut edge_ids = Vec::new();
+        let mut sub_coefficients = Vec::new();
+        let mut sweep_edges = Vec::new();
+        for (r, &(i, j)) in edges.iter().enumerate() {
+            if map[i] != usize::MAX && map[j] != usize::MAX {
+                sub_edges.push((map[i], map[j]));
+                edge_ids.push(r);
+                sub_coefficients.push(coefficients[r]);
+                sweep_edges.push((i, j));
+            }
+        }
+        // Topological for the sweep: `i < j` on every cover edge, so ordering by the
+        // receiving endpoint guarantees all edges into a node precede all edges out of it.
+        sweep_edges.sort_unstable_by_key(|&(_, j)| j);
+        let k = active.len();
+        Self {
+            sqrt_weight: active.iter().map(|&c| sqrt_weight[c]).collect(),
+            q_scale: active.iter().map(|&c| q_to_energy[c]).collect(),
+            q_energy: vec![0.0; k],
+            fitted: vec![0.0; k],
+            scratch: vec![0.0; k],
+            active,
+            map,
+            edges: sub_edges,
+            edge_ids,
+            coefficients: sub_coefficients,
+            sweep_edges,
+        }
+    }
+
+    /// Load the warm start from the full-space carriers into a fresh state.
+    ///
+    /// The slack is rebuilt as `max(0, A x)` rather than carried: it is determined by the
+    /// primal up to the projection, and the band's edge set just changed.
+    fn gather_state(&self, state: &mut SolverState, x: &[f64], y: &[f64], clip: &[bool]) {
+        let ws = &mut state.workspace;
+        for (slot, &covariate) in ws.x.iter_mut().zip(&self.active) {
+            *slot = x[covariate];
+        }
+        for (slot, &row) in ws.y.iter_mut().zip(&self.edge_ids) {
+            *slot = y[row];
+        }
+        for (slot, &row) in ws.clipped.iter_mut().zip(&self.edge_ids) {
+            *slot = clip[row];
+        }
+        let constraints = Constraints {
+            edges: &self.edges,
+            coef: &self.coefficients,
+            n: self.active.len(),
+        };
+        constraints.mul(&ws.x, &mut ws.z);
+        for z_r in ws.z.iter_mut() {
+            *z_r = z_r.max(0.0);
+        }
+    }
+
+    /// Store the state back into the full-space carriers for the next band to pick up.
+    fn scatter_state(&self, state: &SolverState, x: &mut [f64], y: &mut [f64], clip: &mut [bool]) {
+        let ws = &state.workspace;
+        for (&value, &covariate) in ws.x.iter().zip(&self.active) {
+            x[covariate] = value;
+        }
+        for (&value, &row) in ws.y.iter().zip(&self.edge_ids) {
+            y[row] = value;
+        }
+        for (&value, &row) in ws.clipped.iter().zip(&self.edge_ids) {
+            clip[row] = value;
+        }
+    }
+}
+
 /// What the sequence of solves did, for diagnostics and the caller's convergence
 /// accounting.
 #[derive(Clone, Copy)]
 struct SolveStats {
     unconverged: usize,
     polished: usize,
+    /// Solves that ended on a certified duality gap instead of the residual test.
+    exact_finishes: usize,
     iterations: u64,
     refactorizations: u64,
     rho_low: f64,
@@ -335,12 +695,26 @@ impl SolveStats {
         Self {
             unconverged: 0,
             polished: 0,
+            exact_finishes: 0,
             iterations: 0,
             refactorizations: 0,
             rho_low: f64::INFINITY,
             rho_high: 0.0,
             f32_solves: 0,
         }
+    }
+
+    /// Fold one band's stats into the fit total. Every field combines by sum, minimum or
+    /// maximum, so the total does not depend on where the band boundaries fell.
+    fn merge(&mut self, other: Self) {
+        self.unconverged += other.unconverged;
+        self.polished += other.polished;
+        self.exact_finishes += other.exact_finishes;
+        self.iterations += other.iterations;
+        self.refactorizations += other.refactorizations;
+        self.rho_low = self.rho_low.min(other.rho_low);
+        self.rho_high = self.rho_high.max(other.rho_high);
+        self.f32_solves += other.f32_solves;
     }
 }
 
@@ -390,6 +764,7 @@ impl SolverState {
             settings,
             &mut self.workspace,
             &mut self.factor,
+            &mut self.polisher,
         );
         self.stats.iterations += u64::from(outcome.iterations);
         self.stats.refactorizations += u64::from(outcome.refactorizations);
@@ -397,6 +772,9 @@ impl SolverState {
         self.stats.rho_high = self.stats.rho_high.max(outcome.rho);
         if outcome.used_f32 {
             self.stats.f32_solves += 1;
+        }
+        if outcome.finished_exact {
+            self.stats.exact_finishes += 1;
         }
         if outcome.status != solver::Status::Solved {
             self.stats.unconverged += 1;
@@ -423,21 +801,41 @@ impl SolverState {
         // Polish to the exact minimizer over the identified active set. The gate inside
         // only accepts a feasible point with a strictly lower objective, so this can move
         // the answer towards the optimum but never away from it; the solver's own iterate
-        // stands whenever the active set was not identified cleanly.
-        let report = polish::polish(
-            constraints,
-            q_energy,
-            &self.workspace.clipped,
-            &self.workspace.x,
-            &mut self.polisher,
-        );
-        if report.accepted {
-            self.stats.polished += 1;
-        }
-        let primal = if report.accepted {
-            &self.polisher.u
-        } else {
+        // stands whenever the active set was not identified cleanly. A solve that finished
+        // through a certified polish already returned exactly this point.
+        let primal = if outcome.finished_exact {
             &self.workspace.x
+        } else {
+            let report = polish::polish(
+                constraints,
+                q_energy,
+                |r| self.workspace.clipped[r],
+                &self.workspace.x,
+                &mut self.polisher,
+            );
+            // Whatever the acceptance verdict, leave the *multiplier support* of the
+            // polished point as the recorded active set, not the raw projection clips.
+            // Near-degenerate rows -- margin at rounding level, dual near zero -- get
+            // clipped spuriously and glue pools together, and the next threshold's
+            // predictor would then have to undo every spurious merge one exchange at a
+            // time. The peel prices the rows exactly, so its support is the clean
+            // structural summary; a row it drops wrongly is re-added by the repair loop
+            // on the next attempt.
+            self.polisher.peel_multipliers(constraints, q_energy, None);
+            for (clip_r, &lambda_r) in self
+                .workspace
+                .clipped
+                .iter_mut()
+                .zip(&self.polisher.multipliers)
+            {
+                *clip_r = lambda_r > 0.0;
+            }
+            if report.accepted {
+                self.stats.polished += 1;
+                &self.polisher.u
+            } else {
+                &self.workspace.x
+            }
         };
 
         // Map the primal solution back from energy coordinates: x_i = u_i / sqrt_weight[i].
@@ -902,6 +1300,295 @@ mod test {
         let expected = [1.0, 1.0, 1.0, 1.0];
         for (realized, expected) in predicted.zip(expected) {
             assert!((realized - expected).abs() < 1e-5);
+        }
+    }
+
+    /// Deterministic 64-bit LCG, so the random sweeps below are reproducible.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0
+        }
+
+        /// Uniform in [0, 1).
+        fn unit(&mut self) -> f64 {
+            (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            (self.next_u64() >> 33) as usize % bound
+        }
+    }
+
+    /// `pin_windows` against the definition: the closure extremes computed by brute-force
+    /// dominance over random 2-D posets, in both fit directions.
+    #[test]
+    fn pin_windows_match_bruteforce_closures() {
+        use crate::partial_order::routines::derive_transitive_reduction;
+
+        for seed in 0..50u64 {
+            let mut rng = Lcg(0x0008_17d0_5eed ^ seed);
+            let levels = 2 + rng.below(4) as i64;
+            let mut points: Vec<(i64, i64)> = (0..(2 + rng.below(12)))
+                .map(|_| {
+                    (
+                        rng.below(levels as usize) as i64,
+                        rng.below(levels as usize) as i64,
+                    )
+                })
+                .collect();
+            points.sort_unstable();
+            points.dedup();
+            let n = points.len();
+            let flat: Vec<f64> = points
+                .iter()
+                .flat_map(|&(a, b)| [a as f64, b as f64])
+                .collect();
+            let edges = derive_transitive_reduction(&flat, n, 2);
+            let miny: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
+            let maxy: Vec<f64> = miny.iter().map(|&low| low + rng.unit()).collect();
+
+            let below = |a: (i64, i64), b: (i64, i64)| a.0 <= b.0 && a.1 <= b.1;
+            for &increasing in &[true, false] {
+                let windows = super::pin_windows(&edges, n, &miny, &maxy, increasing);
+                for c in 0..n {
+                    // The closure feeding `one` for an increasing fit is the lower one.
+                    let mut expected_one = f64::NEG_INFINITY;
+                    let mut expected_zero = f64::INFINITY;
+                    for j in 0..n {
+                        let in_lower = below(points[j], points[c]);
+                        let in_upper = below(points[c], points[j]);
+                        if (increasing && in_lower) || (!increasing && in_upper) {
+                            expected_one = expected_one.max(maxy[j]);
+                        }
+                        if (increasing && in_upper) || (!increasing && in_lower) {
+                            expected_zero = expected_zero.min(miny[j]);
+                        }
+                    }
+                    assert_eq!(
+                        windows.one[c], expected_one,
+                        "seed {seed}, increasing {increasing}, covariate {c}"
+                    );
+                    assert_eq!(
+                        windows.zero[c], expected_zero,
+                        "seed {seed}, increasing {increasing}, covariate {c}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Outside its pin window a covariate's fitted CDF is written verbatim as 0 or 1 --
+    /// bitwise, through the public fit path, not merely within tolerance.
+    #[test]
+    fn pinned_regions_are_bitwise_exact() {
+        let n = 60;
+        let mut rng = Lcg(0x91d_2024);
+        let mut covariates = Vec::with_capacity(2 * n);
+        let mut responses = Vec::with_capacity(n);
+        for _ in 0..n {
+            let a = rng.unit();
+            let b = rng.unit();
+            covariates.push(a);
+            covariates.push(b);
+            responses.push(a + b + 0.5 * (rng.unit() - 0.5));
+        }
+        let groups = CovariateGroups::parse([("sd", [0usize, 1])], 2).unwrap();
+        let fit: Fit<f64, f64> = Fit::fit::<f64>(
+            &covariates,
+            &responses,
+            None,
+            None,
+            groups,
+            StochasticOrder::StochasticDominance,
+            false,
+            Config::default(),
+            &crate::NoProgress,
+        )
+        .unwrap();
+
+        let n_threshold = fit.thresholds.len();
+        let n_covariate = fit.covariates.len() / 2;
+        // Recover each fit covariate's response from the SD-prepared row (sorted
+        // descending within the group), then take closure extremes by brute force.
+        let prepared: Vec<(f64, f64)> = (0..n)
+            .map(|observation| {
+                let a = covariates[2 * observation];
+                let b = covariates[2 * observation + 1];
+                (a.max(b), a.min(b))
+            })
+            .collect();
+        let rows: Vec<(f64, f64)> = (0..n_covariate)
+            .map(|c| (fit.covariates[2 * c], fit.covariates[2 * c + 1]))
+            .collect();
+        let response_of = |row: (f64, f64)| {
+            responses
+                .iter()
+                .zip(&prepared)
+                .find(|&(_, &p)| p == row)
+                .map(|(&y, _)| y)
+                .expect("every fit covariate row comes from an observation")
+        };
+        for (c, &row) in rows.iter().enumerate() {
+            // Increasing fit: `one` over the lower closure, `zero` over the upper.
+            let mut one = f64::NEG_INFINITY;
+            let mut zero = f64::INFINITY;
+            for &other in &rows {
+                if other.0 <= row.0 && other.1 <= row.1 {
+                    one = one.max(response_of(other));
+                }
+                if other.0 >= row.0 && other.1 >= row.1 {
+                    zero = zero.min(response_of(other));
+                }
+            }
+            for (t, &z) in fit.thresholds.iter().enumerate() {
+                let value = fit.cdfs[c * n_threshold + t];
+                if z >= one {
+                    assert_eq!(value, 1.0f32, "covariate {c}, threshold {z}");
+                } else if z < zero {
+                    assert_eq!(value, 0.0f32, "covariate {c}, threshold {z}");
+                }
+            }
+        }
+    }
+
+    /// A decreasing fit must be the increasing fit of the negated covariates -- the two
+    /// runs exercise the mirrored pin-window sweeps and constraint orientations against
+    /// each other.
+    #[test]
+    fn decreasing_mirrors_negated_increasing() {
+        let n = 40;
+        let mut rng = Lcg(0xdec_2024);
+        let mut covariates = Vec::with_capacity(2 * n);
+        let mut negated = Vec::with_capacity(2 * n);
+        let mut responses = Vec::with_capacity(n);
+        for _ in 0..n {
+            let a = rng.unit();
+            let b = rng.unit();
+            covariates.extend([a, b]);
+            negated.extend([-a, -b]);
+            responses.push(a + b + 0.5 * (rng.unit() - 0.5));
+        }
+        let groups = CovariateGroups::parse([("sd", [0usize, 1])], 2).unwrap();
+        let decreasing: Fit<f64, f64> = Fit::fit::<f64>(
+            &covariates,
+            &responses,
+            None,
+            None,
+            groups.clone(),
+            StochasticOrder::StochasticDominance,
+            true,
+            Config::default(),
+            &crate::NoProgress,
+        )
+        .unwrap();
+        let increasing: Fit<f64, f64> = Fit::fit::<f64>(
+            &negated,
+            &responses,
+            None,
+            None,
+            groups,
+            StochasticOrder::StochasticDominance,
+            false,
+            Config::default(),
+            &crate::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(decreasing.thresholds, increasing.thresholds);
+        for observation in 0..n {
+            let point = &covariates[2 * observation..2 * observation + 2];
+            let mirrored = [-point[0], -point[1]];
+            let from_decreasing: Vec<f32> = decreasing.cdf(point).collect();
+            let from_increasing: Vec<f32> = increasing.cdf(&mirrored).collect();
+            for (got, want) in from_decreasing.iter().zip(&from_increasing) {
+                assert!(
+                    (got - want).abs() < 1e-4,
+                    "observation {observation}: {from_decreasing:?} vs {from_increasing:?}"
+                );
+            }
+        }
+    }
+
+    /// The emitted CDFs are exactly monotone in both directions -- bitwise, not within a
+    /// tolerance -- for every combination of stochastic order and fit direction. Checked
+    /// over *all* comparable covariate pairs, not just cover edges, since violations
+    /// would otherwise accumulate along chains.
+    #[test]
+    fn fits_are_bitwise_monotone_in_both_directions() {
+        let n = 60;
+        let mut rng = Lcg(0x2020_0821);
+        let mut covariates = Vec::with_capacity(2 * n);
+        let mut responses = Vec::with_capacity(n);
+        for _ in 0..n {
+            let a = rng.unit();
+            let b = rng.unit();
+            covariates.extend([a, b]);
+            responses.push(a + b + 0.5 * (rng.unit() - 0.5));
+        }
+        let groups = CovariateGroups::parse([("sd", [0usize, 1])], 2).unwrap();
+
+        for (label, order) in [
+            ("sd", StochasticOrder::StochasticDominance),
+            ("hro", StochasticOrder::HazardRateOrder),
+        ] {
+            for decreasing in [false, true] {
+                let fit: Fit<f64, f64> = Fit::fit::<f64>(
+                    &covariates,
+                    &responses,
+                    None,
+                    None,
+                    groups.clone(),
+                    order,
+                    decreasing,
+                    Config::default(),
+                    &crate::NoProgress,
+                )
+                .unwrap();
+                let n_threshold = fit.thresholds.len();
+                let n_covariate = fit.covariates.len() / 2;
+
+                for c in 0..n_covariate {
+                    let cdf = &fit.cdfs[c * n_threshold..(c + 1) * n_threshold];
+                    for (t, window) in cdf.windows(2).enumerate() {
+                        assert!(
+                            window[0] <= window[1],
+                            "{label} decreasing={decreasing}: covariate {c} falls \
+                             from {} to {} at threshold {t}",
+                            window[0],
+                            window[1]
+                        );
+                    }
+                }
+
+                let rows: Vec<(f64, f64)> = (0..n_covariate)
+                    .map(|c| (fit.covariates[2 * c], fit.covariates[2 * c + 1]))
+                    .collect();
+                for i in 0..n_covariate {
+                    for j in 0..n_covariate {
+                        if i == j || !(rows[i].0 <= rows[j].0 && rows[i].1 <= rows[j].1) {
+                            continue;
+                        }
+                        // For an increasing fit the CDF of the dominated covariate must
+                        // dominate pointwise; a decreasing fit mirrors the roles.
+                        let (upper, lower) = if decreasing { (j, i) } else { (i, j) };
+                        for t in 0..n_threshold {
+                            let high = fit.cdfs[upper * n_threshold + t];
+                            let low = fit.cdfs[lower * n_threshold + t];
+                            assert!(
+                                high >= low,
+                                "{label} decreasing={decreasing}: comparable pair \
+                                 ({i}, {j}) inverted at threshold {t}: {high} < {low}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -17,6 +17,19 @@
 //!    factorization decide its own working precision.
 //!  * the pattern never changes across a threshold sequence, so the symbolic factorization
 //!    runs once per fit and later thresholds refresh values only.
+//!
+//! The deeper specialization is combinatorial: the program is isotonic regression on a
+//! DAG, so its optimum is piecewise constant on a partition into pooled components, exact
+//! once the active edge set is known. [`polish`] computes that exact minimizer for a
+//! candidate active set in `O(n + m)`, peels the candidate's exact multipliers off its
+//! spanning forest, and the duality gap of the pair is a rigorous optimality certificate.
+//! [`solver`] wraps the splitting iteration in that machinery: a *predictor* tries the
+//! previous threshold's active set before touching the factorization -- consecutive
+//! thresholds usually share their structure, so most solves finish with zero iterations --
+//! and a *corrector* retries at failing residual checks with exponential backoff, cutting
+//! off the splitting iteration's slow tail the moment the structure settles. Negative
+//! peeled multipliers drive classical one-row active-set exchanges between attempts.
+//! ADMM remains the fallback that handles genuinely moved structure.
 pub mod constraints;
 pub mod hildreth;
 pub mod kkt;
