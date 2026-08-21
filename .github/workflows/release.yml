@@ -33,7 +33,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - name: Build sdist
         working-directory: bindings/python
-        run: uv run --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
+        run: uv run --no-project --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
       - uses: actions/upload-artifact@v7
         with:
           name: release-sdist
