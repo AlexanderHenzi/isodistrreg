@@ -20,7 +20,7 @@ crate-type = ["cdylib"]
 # "abi3-py313" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.13
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py313", "either"] }
 numpy = "0.29.0"
-isodistrreg = { workspace = true, features = ["parallel", "serde", "subagging"] }
+isodistrreg = { workspace = true, features = ["parallel", "partial-order", "serde", "subagging"] }
 num-traits = "0.2.19"
 itertools = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
