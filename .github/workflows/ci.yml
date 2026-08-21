@@ -65,13 +65,6 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config gfortran \
-            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
-            libuv1-dev
       - run: cargo fmt --check
       - run: cargo clippy -- -Dwarnings
 
@@ -94,8 +87,11 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: bindings/python/uv.lock
-      - run: uv run --with black black --check .
-      - run: uv run --with mypy --with numpy mypy src/isodistrreg
+      - name: Lint
+        run: |
+          uv sync --locked --group dev --no-install-project
+          uv run --no-sync black --check .
+          uv run --no-sync mypy src/isodistrreg
 
   test_python_package:
     name: Test Python package
@@ -117,9 +113,8 @@ jobs:
       - name: pytest
         working-directory: bindings/python
         run: |
-          uv sync --locked --group test --no-install-project
-          uv run --with maturin maturin develop
-          uv run --with scikit-learn --with pytest pytest -q
+          uv sync --locked --group test --extra scikit-learn
+          uv run --no-sync pytest -q
 
   build_python_sdist:
     name: Build Python sdist
@@ -133,7 +128,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - name: Build sdist
         working-directory: bindings/python
-        run: uv run --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
+        run: uv run --no-project --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
       - uses: actions/upload-artifact@v7
         with:
           name: python-sdist
@@ -201,7 +196,7 @@ jobs:
         run: uv run --with check-wheel-contents check-wheel-contents dist/*.whl
       - name: pyroma
         working-directory: bindings/python
-        run: uv run --with pyroma pyroma --min 9 .
+        run: uv run --no-project --with pyroma pyroma --min 9 .
       - name: Smoke test + version consistency
         shell: bash
         run: |
@@ -236,13 +231,6 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config gfortran \
-            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
-            libuv1-dev
       - run: cargo test --all-features
         working-directory: bindings/R/src/rust
 
@@ -262,12 +250,10 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install system dependencies
+        # lintr pulls in xml2; the rest of its dependency closure is pure R.
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config gfortran \
-            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
-            libuv1-dev
+          sudo apt-get install -y --no-install-recommends libxml2-dev
       - uses: r-lib/actions/setup-renv@v2
         with:
           working-directory: bindings/R
@@ -296,13 +282,11 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install system dependencies
+        # R CMD build renders vignettes/IDR_arXiv_preprint.Rnw, which needs
+        # LaTeX (pdfpages).
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config gfortran \
-            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
-            libuv1-dev \
-            texinfo texlive
+          sudo apt-get install -y --no-install-recommends texinfo texlive
       - uses: r-lib/actions/setup-renv@v2
         with:
           working-directory: bindings/R
@@ -328,14 +312,6 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config gfortran \
-            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
-            libuv1-dev \
-            texinfo texlive
       - uses: actions/download-artifact@v8
         with:
           name: r-package
@@ -360,14 +336,17 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install system dependencies
+        # --as-cran needs LaTeX plus inconsolata for the PDF manual,
+        # checkbashisms (devscripts) for configure/cleanup, tidy for Rd HTML
+        # validation, qpdf/ghostscript for vignette PDF compaction, and V8
+        # (libv8-dev, whose R package pulls in curl) for the \eqn/\deqn math
+        # rendering check.
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            pkg-config gfortran \
-            libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev \
-            libuv1-dev \
-            texinfo texlive \
-            devscripts tidy qpdf ghostscript texlive-fonts-extra libv8-dev
+            libcurl4-openssl-dev \
+            texinfo texlive texlive-fonts-extra \
+            devscripts tidy qpdf ghostscript libv8-dev
       - uses: actions/download-artifact@v8
         with:
           name: r-package
