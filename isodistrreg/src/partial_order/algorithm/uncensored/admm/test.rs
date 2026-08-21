@@ -45,20 +45,31 @@ fn solve(edges: &[(usize, usize)], coef: &[(f64, f64)], q: &[f64]) -> Vec<f64> {
     let mut workspace = solver::Workspace::new(n, m);
     let mut polisher = Polisher::new(n, m);
 
-    let outcome = solver::solve(&constraints, q, &settings(), &mut workspace, &mut factor);
-    assert_eq!(outcome.status, Status::Solved, "solver did not converge");
-
-    let report = polish::polish(
+    let outcome = solver::solve(
         &constraints,
         q,
-        &workspace.clipped,
-        &workspace.x,
+        &settings(),
+        &mut workspace,
+        &mut factor,
         &mut polisher,
     );
-    let solution = if report.accepted {
-        polisher.u.clone()
-    } else {
+    assert_eq!(outcome.status, Status::Solved, "solver did not converge");
+
+    let solution = if outcome.finished_exact {
         workspace.x.clone()
+    } else {
+        let report = polish::polish(
+            &constraints,
+            q,
+            |r| workspace.clipped[r],
+            &workspace.x,
+            &mut polisher,
+        );
+        if report.accepted {
+            polisher.u.clone()
+        } else {
+            workspace.x.clone()
+        }
     };
 
     assert_certified_optimal(&constraints, q, &solution);
@@ -269,6 +280,122 @@ fn weighted_instances_match_the_weighted_oracle() {
         assert!(worst < 1e-6, "seed {seed}: {in_x:?} vs {expected:?}");
     }
     println!("weighted-oracle sweep: worst deviation {worst:e}");
+}
+
+/// The oracle sweep again, but at the shipped default tolerance, where most solves finish
+/// through the certified-polish path (predictor or corrector) rather than the residual
+/// test. The certificate promises `||u - u*|| <= eps_abs`, so agreement with the
+/// combinatorial oracle within a small multiple of `eps_abs` is exactly what acceptance
+/// claims -- this is the test that would catch a certificate accepting a wrong answer.
+#[test]
+fn certified_finishes_match_the_exact_poset_oracle() {
+    let settings = Settings {
+        verbose: false,
+        eps_abs: 1e-5,
+        eps_rel: 1e-5,
+        max_iter: 10_000,
+    };
+    let mut worst = 0.0f64;
+    let mut instances = 0usize;
+    for seed in 400..560u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let levels = rng.random_range(2..=4i64);
+        let mut points: Vec<(i64, i64)> = (0..rng.random_range(2..=8usize))
+            .map(|_| (rng.random_range(0..levels), rng.random_range(0..levels)))
+            .collect();
+        points.sort_unstable();
+        points.dedup();
+        let n = points.len();
+        if n < 2 {
+            continue;
+        }
+        let flat: Vec<f64> = points
+            .iter()
+            .flat_map(|&(a, b)| [a as f64, b as f64])
+            .collect();
+        let edges = derive_transitive_reduction(&flat, n, 2);
+        let coef = vec![(-1.0, 1.0); edges.len()];
+        let q: Vec<f64> = (0..n).map(|_| rng.random_range(-3.0..3.0f64)).collect();
+
+        let m = edges.len();
+        let constraints = Constraints {
+            edges: &edges,
+            coef: &coef,
+            n,
+        };
+        let mut factor = KktFactor::new(n, &edges);
+        let mut workspace = solver::Workspace::new(n, m);
+        let mut polisher = Polisher::new(n, m);
+        let outcome = solver::solve(
+            &constraints,
+            &q,
+            &settings,
+            &mut workspace,
+            &mut factor,
+            &mut polisher,
+        );
+        assert_eq!(outcome.status, Status::Solved, "seed {seed}");
+
+        let targets: Vec<f64> = q.iter().map(|value| -value).collect();
+        let expected = tonic_regression_pre_sorted::<Increasing, _, _>(
+            targets.iter().copied(),
+            &edges,
+            &Average,
+        );
+        for (&got, &want) in workspace.x.iter().zip(&expected) {
+            worst = worst.max((got - want).abs());
+        }
+        assert!(
+            worst < 5.0 * settings.eps_abs,
+            "seed {seed}: {:?} vs {expected:?}",
+            workspace.x
+        );
+        instances += 1;
+    }
+    assert!(instances >= 120, "only {instances} usable instances");
+    println!("default-tolerance sweep: {instances} instances, worst deviation {worst:e}");
+}
+
+/// The multiplier peel against hand-derived values, including the split signal.
+#[test]
+fn peel_multipliers_hand_cases() {
+    let edges = [(0usize, 1usize)];
+    let coef = [(-1.0, 1.0)];
+    let a = Constraints {
+        edges: &edges,
+        coef: &coef,
+        n: 2,
+    };
+    let raw = [0.0, 0.0];
+    let mut p = Polisher::new(2, 1);
+
+    // q = (-1, 1): the unconstrained answer (1, -1) violates the edge, both pool to 0,
+    // and stationarity u + q = A^T lambda gives lambda = 1 (the Hildreth test's value).
+    let report = polish::polish(&a, &[-1.0, 1.0], |_| true, &raw, &mut p);
+    assert!(report.feasible);
+    let peel = p.peel_multipliers(&a, &[-1.0, 1.0], None);
+    assert_eq!(peel.negative, 0);
+    assert_eq!(peel.worst_row, usize::MAX);
+    assert!(
+        (p.multipliers[0] - 1.0).abs() < 1e-15,
+        "{:?}",
+        p.multipliers
+    );
+
+    // q = (-1, -2): the unconstrained answer (1, 2) is already feasible, so pooling the
+    // edge anyway prices it at lambda = -1/2 -- the dual saying "split here".
+    let report = polish::polish(&a, &[-1.0, -2.0], |_| true, &raw, &mut p);
+    assert!(report.feasible);
+    let peel = p.peel_multipliers(&a, &[-1.0, -2.0], None);
+    assert_eq!(peel.negative, 1);
+    assert_eq!(peel.worst_row, 0);
+    assert_eq!(p.multipliers[0], 0.0, "negatives must be clamped");
+
+    // The same split with the row blocked: still counted, no longer nominated.
+    let blocked = [true];
+    let peel = p.peel_multipliers(&a, &[-1.0, -2.0], Some(&blocked));
+    assert_eq!(peel.negative, 1);
+    assert_eq!(peel.worst_row, usize::MAX);
 }
 
 /// The tuning constants are numerics, not style: pin them so a future edit has to be
