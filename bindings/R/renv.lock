@@ -11,7 +11,7 @@
   "Packages": {
     "renv": {
       "Package": "renv",
-      "Version": "1.2.3",
+      "Version": "1.2.4",
       "OS_type": null,
       "NeedsCompilation": "no",
       "Repository": "CRAN",

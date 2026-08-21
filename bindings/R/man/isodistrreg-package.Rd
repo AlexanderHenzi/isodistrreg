@@ -146,6 +146,7 @@ Useful links:
 
 Authors:
 \itemize{
+  \item Bram van den Heuvel \email{bram.vandenheuvel@stat.math.ethz.ch}
   \item Alexander Henzi \email{henzi.alexander@gmail.com}
   \item Martin Bladt \email{martinbladt@math.ku.dk}
 }

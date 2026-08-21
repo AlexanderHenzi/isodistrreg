@@ -27,10 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: astral-sh/setup-uv@v10.0.1
       - name: Build sdist
         working-directory: bindings/python
         run: uv run --with maturin maturin sdist --out "$GITHUB_WORKSPACE/dist"
@@ -61,7 +61,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Build wheel
@@ -95,7 +95,7 @@ jobs:
           path: dist
           pattern: release-*
           merge-multiple: true
-      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: astral-sh/setup-uv@v10.0.1
       - name: Check metadata
         run: uv run --with twine twine check --strict dist/*
       - name: Verify release tag matches built version

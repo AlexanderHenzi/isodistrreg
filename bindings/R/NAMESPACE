@@ -29,13 +29,17 @@ export(qpred)
 export(qscore)
 export(survival_isotonic_distributional_regression_threshold)
 importFrom(graphics,plot)
-importFrom(stats,approx)
-importFrom(stats,ecdf)
-importFrom(stats,predict)
-importFrom(stats,quantile)
-importFrom(stats,runif)
-importFrom(stats,setNames)
-importFrom(stats,stepfun)
-importFrom(utils,modifyList)
-importFrom(utils,tail)
+importFrom(stats,
+  approx,
+  ecdf,
+  predict,
+  quantile,
+  runif,
+  setNames,
+  stepfun
+)
+importFrom(utils,
+  modifyList,
+  tail
+)
 useDynLib(isodistrreg, .registration = TRUE)
