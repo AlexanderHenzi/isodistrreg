@@ -35,12 +35,12 @@ Depends:
 Imports:
     utils
 Encoding: UTF-8
-RoxygenNote: 7.3.3
 URL: https://github.com/AlexanderHenzi/isodistrreg
 BugReports: https://github.com/AlexanderHenzi/isodistrreg/issues
 Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Config/rextendr/version: 0.5.0
+Config/roxygen2/version: 8.1.0
 Config/build/bootstrap: TRUE
 SystemRequirements: Cargo (Rust's package manager), rustc
