@@ -249,17 +249,12 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
-      - name: Install system dependencies
-        # lintr pulls in xml2; the rest of its dependency closure is pure R.
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends libxml2-dev
-      - uses: r-lib/actions/setup-renv@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: bindings/R
+          packages: any::pkgload, any::lintr, any::sessioninfo
       - name: Lint
         run: |
-          Rscript -e "install.packages(c('pkgload','lintr'))"
           Rscript -e "pkgload::load_all(); r <- lintr::lint_package(); print(r); quit(save='no', status=length(r))"
 
   # Builds the tarball that both R CMD check jobs run against and that gets
@@ -287,13 +282,15 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends texinfo texlive
-      - uses: r-lib/actions/setup-renv@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: bindings/R
+          packages: >-
+            any::pkgbuild, any::rextendr, any::tomledit, any::fs,
+            any::sessioninfo
       - name: Build tarball
         working-directory: bindings/R
         run: |
-          Rscript -e "install.packages(c('pkgbuild', 'rextendr', 'tomledit', 'fs'))"
           Rscript bootstrap.R
           Rscript -e "rextendr::vendor_crates()"
           Rscript -e "pkgbuild::build('.')"
@@ -316,14 +313,14 @@ jobs:
         with:
           name: r-package
           path: bindings
-      - uses: r-lib/actions/setup-renv@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: bindings/R
+          packages: any::testthat, any::sessioninfo
       - name: R CMD check
         working-directory: bindings/R
         run: |
           PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
-          Rscript -e "install.packages('testthat')"
           R CMD check --no-manual --no-build-vignettes "$PKG_TARBALL"
 
   check_r_package_cran:
@@ -336,17 +333,16 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install system dependencies
-        # --as-cran needs LaTeX plus inconsolata for the PDF manual,
-        # checkbashisms (devscripts) for configure/cleanup, tidy for Rd HTML
-        # validation, qpdf/ghostscript for vignette PDF compaction, and V8
-        # (libv8-dev, whose R package pulls in curl) for the \eqn/\deqn math
-        # rendering check.
+        # --as-cran tooling that is not an R package system requirement: LaTeX
+        # plus inconsolata for the PDF manual, checkbashisms (devscripts) for
+        # configure/cleanup, tidy for Rd HTML validation and qpdf/ghostscript
+        # for vignette PDF compaction. V8 — which drives the \eqn/\deqn math
+        # rendering check — brings its own sysreqs in via pak.
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            libcurl4-openssl-dev \
             texinfo texlive texlive-fonts-extra \
-            devscripts tidy qpdf ghostscript libv8-dev
+            devscripts tidy qpdf ghostscript
       - uses: actions/download-artifact@v8
         with:
           name: r-package
@@ -369,12 +365,12 @@ jobs:
             echo "::error file=.github/workflows/ci.yml::$PKG_TARBALL exceeds CRAN's 10 MB tarball limit; re-introduce the vendor pruning from commit 13c44f6"
             exit 1
           fi
-      - uses: r-lib/actions/setup-renv@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: bindings/R
+          packages: any::testthat, any::V8, any::sessioninfo
       - name: R CMD check --as-cran
         working-directory: bindings/R
         run: |
           PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
-          Rscript -e "install.packages(c('testthat', 'V8'))"
           R CMD check --as-cran "$PKG_TARBALL"
