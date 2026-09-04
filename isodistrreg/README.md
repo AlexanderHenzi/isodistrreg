@@ -1,5 +1,7 @@
 # isodistrreg: Rust crate
 
+<p align="center"><strong>Available on <a href="https://crates.io/crates/isodistrreg">crates.io</a></strong></p>
+
 Core Rust library for Isotonic Distributional Regression (IDR) and Survival-IDR
 (S-IDR). See the [main README](https://github.com/AlexanderHenzi/isodistrreg)
 for background and references.

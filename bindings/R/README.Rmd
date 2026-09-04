@@ -16,6 +16,8 @@ knitr::opts_chunk$set(
 ```
 # isodistrreg: Isotonic Distributional Regression
 
+<p align="center"><strong>Available on <a href="https://cran.r-project.org/package=isodistrreg">CRAN</a></strong></p>
+
 Isotonic distributional regression (IDR) is a powerful nonparametric technique
 for the estimation of distributions of a binary or numeric response variable
 conditional on numeric or ordinal covariates. IDR assumes that there is a
@@ -27,17 +29,17 @@ benchmark in many other prediction problems.
 
 ## Installation
 
-An older version (IDR only, no S-IDR for right-censored data) is available on
-CRAN, you can install it with `install.packages("isodistrreg")`. If the
-installation fails on Linux because of the error *Vignette re-building failed*,
-try installing with `build_vignettes = FALSE` or make sure that texinfo is
-installed (e.g., `sudo apt-get install texinfo`).
+The package is available on CRAN and can be installed with
+`install.packages("isodistrreg")`. If the installation fails on Linux because
+of the error *Vignette re-building failed*, try installing with
+`build_vignettes = FALSE` or make sure that texinfo is installed (e.g.,
+`sudo apt-get install texinfo`).
 
-The latest version can be build from source as follows:
+The development version can be built from source as follows:
 
 1. You need [a working rust installation](https://extendr.rs/rextendr/articles/setting_up_rust.html)
-2. Install the build dependencies in your R environment: `install.packages(c("rextendr", "tomledit",
-   "fs"))`
+2. Install the build dependencies in your R environment:
+   `install.packages(c("rextendr", "tomledit", "fs"))`
 3. Run `pak::pak("AlexanderHenzi/isodistrreg/bindings/R")`
 
 ## Usage Examples
