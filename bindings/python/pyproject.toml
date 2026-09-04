@@ -40,7 +40,6 @@ Issues = "https://github.com/AlexanderHenzi/isodistrreg/issues"
 [project.optional-dependencies]
 scikit-learn = [
     "scikit-learn>=1.9.0",
-    "numpy>=1",
 ]
 
 [dependency-groups]
@@ -77,7 +76,7 @@ module = "isodistrreg._core"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "sklearn.*"
+module = ["sklearn.*", "joblib"]
 ignore_missing_imports = true
 
 [tool.black]
