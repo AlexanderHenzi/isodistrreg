@@ -2208,6 +2208,31 @@ fn readonly_aligned<'py, T: Element, D: Dimension>(
     Ok(copy.try_readonly()?)
 }
 
+/// Reject `datetime64` and `timedelta64` input.
+///
+/// NumPy's forced cast would turn either into raw unit counts — `[ns]` values around
+/// 1.6e18, and `[h]` values 24 times the `[D]` values of the same durations — with no
+/// trace of the unit in the fitted thresholds. Duck-typed on `.dtype.kind` so pandas
+/// Series are caught before `asarray` hands their temporal array to the cast.
+fn reject_temporal(ob: &Bound<'_, PyAny>) -> PyResult<()> {
+    let Ok(dtype) = ob.getattr("dtype") else {
+        return Ok(());
+    };
+    let kind = dtype
+        .getattr("kind")
+        .and_then(|kind| kind.extract::<String>())
+        .unwrap_or_default();
+    if kind == "M" || kind == "m" {
+        return Err(PyValueError::new_err(format!(
+            "{} input is not supported; pass numbers in an explicit unit instead, e.g. \
+             `t / np.timedelta64(1, \"D\")` for durations in days (subtract a reference \
+             date first for datetime64)",
+            dtype.str()?
+        )));
+    }
+    Ok(())
+}
+
 /// A NumPy array argument that ndarray may view in place.
 ///
 /// Extracts like `PyArrayLike<T, D, AllowTypeChange>` — lists and arrays of another dtype
@@ -2238,6 +2263,7 @@ where
     type Error = PyErr;
 
     fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        reject_temporal(&ob)?;
         let array: PyArrayLike<'py, T, D, AllowTypeChange> = ob.extract()?;
         Ok(Self(readonly_aligned(&array)?))
     }
@@ -2487,6 +2513,14 @@ fn split_censored_outcome<'py>(
                     "; store the event indicator as a boolean field, or pass the time and \
                      indicator fields separately as y and y_observed",
                 );
+            } else if fields
+                .iter()
+                .any(|field| matches!(field.kind(), b'M' | b'm'))
+            {
+                detail.push_str(
+                    "; datetime64/timedelta64 times are not supported, store them as \
+                     numbers in an explicit unit, e.g. `t / np.timedelta64(1, \"D\")`",
+                );
             }
             return Err(unsupported(detail));
         }
@@ -2549,6 +2583,7 @@ fn kaplan_meier<'py>(
     // the returned event-time array can match the dtype of `y`.
     let numpy_asarray = py.import("numpy")?.getattr("asarray")?;
     let y_array: Bound<'py, PyAny> = numpy_asarray.call1((&y,))?;
+    reject_temporal(&y_array)?;
 
     let (y_dtype, n) = {
         let untyped = y_array.cast::<PyUntypedArray>()?;
