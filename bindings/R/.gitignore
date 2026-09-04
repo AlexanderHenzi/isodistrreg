@@ -22,4 +22,5 @@ isodistrreg.Rcheck
 
 src/Makevars
 src/Makevars.win
+src/.cargo
 src/rust/vendor
