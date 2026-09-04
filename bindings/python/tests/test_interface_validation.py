@@ -7,7 +7,7 @@ return wrong results; they must all be clean ValueErrors / correct values now.
 import numpy as np
 import pytest
 
-from isodistrreg import IDR, isotonic_regression, kaplan_meier
+from isodistrreg import IDR, fit_park, isotonic_regression, kaplan_meier
 
 
 @pytest.fixture
@@ -147,18 +147,62 @@ class TestKaplanMeierValidation:
         with pytest.raises(ValueError, match="NaN"):
             kaplan_meier([1.0, np.nan, 3.0], [1, 1, 1])
 
-    def test_string_events(self):
-        with pytest.raises(ValueError, match="boolean or 0/1"):
-            kaplan_meier([1.0, 2.0], ["yes", "no"])
-
-    def test_non_binary_events(self):
-        with pytest.raises(ValueError, match="0/1 or boolean"):
-            kaplan_meier([1.0, 2.0], [1, 2])
-
     def test_valid_inputs_still_work(self):
         times, survival = kaplan_meier([1.0, 2.0], [True, False])
         np.testing.assert_array_equal(times, [1.0])
         np.testing.assert_array_equal(survival, [0.5])
+
+
+# Every entry point taking an event indicator shares one validator: a forced cast
+# to bool would read any nonzero value as an event, so a 1 = censored / 2 = event
+# status coding would fit as if nothing were censored.
+INDICATOR_ENTRY_POINTS = {
+    "IDR": lambda t, d: IDR(t, np.arange(len(t), dtype=float), y_observed=d),
+    "kaplan_meier": lambda t, d: kaplan_meier(t, d),
+    "fit_park": lambda t, d: fit_park(np.arange(len(t), dtype=float), t, d),
+}
+
+
+@pytest.mark.parametrize(
+    "call", INDICATOR_ENTRY_POINTS.values(), ids=INDICATOR_ENTRY_POINTS
+)
+class TestEventIndicatorValidation:
+    times = [1.0, 2.0, 3.0, 4.0]
+
+    @pytest.mark.parametrize(
+        "indicator",
+        [
+            [1, 0, 2, 1],
+            [1.0, 0.0, np.nan, 1.0],
+            np.array([1, 0, -1, 1], dtype=np.int8),
+            np.array([1.0, 0.0, 0.5, 1.0], dtype=np.float32),
+        ],
+        ids=["two", "nan", "negative", "half"],
+    )
+    def test_non_binary_values_are_rejected(self, call, indicator):
+        with pytest.raises(ValueError, match="0/1 or boolean"):
+            call(self.times, indicator)
+
+    @pytest.mark.parametrize(
+        "indicator", [["yes", "no", "yes", "yes"], [1 + 0j, 0j, 1 + 0j, 1 + 0j]]
+    )
+    def test_non_numeric_dtypes_are_rejected(self, call, indicator):
+        with pytest.raises(ValueError, match="boolean or 0/1"):
+            call(self.times, indicator)
+
+    @pytest.mark.parametrize(
+        "indicator",
+        [
+            [True, False, True, True],
+            [1, 0, 1, 1],
+            [1.0, 0.0, 1.0, 1.0],
+            np.array([1, 0, 1, 1], dtype=np.uint8),
+            np.array([1, 0, 1, 1], dtype=np.float32),
+        ],
+        ids=["bool", "int", "float", "uint8", "float32"],
+    )
+    def test_binary_values_are_accepted(self, call, indicator):
+        call(self.times, indicator)
 
 
 class TestSubsampleSizeDefaults:

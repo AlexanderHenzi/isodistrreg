@@ -65,9 +65,11 @@ use std::sync::{Mutex, OnceLock};
 ///     Covariate values. A 1-D array is treated as a single covariate
 ///     with a total order. A 2-D array with d > 1 columns uses a partial
 ///     (componentwise) order by default.
-/// y_observed : array_like of bool, shape (n,), optional
+/// y_observed : array_like, shape (n,), optional
 ///     If given, indicates right-censored observations (True = observed,
-///     False = censored). If not provided, interpreted as all observed,
+///     False = censored). Must be a boolean array or a numeric array
+///     containing only 0 and 1; any other value is rejected rather than
+///     read as an event. If not provided, interpreted as all observed,
 ///     unless ``y`` is a structured array carrying its own indicator.
 /// sample_weight : array_like, shape (n,), optional
 ///     Non-negative observation weights. Weights are processed in single
@@ -828,8 +830,10 @@ impl IDR {
         progress: bool,
     ) -> PyResult<Self> {
         let (y, y_observed) = split_censored_outcome(&y, y_observed)?;
-        let y_observed: Option<AlignedArray1<bool>> =
-            y_observed.map(|observed| observed.extract()).transpose()?;
+        let y_observed = y_observed
+            .as_ref()
+            .map(extract_event_indicator)
+            .transpose()?;
 
         // Pick the storage precision from the user's input dtypes. Each (X, Y) combo lands
         // in its own FitImpl variant — no internal f64-widening. Weights carry a separate
@@ -2383,6 +2387,38 @@ fn kaplan_meier_jumps<T: TimeValue>(
     }
 }
 
+/// Extract an event indicator, accepting only boolean arrays and numeric arrays
+/// whose values are all 0 or 1.
+///
+/// A plain `AllowTypeChange` cast to `bool` would turn any nonzero value — a
+/// `2` from a 1/2 status coding, a `NaN`, any non-empty string — into an
+/// observed event without a word, and a 1 = censored / 2 = event coding would
+/// then fit as if nothing were censored.
+fn extract_event_indicator<'py>(
+    y_observed: &Bound<'py, PyAny>,
+) -> PyResult<AlignedArray1<'py, bool>> {
+    let py = y_observed.py();
+    let array: Bound<'py, PyAny> = py
+        .import("numpy")?
+        .getattr("asarray")?
+        .call1((y_observed,))?;
+    match array.cast::<PyUntypedArray>()?.dtype().kind() {
+        b'b' => array.extract(),
+        b'i' | b'u' | b'f' => {
+            let values: AlignedArray1<f64> = array.extract()?;
+            if values.as_array().iter().any(|&v| v != 0.0 && v != 1.0) {
+                return Err(PyValueError::new_err(
+                    "y_observed must contain only 0/1 or boolean values",
+                ));
+            }
+            array.extract()
+        }
+        _ => Err(PyValueError::new_err(
+            "y_observed must be a boolean or 0/1 numeric array",
+        )),
+    }
+}
+
 /// Resolve a right-censored outcome into its time and event-indicator arrays.
 ///
 /// Parameters
@@ -2533,28 +2569,7 @@ fn kaplan_meier<'py>(
         }
     }
 
-    // Validate the event indicators before the boolean cast: a plain forcecast
-    // would silently turn any nonzero value — or any non-empty string — into
-    // an event.
-    let observed_array: Bound<'py, PyAny> = numpy_asarray.call1((&y_observed,))?;
-    let observed_kind = observed_array.cast::<PyUntypedArray>()?.dtype().kind();
-    let y_observed: AlignedArray1<'py, bool> = match observed_kind {
-        b'b' => observed_array.extract()?,
-        b'i' | b'u' | b'f' => {
-            let values: AlignedArray1<f64> = observed_array.extract()?;
-            if values.as_array().iter().any(|&v| v != 0.0 && v != 1.0) {
-                return Err(PyValueError::new_err(
-                    "y_observed must contain only 0/1 or boolean values",
-                ));
-            }
-            observed_array.extract()?
-        }
-        _ => {
-            return Err(PyValueError::new_err(
-                "y_observed must be a boolean or 0/1 numeric array",
-            ));
-        }
-    };
+    let y_observed = extract_event_indicator(&y_observed)?;
 
     if y_observed.len() != n || weight.as_ref().is_some_and(|w| w.len() != n) {
         return Err(PyValueError::new_err(
@@ -2637,7 +2652,7 @@ fn fit_park<'py>(
         ));
     };
     let y: AlignedArray1<'py, f64> = y.extract()?;
-    let y_observed: AlignedArray1<'py, bool> = y_observed.extract()?;
+    let y_observed = extract_event_indicator(&y_observed)?;
 
     let mut storage = None;
     let covariate = maybe_allocate(&x, &mut storage);
