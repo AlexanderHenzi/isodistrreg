@@ -1,5 +1,7 @@
 # isodistrreg: Python bindings
 
+<p align="center"><strong>Available on <a href="https://pypi.org/project/isodistrreg/">PyPI</a></strong></p>
+
 Python bindings for Isotonic Distributional Regression (IDR) and Survival-IDR
 (S-IDR), built with [PyO3](https://pyo3.rs) and
 [maturin](https://www.maturin.rs). See the [main
