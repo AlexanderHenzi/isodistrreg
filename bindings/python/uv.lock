@@ -264,7 +264,6 @@ dependencies = [
 
 [package.optional-dependencies]
 scikit-learn = [
-    { name = "numpy" },
     { name = "scikit-learn" },
 ]
 
@@ -283,7 +282,6 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.20" },
-    { name = "numpy", marker = "extra == 'scikit-learn'", specifier = ">=1" },
     { name = "scikit-learn", marker = "extra == 'scikit-learn'", specifier = ">=1.9.0" },
 ]
 provides-extras = ["scikit-learn"]

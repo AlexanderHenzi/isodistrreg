@@ -130,6 +130,52 @@ idr_fit = IDR(X = X, y = y)
 idr_fit.cdf_grid(X, y) # (CDF at all covariate-threshold-combinations)
 ```
 
+### Example 3: scikit-learn estimator
+
+`IsotonicDistributionalRegressor` wraps `IDR` in the scikit-learn estimator
+API, so it works with pipelines, cross-validation and model selection. Model
+settings are constructor parameters; per-sample data (`sample_weight`,
+`y_observed`) goes to `fit`.
+
+```python
+import numpy as np
+from sklearn.model_selection import cross_val_score
+from isodistrreg import IsotonicDistributionalRegressor
+
+rng = np.random.default_rng(seed=123)
+X = rng.uniform(size=(500, 1))
+y = X[:, 0] + rng.uniform(size=500)
+
+# All parameters are optional; these are the defaults except random_state.
+model = IsotonicDistributionalRegressor(
+    covariate_order=None,   # partial order on the columns of X, e.g. [("sd", [0, 1])]
+    response_order="sd",    # or "hazard"
+    decreasing=False,
+    subsamples=None,        # set to subag: fit on random subsamples and average
+    random_state=0,         # seeds the subsample draws
+).fit(X, y)
+
+# Point predictions (conditional means) and cross-validated R^2 of them
+model.predict(X[:3])                      # shape (3,)
+cross_val_score(model, X, y, cv=5)
+
+# The distributional estimate: CDF on the fitted threshold grid, at chosen
+# thresholds, or its quantiles. Every row is evaluated at every threshold.
+model.cdf(X[:3])                          # shape (3, len(model.thresholds_))
+model.cdf_at(X[:3], [0.5, 1.0, 1.5])      # shape (3, 3)
+model.quantile(X[:3], [0.1, 0.5, 0.9])    # shape (3, 3)
+model.quantile(X[:3], 0.5)                # shape (3,)
+
+# Right-censored responses (S-IDR): pass the event indicator to fit, or pass
+# y as a structured array with a numeric time and a boolean event field
+observed = rng.uniform(size=500) < 0.7
+survival = IsotonicDistributionalRegressor().fit(X, y, y_observed=observed)
+survival.cdf_at(X[:3], 1.0)               # shape (3,)
+```
+
+Under scikit-learn's metadata routing, request the per-sample arguments as
+usual, e.g. `model.set_fit_request(sample_weight=True)`.
+
 ## References
 
 Henzi, A., Ziegel, J. and Gneiting, T. (2021). Isotonic distributional
