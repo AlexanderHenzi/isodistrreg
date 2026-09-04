@@ -8,16 +8,19 @@ from sklearn.utils.validation import check_is_fitted, validate_data
 import numpy.typing as npt
 
 from isodistrreg import IDR
+from isodistrreg._core import split_censored_outcome
 
 
 class IsotonicDistributionalRegressor(RegressorMixin, BaseEstimator):
     def fit(self, X: npt.ArrayLike, y, **kwargs) -> Self:
+        # A structured y carries the event indicator; unpack it before
+        # scikit-learn's validation, which only accepts a numeric y.
+        y, y_observed = split_censored_outcome(y, kwargs.pop("y_observed", None))
         X, y = validate_data(self, X, y)
         X = cast(np.ndarray, X)
         self.n_features_in_ = X.shape[-1]
 
         # Parse optional arguments
-        y_observed = kwargs.pop("y_observed", None)
         if y_observed is not None:
             y_observed = np.ravel(check_array(y_observed, ensure_2d=False, dtype=None))
             check_consistent_length(X, y_observed)

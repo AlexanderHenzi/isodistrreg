@@ -6,12 +6,15 @@ import numpy.typing as npt
 def fit_park(
     x: npt.ArrayLike,
     time: npt.ArrayLike,
-    event: npt.ArrayLike,
-    centers: Optional[npt.ArrayLike],
-    epsilon: Optional[float],
-    parallel: Optional[bool],
-):
-    pass
+    event: Optional[npt.ArrayLike] = None,
+    centers: Optional[npt.ArrayLike] = None,
+    epsilon: float = 1e-4,
+    parallel: bool = False,
+) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """
+    ``time`` may be a structured array holding both the times and the event
+    indicators, as described for ``IDR``; ``event`` is then omitted.
+    """
 
 class IDR:
     """
@@ -20,12 +23,16 @@ class IDR:
     Parameters
     ----------
     y:
-        1D real array-like of shape (n,).
+        1D real array-like of shape (n,). A right-censored outcome may also be passed as a structured array
+        with two fields, a boolean event indicator and a numeric time, in either order and under any names —
+        ``[("time", "f8"), ("event", "?")]`` or scikit-survival's ``[("event", "?"), ("time", "f8")]``. The
+        fields are told apart by dtype; ``y_observed`` must then be omitted.
     X:
         Real array-like of shape (n,) or (n, d). Must have d >= 1. The covariate dimension d influences the accepted
         shapes of covariate arguments going forward.
     y_observed:
         Optional 1D boolean array-like of shape (n,). If provided, True marks observed, False marks censored.
+        Omit it when ``y`` is a structured array carrying its own indicator.
     sample_weight:
         Optional 1D real array-like of shape (n,). Must be non-negative if provided. Weights are processed in
         single precision; it is up to the caller to avoid extreme imbalance (as a rule of thumb, no weight
@@ -186,6 +193,27 @@ def isotonic_regression(
 ) -> npt.NDArray[np.float64]: ...
 def kaplan_meier(
     y: npt.ArrayLike,
-    y_observed: npt.ArrayLike,
+    y_observed: Optional[npt.ArrayLike] = None,
     weight: Optional[npt.ArrayLike] = None,
 ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.float64]]: ...
+
+"""
+Compute the (weighted) Kaplan-Meier estimator of a right-censored sample.
+
+y: Event or censoring times, or a structured array holding both the times and the event indicators as
+    described for ``IDR``; ``y_observed`` is then omitted and otherwise required.
+Returns: the sorted distinct event times (same dtype as ``y``) and the survival probabilities just after each.
+"""
+
+def split_censored_outcome(
+    y: npt.ArrayLike,
+    y_observed: Optional[npt.ArrayLike] = None,
+) -> Tuple[npt.ArrayLike, Optional[npt.ArrayLike]]: ...
+
+"""
+Resolve a right-censored outcome into its time and event-indicator arrays.
+
+For a structured ``y`` with a numeric time field and a boolean event field (either order, any names), returns
+views of the two fields and requires ``y_observed`` to be omitted. Any other ``y`` is returned unchanged
+together with ``y_observed``. Raises ValueError for a structured ``y`` of any other layout.
+"""

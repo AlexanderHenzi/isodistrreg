@@ -71,7 +71,7 @@ S-IDR corrects.
 # y = true event time, c = censoring time; we observe only whichever comes first
 t = np.minimum(y, c)                             # observed time (event or censoring)
 d = y <= c                                       # True if the event was seen (else censored)
-fit = IDR(t, x, d)
+fit = IDR(t, x, d)                               # or IDR(y, x) with y a structured array of (time, event)
 survival = 1 - fit.cdf(6.0)                       # P(event after t | x = 6)
 ```
 

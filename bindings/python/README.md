@@ -56,6 +56,12 @@ d = y <= c
 # Fit the IDR / S-IDR model, censoring is indicated by "False"
 fit = IDR(t, x, d)
 
+# The same fit from one structured array with a numeric time field and a
+# boolean event field (any names, either order, e.g. scikit-survival's layout)
+td = np.empty(n, dtype=[("event", "?"), ("time", "f8")])
+td["time"], td["event"] = t, d
+fit = IDR(td, x)
+
 # Sorted and deduplicated covariates and thresholds are available
 sorted_x = fit.X
 sorted_y = fit.thresholds

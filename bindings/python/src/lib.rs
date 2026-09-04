@@ -19,10 +19,11 @@ use numpy::ndarray::{
     Array, Array2, ArrayD, ArrayView, ArrayView1, ArrayView2, ArrayViewD, ArrayViewMut1, Axis,
     Dimension, Zip,
 };
+use numpy::ndarray::{Ix1, Ix2};
 use numpy::{
     AllowTypeChange, Element, IntoPyArray, IxDyn, PyArray, PyArray1, PyArray2, PyArrayDescrMethods,
-    PyArrayDyn, PyArrayLike, PyArrayLike1, PyArrayLike2, PyArrayLikeDyn, PyArrayMethods,
-    PyUntypedArray, PyUntypedArrayMethods, dtype,
+    PyArrayDyn, PyArrayLike, PyArrayMethods, PyReadonlyArray, PyReadonlyArrayDyn, PyUntypedArray,
+    PyUntypedArrayMethods, dtype,
 };
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
@@ -31,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::mem;
+use std::ops::Deref;
 use std::sync::{Mutex, OnceLock};
 
 /// Isotonic distributional regression (IDR) model.
@@ -53,14 +55,20 @@ use std::sync::{Mutex, OnceLock};
 /// Parameters
 /// ----------
 /// y : array_like, shape (n,)
-///     Response values (observations).
+///     Response values (observations). A right-censored outcome may also be
+///     passed as a structured array with two fields, a boolean event
+///     indicator and a numeric time, in either order and under any names —
+///     ``[("time", "f8"), ("event", "?")]`` or the scikit-survival
+///     convention ``[("event", "?"), ("time", "f8")]``. The fields are
+///     told apart by dtype; ``y_observed`` must then be omitted.
 /// X : array_like, shape (n,) or (n, d)
 ///     Covariate values. A 1-D array is treated as a single covariate
 ///     with a total order. A 2-D array with d > 1 columns uses a partial
 ///     (componentwise) order by default.
 /// y_observed : array_like of bool, shape (n,), optional
 ///     If given, indicates right-censored observations (True = observed,
-///     False = censored). If not provided, interpreted as all observed.
+///     False = censored). If not provided, interpreted as all observed,
+///     unless ``y`` is a structured array carrying its own indicator.
 /// sample_weight : array_like, shape (n,), optional
 ///     Non-negative observation weights. Weights are processed in single
 ///     precision; it is up to the caller to avoid extreme imbalance (as a
@@ -379,17 +387,17 @@ fn cdf_at_of<X: Float, Y: Float>(
 /// Generic body of `from_cdfs`. One shape, four monomorphizations dispatched by
 /// `IDR::from_cdfs` based on the user's detected covariate/threshold dtype combo.
 fn from_cdfs_typed<X: Float + Element, Y: Float + Element>(
-    cdfs: PyArrayLike2<f32, AllowTypeChange>,
+    cdfs: AlignedArray2<f32>,
     x: Bound<'_, PyAny>,
     y: Bound<'_, PyAny>,
-    global_cdf: Option<PyArrayLike1<f32, AllowTypeChange>>,
+    global_cdf: Option<AlignedArray1<f32>>,
 ) -> PyResult<Fit<X, Y>>
 where
     for<'a, 'py> Vec<X>: pyo3::FromPyObject<'a, 'py>,
     for<'a, 'py> Vec<Y>: pyo3::FromPyObject<'a, 'py>,
 {
-    let x: PyArrayLikeDyn<X, AllowTypeChange> = x.extract()?;
-    let y: PyArrayLike1<Y, AllowTypeChange> = y.extract()?;
+    let x: AlignedArrayDyn<X> = x.extract()?;
+    let y: AlignedArray1<Y> = y.extract()?;
     let mut covariates_allocation = None;
     let covariates = parse_covariates(&x, &mut covariates_allocation)?;
 
@@ -669,7 +677,7 @@ fn fit_typed<X: Float + Element, Y: Float + Element, W: Float + Element>(
     py: Python<'_>,
     y: Bound<'_, PyAny>,
     x: Bound<'_, PyAny>,
-    y_observed: Option<PyArrayLike1<bool, AllowTypeChange>>,
+    y_observed: Option<AlignedArray1<bool>>,
     sample_weight: Option<Bound<'_, PyAny>>,
     x_order: Option<Vec<(String, Vec<usize>)>>,
     response_order: StochasticOrder,
@@ -687,15 +695,13 @@ where
     for<'a, 'py> Vec<Y>: pyo3::FromPyObject<'a, 'py>,
     for<'a, 'py> Vec<W>: pyo3::FromPyObject<'a, 'py>,
 {
-    let y: PyArrayLike1<Y, AllowTypeChange> = y.extract()?;
-    let x: PyArrayLikeDyn<X, AllowTypeChange> = x.extract()?;
-    let sample_weight: Option<PyArrayLike1<W, AllowTypeChange>> =
-        sample_weight.map(|s| s.extract()).transpose()?;
+    let y: AlignedArray1<Y> = y.extract()?;
+    let x: AlignedArrayDyn<X> = x.extract()?;
+    let sample_weight: Option<AlignedArray1<W>> = sample_weight.map(|s| s.extract()).transpose()?;
 
     let mut covariates_allocation = None;
     let x_parsed = parse_covariates(&x, &mut covariates_allocation)?;
 
-    assert_safe_view(&y)?;
     if y.is_empty() {
         return Err(PyValueError::new_err("y is empty, need at least some data"));
     }
@@ -808,7 +814,7 @@ impl IDR {
         py: Python,
         y: Bound<'_, PyAny>,
         X: Bound<'_, PyAny>,
-        y_observed: Option<PyArrayLike1<bool, AllowTypeChange>>,
+        y_observed: Option<Bound<'_, PyAny>>,
         sample_weight: Option<Bound<'_, PyAny>>,
         X_order: Option<Vec<(String, Vec<usize>)>>,
         y_order: Option<&str>,
@@ -821,6 +827,10 @@ impl IDR {
         n_jobs: usize,
         progress: bool,
     ) -> PyResult<Self> {
+        let (y, y_observed) = split_censored_outcome(&y, y_observed)?;
+        let y_observed: Option<AlignedArray1<bool>> =
+            y_observed.map(|observed| observed.extract()).transpose()?;
+
         // Pick the storage precision from the user's input dtypes. Each (X, Y) combo lands
         // in its own FitImpl variant — no internal f64-widening. Weights carry a separate
         // dtype `W`; we detect it independently so f32 weights flow without a widen, and
@@ -932,7 +942,7 @@ impl IDR {
     fn predict<'py>(
         &self,
         py: Python<'py>,
-        X: PyArrayLikeDyn<f64, AllowTypeChange>,
+        X: AlignedArrayDyn<f64>,
     ) -> PyResult<Either<Bound<'py, PyArrayDyn<f64>>, Bound<'py, PyArrayDyn<f32>>>> {
         let cov = X.as_array();
         ensure_no_nan("X", &cov.view())?;
@@ -976,7 +986,7 @@ impl IDR {
     fn cdf<'py>(
         &self,
         py: Python<'py>,
-        X: PyArrayLikeDyn<f64, AllowTypeChange>,
+        X: AlignedArrayDyn<f64>,
     ) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
         let cov = X.as_array();
         ensure_no_nan("X", &cov.view())?;
@@ -1012,8 +1022,8 @@ impl IDR {
     fn cdf_at<'py>(
         &self,
         py: Python<'py>,
-        X: PyArrayLikeDyn<f64, AllowTypeChange>,
-        y: PyArrayLikeDyn<f64, AllowTypeChange>,
+        X: AlignedArrayDyn<f64>,
+        y: AlignedArrayDyn<f64>,
     ) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
         let cov = X.as_array();
         let thr = y.as_array();
@@ -1050,8 +1060,8 @@ impl IDR {
     fn cdf_grid<'py>(
         &self,
         py: Python<'py>,
-        X: PyArrayLike1<f64, AllowTypeChange>,
-        y: PyArrayLike1<f64, AllowTypeChange>,
+        X: AlignedArray1<f64>,
+        y: AlignedArray1<f64>,
     ) -> PyResult<Bound<'py, PyArray2<f32>>> {
         let cov = X.as_array();
         let thr = y.as_array();
@@ -1135,8 +1145,8 @@ impl IDR {
     fn quantile<'py>(
         &self,
         py: Python<'py>,
-        X: PyArrayLikeDyn<f64, AllowTypeChange>,
-        q: PyArrayLikeDyn<f64>,
+        X: AlignedArrayDyn<f64>,
+        q: AlignedArrayDyn<f64>,
         upper: bool,
     ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
         let cov = X.as_array();
@@ -1334,10 +1344,10 @@ impl IDR {
     #[pyo3(signature = (cdfs, X, y, global_cdf=None))]
     fn from_cdfs(
         _cls: &Bound<'_, PyType>,
-        cdfs: PyArrayLike2<f32, AllowTypeChange>,
+        cdfs: AlignedArray2<f32>,
         X: Bound<'_, PyAny>,
         y: Bound<'_, PyAny>,
-        global_cdf: Option<PyArrayLike1<f32, AllowTypeChange>>,
+        global_cdf: Option<AlignedArray1<f32>>,
     ) -> PyResult<Self> {
         // Pick the storage precision from the user's input dtypes (same convention as `fit`).
         let covariate_dtype = detect_input_dtype(&X);
@@ -1476,11 +1486,9 @@ fn broadcast(covariate: &[usize], other: &[usize]) -> Result<Vec<usize>, Error> 
 }
 
 fn parse_covariates<'a, F: Float + Element>(
-    covariates: &'a PyArrayLikeDyn<F, AllowTypeChange>,
+    covariates: &'a PyReadonlyArrayDyn<'_, F>,
     storage: &'a mut Option<Vec<F>>,
 ) -> PyResult<Covariates<'a, F>> {
-    assert_safe_view(covariates)?;
-
     match covariates.shape() {
         &[0] => Err(PyValueError::new_err(
             "covariates: Expected a non-empty array",
@@ -1738,11 +1746,11 @@ fn parse_config(
 )]
 fn isotonic_regression<'py>(
     py: Python<'py>,
-    y: PyArrayLikeDyn<'py, f64, AllowTypeChange>,
-    X: Option<PyArrayLikeDyn<'py, f64, AllowTypeChange>>,
-    sample_weight: Option<PyArrayLikeDyn<'py, f64, AllowTypeChange>>,
+    y: AlignedArrayDyn<'py, f64>,
+    X: Option<AlignedArrayDyn<'py, f64>>,
+    sample_weight: Option<AlignedArrayDyn<'py, f64>>,
     decreasing: bool,
-    constraints: Option<PyArrayLike2<'py, usize, AllowTypeChange>>,
+    constraints: Option<AlignedArray2<'py, usize>>,
 ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
     if X.is_some() && constraints.is_some() {
         return Err(PyValueError::new_err(
@@ -2158,39 +2166,77 @@ fn reconcile_length(output_length: &mut Option<usize>, this: usize) -> PyResult<
     }
 }
 
-fn assert_safe_view<T: Element, I>(array: &Bound<PyArray<T, I>>) -> PyResult<()> {
-    // 1) Endianness
-    match array.as_untyped().dtype().is_native_byteorder() {
-        Some(true) | None => {} // '=' or not applicable
-        Some(false) => {
-            return Err(PyValueError::new_err(
-                "float array is not native-endian (byte-swapped)",
-            ));
-        }
+/// Whether ndarray may view `array` in place: native byte order, an element-aligned data
+/// pointer and element-aligned strides, as `ArrayView::from_shape_ptr` requires.
+fn is_safe_view<T: Element, D>(array: &Bound<'_, PyArray<T, D>>) -> bool {
+    let untyped = array.as_untyped();
+    if untyped.dtype().is_native_byteorder() == Some(false) {
+        return false;
     }
-
     let align = align_of::<T>();
+    (array.data() as usize).is_multiple_of(align)
+        && untyped
+            .strides()
+            .iter()
+            .all(|stride| stride.unsigned_abs().is_multiple_of(align))
+}
 
-    // 2) Data pointer alignment
-    let data_ptr = array.data() as usize; // PyArrayMethods::data()
-    if !data_ptr.is_multiple_of(align) {
-        return Err(PyValueError::new_err(format!(
-            "unaligned data pointer: ptr={:#x}, align={}",
-            data_ptr, align
-        )));
+/// Borrow `array` for reading in a form ndarray may view.
+///
+/// Zero-copy when `array` already passes [`is_safe_view`], which is the common case.
+/// Otherwise NumPy materialises an aligned, C-contiguous copy at the same dtype. Field
+/// views into structured arrays are the typical unaligned input: `y["time"]` of a
+/// `[("time", "f8"), ("event", "?")]` record strides by the 9-byte record rather than
+/// by the 8-byte field, and lands its elements on odd addresses.
+fn readonly_aligned<'py, T: Element, D: Dimension>(
+    array: &Bound<'py, PyArray<T, D>>,
+) -> PyResult<PyReadonlyArray<'py, T, D>> {
+    if is_safe_view(array) {
+        return Ok(array.try_readonly()?);
     }
+    let py = array.py();
+    let copy = py
+        .import("numpy")?
+        .getattr("require")?
+        .call1((array, T::get_dtype(py), ("A", "C")))?
+        .cast_into::<PyArray<T, D>>()?;
+    debug_assert!(is_safe_view(&copy));
+    Ok(copy.try_readonly()?)
+}
 
-    // 3) Strides alignment (bytes, may be negative)
-    for (axis, &s) in array.as_untyped().strides().iter().enumerate() {
-        if s.unsigned_abs() % align != 0 {
-            return Err(PyValueError::new_err(format!(
-                "unaligned stride on axis {}: stride={} bytes, required multiple of {}",
-                axis, s, align
-            )));
-        }
+/// A NumPy array argument that ndarray may view in place.
+///
+/// Extracts like `PyArrayLike<T, D, AllowTypeChange>` — lists and arrays of another dtype
+/// are converted with NumPy's `asarray` — and then guarantees native byte order and
+/// element alignment through [`readonly_aligned`]. Every array argument of the extension
+/// is received as this type, so no code path can hand ndarray an unaligned pointer.
+#[repr(transparent)]
+struct AlignedArray<'py, T: Element, D: Dimension>(PyReadonlyArray<'py, T, D>);
+
+type AlignedArray1<'py, T> = AlignedArray<'py, T, Ix1>;
+type AlignedArray2<'py, T> = AlignedArray<'py, T, Ix2>;
+type AlignedArrayDyn<'py, T> = AlignedArray<'py, T, IxDyn>;
+
+impl<'py, T: Element, D: Dimension> Deref for AlignedArray<'py, T, D> {
+    type Target = PyReadonlyArray<'py, T, D>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
+}
 
-    Ok(())
+impl<'a, 'py, T, D> FromPyObject<'a, 'py> for AlignedArray<'py, T, D>
+where
+    T: Element + 'py,
+    D: Dimension + 'py,
+    Vec<T>: FromPyObject<'a, 'py>,
+{
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let array: PyArrayLike<'py, T, D, AllowTypeChange> = ob.extract()?;
+        Ok(Self(readonly_aligned(&array)?))
+    }
 }
 
 /// Compute the NumPy-style broadcast shape of several shapes.
@@ -2337,16 +2383,100 @@ fn kaplan_meier_jumps<T: TimeValue>(
     }
 }
 
+/// Resolve a right-censored outcome into its time and event-indicator arrays.
+///
+/// Parameters
+/// ----------
+/// y : array_like, shape (n,)
+///     Either the times alone, or a structured array with two fields — a
+///     boolean event indicator and a numeric time, in either order and under
+///     any names, e.g. ``[("time", "f8"), ("event", "?")]`` or the
+///     scikit-survival convention ``[("event", "?"), ("time", "f8")]``.
+/// y_observed : array_like, shape (n,), optional
+///     Event indicators accompanying a plain ``y``. Must be omitted when ``y``
+///     is a structured array, which carries its own.
+///
+/// Returns
+/// -------
+/// (y, y_observed)
+///     The time array and the event indicator, the latter ``None`` when neither
+///     input supplied one. For a structured ``y`` both are field views into it;
+///     otherwise the arguments are returned unchanged.
+///
+/// Raises
+/// ------
+/// ValueError
+///     If a structured ``y`` does not consist of exactly one boolean and one
+///     numeric field, or is accompanied by ``y_observed``.
+#[pyfunction(signature = (y, y_observed=None))]
+fn split_censored_outcome<'py>(
+    y: &Bound<'py, PyAny>,
+    y_observed: Option<Bound<'py, PyAny>>,
+) -> PyResult<(Bound<'py, PyAny>, Option<Bound<'py, PyAny>>)> {
+    let Ok(array) = y.cast::<PyUntypedArray>() else {
+        return Ok((y.clone(), y_observed));
+    };
+    let dtype = array.dtype();
+    let Some(names) = dtype.names() else {
+        return Ok((y.clone(), y_observed));
+    };
+    let unsupported = |detail: String| {
+        PyValueError::new_err(format!(
+            "y is a structured array with fields {names:?}; expected exactly two fields, \
+             a boolean event indicator and a numeric time, but {detail}"
+        ))
+    };
+    if names.len() != 2 {
+        return Err(unsupported(format!("found {} field(s)", names.len())));
+    }
+    let fields = names
+        .iter()
+        .map(|name| dtype.get_field(name).map(|(field, _offset)| field))
+        .collect::<PyResult<Vec<_>>>()?;
+    let is_numeric =
+        |field: &Bound<'_, numpy::PyArrayDescr>| matches!(field.kind(), b'i' | b'u' | b'f');
+    let (time, event) = match (fields[0].kind(), fields[1].kind()) {
+        (_, b'b') if is_numeric(&fields[0]) => (&names[0], &names[1]),
+        (b'b', _) if is_numeric(&fields[1]) => (&names[1], &names[0]),
+        _ => {
+            let mut detail = format!(
+                "the fields are {}: {} and {}: {}",
+                names[0],
+                fields[0].str()?,
+                names[1],
+                fields[1].str()?,
+            );
+            if fields.iter().all(is_numeric) {
+                detail.push_str(
+                    "; store the event indicator as a boolean field, or pass the time and \
+                     indicator fields separately as y and y_observed",
+                );
+            }
+            return Err(unsupported(detail));
+        }
+    };
+    if y_observed.is_some() {
+        return Err(PyValueError::new_err(format!(
+            "y_observed must be omitted when y is a structured array; \
+             y already carries the event indicator in its {event:?} field"
+        )));
+    }
+    Ok((y.get_item(time)?, Some(y.get_item(event)?)))
+}
+
 /// Compute the (weighted) Kaplan-Meier estimator of a right-censored sample.
 ///
 /// Parameters
 /// ----------
 /// y : array_like, shape (n,)
 ///     Event or censoring times. Any float or integer dtype; NaN is rejected.
-/// y_observed : array_like, shape (n,)
+///     May also be a structured array holding both the times and the event
+///     indicators, as described for ``IDR``; ``y_observed`` is then omitted.
+/// y_observed : array_like, shape (n,), optional
 ///     Event indicators: ``True``/``1`` for an observed event, ``False``/``0``
 ///     for a right-censored observation. Must be a boolean array or a
-///     numeric array containing only 0 and 1.
+///     numeric array containing only 0 and 1. Required unless ``y`` is a
+///     structured array.
 /// weight : array_like, shape (n,), optional
 ///     Non-negative, finite observation weights. Default is equal weights.
 ///
@@ -2362,20 +2492,27 @@ fn kaplan_meier_jumps<T: TimeValue>(
 #[pyfunction(
     signature = (
         y,
-        y_observed,
+        y_observed=None,
         weight=None,
     )
 )]
 fn kaplan_meier<'py>(
     py: Python<'py>,
     y: &Bound<'py, PyAny>,
-    y_observed: &Bound<'py, PyAny>,
-    weight: Option<PyArrayLike1<'py, f64, AllowTypeChange>>,
+    y_observed: Option<Bound<'py, PyAny>>,
+    weight: Option<AlignedArray1<'py, f64>>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyArray1<f64>>)> {
+    let (y, y_observed) = split_censored_outcome(y, y_observed)?;
+    let Some(y_observed) = y_observed else {
+        return Err(PyValueError::new_err(
+            "y_observed is required unless y is a structured array carrying the event indicator",
+        ));
+    };
+
     // Normalize the input into a numpy array without coercing its dtype, so
     // the returned event-time array can match the dtype of `y`.
     let numpy_asarray = py.import("numpy")?.getattr("asarray")?;
-    let y_array: Bound<'py, PyAny> = numpy_asarray.call1((y,))?;
+    let y_array: Bound<'py, PyAny> = numpy_asarray.call1((&y,))?;
 
     let (y_dtype, n) = {
         let untyped = y_array.cast::<PyUntypedArray>()?;
@@ -2390,7 +2527,7 @@ fn kaplan_meier<'py>(
     if y_dtype.is_equiv_to(&dtype::<f64>(py)) || y_dtype.is_equiv_to(&dtype::<f32>(py)) {
         // NaN is not a meaningful event time; the sort below would silently
         // place it last and emit it as a jump.
-        let as_f64: PyArrayLike1<f64, AllowTypeChange> = y_array.extract()?;
+        let as_f64: AlignedArray1<f64> = y_array.extract()?;
         if as_f64.as_array().iter().any(|v| v.is_nan()) {
             return Err(PyValueError::new_err("y must not contain NaN values"));
         }
@@ -2399,12 +2536,12 @@ fn kaplan_meier<'py>(
     // Validate the event indicators before the boolean cast: a plain forcecast
     // would silently turn any nonzero value — or any non-empty string — into
     // an event.
-    let observed_array: Bound<'py, PyAny> = numpy_asarray.call1((y_observed,))?;
+    let observed_array: Bound<'py, PyAny> = numpy_asarray.call1((&y_observed,))?;
     let observed_kind = observed_array.cast::<PyUntypedArray>()?.dtype().kind();
-    let y_observed: PyArrayLike1<'py, bool, AllowTypeChange> = match observed_kind {
+    let y_observed: AlignedArray1<'py, bool> = match observed_kind {
         b'b' => observed_array.extract()?,
         b'i' | b'u' | b'f' => {
-            let values: PyArrayLike1<f64, AllowTypeChange> = observed_array.extract()?;
+            let values: AlignedArray1<f64> = observed_array.extract()?;
             if values.as_array().iter().any(|&v| v != 0.0 && v != 1.0) {
                 return Err(PyValueError::new_err(
                     "y_observed must contain only 0/1 or boolean values",
@@ -2442,7 +2579,7 @@ fn kaplan_meier<'py>(
         weight: Option<ArrayView1<'_, f64>>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyArray1<f64>>)> {
         let typed: Bound<'py, PyArray1<T>> = y_array.cast_into()?;
-        let readonly = typed.readonly();
+        let readonly = readonly_aligned(&typed)?;
         let jumps = kaplan_meier_jumps::<T>(readonly.as_array(), y_observed, weight);
         let (times, survival): (Vec<T>, Vec<f64>) = jumps.into_iter().unzip();
         Ok((
@@ -2474,7 +2611,7 @@ mod park;
     signature = (
         x,
         y,
-        y_observed,
+        y_observed = None,
         centers = None,
         epsilon = 1e-4,
         parallel = false,
@@ -2482,10 +2619,10 @@ mod park;
 )]
 fn fit_park<'py>(
     py: Python<'py>,
-    x: PyArrayLike1<'py, f64, AllowTypeChange>,
-    y: PyArrayLike1<'py, f64, AllowTypeChange>,
-    y_observed: PyArrayLike1<'py, bool, AllowTypeChange>,
-    centers: Option<PyArrayLike1<'py, f64, AllowTypeChange>>,
+    x: AlignedArray1<'py, f64>,
+    y: &Bound<'py, PyAny>,
+    y_observed: Option<Bound<'py, PyAny>>,
+    centers: Option<AlignedArray1<'py, f64>>,
     epsilon: f64,
     parallel: bool,
 ) -> PyResult<(
@@ -2493,6 +2630,15 @@ fn fit_park<'py>(
     Bound<'py, PyArray1<f64>>,
     Bound<'py, PyArray1<f64>>,
 )> {
+    let (y, y_observed) = split_censored_outcome(y, y_observed)?;
+    let Some(y_observed) = y_observed else {
+        return Err(PyValueError::new_err(
+            "y_observed is required unless y is a structured array carrying the event indicator",
+        ));
+    };
+    let y: AlignedArray1<'py, f64> = y.extract()?;
+    let y_observed: AlignedArray1<'py, bool> = y_observed.extract()?;
+
     let mut storage = None;
     let covariate = maybe_allocate(&x, &mut storage);
     let mut storage = None;
@@ -2548,7 +2694,7 @@ fn maybe_allocate_view<'a, A: Copy, D: Dimension + 'a>(
 }
 
 fn maybe_allocate<'a, T: Copy + Element, D: Dimension>(
-    array: &'a PyArrayLike<T, D, AllowTypeChange>,
+    array: &'a PyReadonlyArray<'_, T, D>,
     storage: &'a mut Option<Vec<T>>,
 ) -> &'a [T] {
     array.as_slice().unwrap_or_else(|_| {
@@ -2571,5 +2717,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(isotonic_regression, m)?)?;
     m.add_function(wrap_pyfunction!(kaplan_meier, m)?)?;
     m.add_function(wrap_pyfunction!(fit_park, m)?)?;
+    m.add_function(wrap_pyfunction!(split_censored_outcome, m)?)?;
     Ok(())
 }
