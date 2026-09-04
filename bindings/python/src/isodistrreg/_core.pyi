@@ -31,8 +31,9 @@ class IDR:
         Real array-like of shape (n,) or (n, d). Must have d >= 1. The covariate dimension d influences the accepted
         shapes of covariate arguments going forward.
     y_observed:
-        Optional 1D boolean array-like of shape (n,). If provided, True marks observed, False marks censored.
-        Omit it when ``y`` is a structured array carrying its own indicator.
+        Optional 1D array-like of shape (n,). If provided, True marks observed, False marks censored. Must be a
+        boolean array or a numeric array containing only 0 and 1; any other value is rejected rather than read
+        as an event. Omit it when ``y`` is a structured array carrying its own indicator.
     sample_weight:
         Optional 1D real array-like of shape (n,). Must be non-negative if provided. Weights are processed in
         single precision; it is up to the caller to avoid extreme imbalance (as a rule of thumb, no weight
