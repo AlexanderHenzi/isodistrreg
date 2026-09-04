@@ -205,6 +205,53 @@ class TestEventIndicatorValidation:
         call(self.times, indicator)
 
 
+TEMPORAL_ENTRY_POINTS = {
+    "IDR y": lambda v: IDR(v, np.arange(len(v), dtype=float)),
+    "IDR X": lambda v: IDR(np.arange(len(v), dtype=float), v),
+    "IDR sample_weight": lambda v: IDR(
+        np.arange(len(v), dtype=float), np.arange(len(v), dtype=float), sample_weight=v
+    ),
+    "cdf_at": lambda v: IDR([1.0, 2.0], [1.0, 2.0]).cdf_at([1.0] * len(v), v),
+    "cdf_grid": lambda v: IDR([1.0, 2.0], [1.0, 2.0]).cdf_grid([1.0], v),
+    "from_cdfs": lambda v: IDR.from_cdfs(np.eye(len(v), dtype=np.float32), v, v),
+    "kaplan_meier": lambda v: kaplan_meier(v, [True] * len(v)),
+    "fit_park": lambda v: fit_park(np.arange(len(v), dtype=float), v, [True] * len(v)),
+    "isotonic_regression": lambda v: isotonic_regression(v),
+}
+
+
+@pytest.mark.parametrize(
+    "call", TEMPORAL_ENTRY_POINTS.values(), ids=TEMPORAL_ENTRY_POINTS
+)
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.array([1, 2, 3], dtype="timedelta64[D]"),
+        np.array([1, 2, 3], dtype="timedelta64[ns]"),
+        np.array(["2020-01-01", "2020-01-02", "2020-01-03"], dtype="datetime64[D]"),
+    ],
+    ids=["timedelta-days", "timedelta-ns", "datetime"],
+)
+def test_temporal_dtypes_are_rejected_with_a_hint(call, values):
+    # A forced cast would silently turn these into raw unit counts: [ns] values
+    # near 1.6e18, and [h] values 24 times the [D] values of the same durations.
+    with pytest.raises(ValueError, match=r"np\.timedelta64\(1"):
+        call(values)
+
+
+def test_temporal_pandas_series_is_rejected_before_conversion():
+    pd = pytest.importorskip("pandas")
+    durations = pd.Series(np.array([1, 2, 3], dtype="timedelta64[D]"))
+    with pytest.raises(ValueError, match="timedelta64"):
+        IDR(durations, [1.0, 2.0, 3.0])
+
+
+def test_structured_y_with_temporal_time_field_is_rejected_with_a_hint():
+    y = np.array([(1, True), (2, False)], dtype=[("time", "m8[D]"), ("event", "?")])
+    with pytest.raises(ValueError, match="timedelta64 times are not supported"):
+        IDR(y, [1.0, 2.0])
+
+
 class TestSubsampleSizeDefaults:
     def _data(self):
         rng = np.random.default_rng(42)
