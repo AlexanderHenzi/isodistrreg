@@ -1,8 +1,11 @@
 #[cfg(test)]
 mod definition;
+#[allow(unsafe_code)]
 mod fast;
 mod nonrecursive;
+#[allow(unsafe_code)]
 mod propagate_bounds;
+#[allow(unsafe_code)]
 mod structures;
 
 #[cfg(test)]

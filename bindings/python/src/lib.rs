@@ -560,6 +560,7 @@ where
 
 /// Zero-copy NumPy view over the typed covariate buffer of a `Fit<X, Y>`. Used by the
 /// `X` getter — the storage already matches the user's input dtype, so no narrowing.
+#[allow(unsafe_code)]
 fn x_view<'py, X: Float + Element, Y: Float>(
     fit: &Fit<X, Y>,
     this: &Bound<'py, IDR>,
@@ -586,6 +587,7 @@ fn x_view<'py, X: Float + Element, Y: Float>(
 }
 
 /// Zero-copy NumPy view over the typed threshold buffer of a `Fit<X, Y>`.
+#[allow(unsafe_code)]
 fn thresholds_view<'py, X: Float, Y: Float + Element>(
     fit: &Fit<X, Y>,
     this: &Bound<'py, IDR>,

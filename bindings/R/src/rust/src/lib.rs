@@ -16,6 +16,7 @@ use itertools::{Either, izip};
 use std::iter::repeat;
 use std::str::FromStr;
 
+#[allow(unsafe_code)]
 mod logging;
 
 // Macro to generate exports.

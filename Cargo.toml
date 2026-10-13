@@ -33,7 +33,7 @@ categories = [
 ]
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny" # not forbid, so the SIMD kernel and FFI code can opt out
 
 [workspace.dependencies]
 isodistrreg = { path = "isodistrreg", features = ["partial-order"] }

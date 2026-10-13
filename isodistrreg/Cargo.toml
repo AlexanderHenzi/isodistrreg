@@ -28,3 +28,6 @@ subagging = ["rand"]
 [dev-dependencies]
 approx = "0.5.1"
 rand = "0.10.2"
+
+[lints]
+workspace = true
