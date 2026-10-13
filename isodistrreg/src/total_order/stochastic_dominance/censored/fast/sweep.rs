@@ -74,7 +74,7 @@ macro_rules! target_feature_sweep {
         }
 
         #[target_feature(enable = $features)]
-        unsafe fn $wrapper<X: crate::Float, Y: crate::Float>(args: SweepArgs<'_, X, Y>) {
+        fn $wrapper<X: crate::Float, Y: crate::Float>(args: SweepArgs<'_, X, Y>) {
             sweep_rect_body::<$kernel, X, Y>(args);
         }
     };
