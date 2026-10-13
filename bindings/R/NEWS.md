@@ -1,3 +1,7 @@
+# isodistrreg (development version)
+
+* Declared minimum Rust version: 1.91.
+
 # isodistrreg 0.6.0
 
 * Multivariate (partial order) fits now use a quadratic-program solver built

@@ -15,6 +15,7 @@ authors = [
     "Johanna Ziegel",
 ]
 edition = "2024"
+rust-version = "1.91" # oldest rustc on CRAN's check machines (r-oldrel-macos-arm64)
 description = "Isotonic Distributional Regression (IDR)"
 readme = "README.md"
 repository = "https://github.com/AlexanderHenzi/isodistrreg"
