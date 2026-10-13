@@ -244,7 +244,8 @@ impl Kernel for Avx2Kernel {
     #[inline(always)]
     fn apply<const CHECKED: bool>(row: &[f32], col: &[f32]) -> (f32, f32) {
         // SAFETY: only monomorphized into the algorithm tree by `dispatch_generalized_pava`
-        // after `is_x86_feature_detected!("avx2")` returned true.
+        // after `is_x86_feature_detected!("avx2")` returned true. Equal lengths are up to
+        // the caller: `Estimates::propagate_bounds_with_row` slices both to `s - r`.
         unsafe { propagate_bounds_kernel_avx2::<CHECKED>(row, col) }
     }
 
@@ -257,7 +258,8 @@ impl Kernel for Avx2Kernel {
         raw_value: f32,
         remaining_weight: f32,
     ) -> (f32, f32) {
-        // SAFETY: see `apply`.
+        // SAFETY: AVX2 support as in `apply`. Equal lengths are up to the caller:
+        // `Estimates::update_value` slices both walk arrays to the same `from..to`.
         unsafe { walk_scan_avx2(xs, ws, start, span, raw_value, remaining_weight) }
     }
 }
@@ -267,6 +269,11 @@ impl Kernel for Avx2Kernel {
 /// bits in index order — the K-M product is order-sensitive. The walk is usually
 /// filter-dominated (a few percent of items pass), so vectorizing the range test removes
 /// most of its cost.
+///
+/// # Safety
+///
+/// The CPU must support AVX2, and `xs.len() == ws.len()`: `ws` is read unchecked at every
+/// index of `xs` that passes the range test.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,avx2")]
 unsafe fn walk_scan_avx2(
@@ -287,9 +294,9 @@ unsafe fn walk_scan_avx2(
     let n = xs.len();
     let mut k = 0;
 
-    // SAFETY: AVX/AVX2 enabled by function-level `target_feature`; loads stay in-bounds
-    // because each block tests the remaining length first, and mask-bit indices stay below
-    // the block length.
+    // SAFETY: loads stay in-bounds because each block tests the remaining length first, and
+    // mask-bit indices stay below the block length — in `ws` too, by the equal-length
+    // precondition.
     unsafe {
         let start_v = _mm256_set1_epi32(start as i32);
         let span_v = _mm256_set1_epi32(span as i32);
@@ -383,6 +390,11 @@ unsafe fn walk_scan_avx2(
 
 /// Bare-AVX2 inner kernel — 8-wide f32, two independent accumulator pairs for ILP, masked
 /// (`vmaskmovps` + blend) tail so sub-8 remainders stay vectorized.
+///
+/// # Safety
+///
+/// The CPU must support AVX2, and `row.len() == col.len()`: `col` is loaded at every index
+/// below `row.len()`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,avx2")]
 unsafe fn propagate_bounds_kernel_avx2<const CHECKED: bool>(
@@ -401,7 +413,7 @@ unsafe fn propagate_bounds_kernel_avx2<const CHECKED: bool>(
     /// Horizontal reduction: 256 -> 128 -> 64 -> 32 bits via max/min + shuffles.
     #[inline]
     #[target_feature(enable = "avx,avx2")]
-    unsafe fn reduce(lo: __m256, hi: __m256) -> (f32, f32) {
+    fn reduce(lo: __m256, hi: __m256) -> (f32, f32) {
         let lo128 = _mm_max_ps(_mm256_castps256_ps128(lo), _mm256_extractf128_ps(lo, 1));
         let hi128 = _mm_min_ps(_mm256_castps256_ps128(hi), _mm256_extractf128_ps(hi, 1));
         let lo64 = _mm_max_ps(lo128, _mm_movehl_ps(lo128, lo128));
@@ -416,9 +428,9 @@ unsafe fn propagate_bounds_kernel_avx2<const CHECKED: bool>(
     let mut k = 0;
     let mut next_check = COLLAPSE_CHECK_START;
 
-    // SAFETY: AVX/AVX2 enabled by function-level `target_feature`. Pointer adds stay
-    // in-bounds because each step tests the remaining length first; the masked tail loads
-    // only lanes `< n - k`.
+    // SAFETY: pointer adds stay in-bounds because each step tests the remaining length
+    // first — in `col` too, by the equal-length precondition; the masked tail loads only
+    // lanes `< n - k`.
     unsafe {
         let neg_inf = _mm256_set1_ps(f32::NEG_INFINITY);
         let pos_inf = _mm256_set1_ps(f32::INFINITY);
@@ -486,7 +498,8 @@ impl Kernel for Avx512Kernel {
     #[inline(always)]
     fn apply<const CHECKED: bool>(row: &[f32], col: &[f32]) -> (f32, f32) {
         // SAFETY: only monomorphized into the algorithm tree by `dispatch_generalized_pava`
-        // after `is_x86_feature_detected!("avx512f")` returned true.
+        // after `is_x86_feature_detected!("avx512f")` returned true. Equal lengths are up
+        // to the caller: `Estimates::propagate_bounds_with_row` slices both to `s - r`.
         unsafe { propagate_bounds_kernel_avx512::<CHECKED>(row, col) }
     }
 
@@ -499,7 +512,8 @@ impl Kernel for Avx512Kernel {
         raw_value: f32,
         remaining_weight: f32,
     ) -> (f32, f32) {
-        // SAFETY: see `apply`.
+        // SAFETY: AVX-512F support as in `apply`. Equal lengths are up to the caller:
+        // `Estimates::update_value` slices both walk arrays to the same `from..to`.
         unsafe { walk_scan_avx512(xs, ws, start, span, raw_value, remaining_weight) }
     }
 }
@@ -507,6 +521,11 @@ impl Kernel for Avx512Kernel {
 /// AVX-512 walk: test 16 covariates per compare (native unsigned compare-to-mask) and 64
 /// per round, then fold only the set mask bits in index order. See the AVX2 variant for
 /// the rationale.
+///
+/// # Safety
+///
+/// The CPU must support AVX-512F, and `xs.len() == ws.len()`: `ws` is read unchecked at
+/// every index of `xs` that passes the range test.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn walk_scan_avx512(
@@ -526,9 +545,9 @@ unsafe fn walk_scan_avx512(
     let n = xs.len();
     let mut k = 0;
 
-    // SAFETY: AVX-512F enabled by function-level `target_feature`; loads stay in-bounds
-    // because each block tests the remaining length first, and mask-bit indices stay below
-    // the block length.
+    // SAFETY: loads stay in-bounds because each block tests the remaining length first, and
+    // mask-bit indices stay below the block length — in `ws` too, by the equal-length
+    // precondition.
     unsafe {
         let start_v = _mm512_set1_epi32(start as i32);
         let span_v = _mm512_set1_epi32(span as i32);
@@ -619,6 +638,11 @@ unsafe fn walk_scan_avx512(
 
 /// AVX-512F inner kernel — 16-wide f32, two independent accumulator pairs for ILP, native
 /// masked-load tail so sub-16 remainders stay vectorized.
+///
+/// # Safety
+///
+/// The CPU must support AVX-512F, and `row.len() == col.len()`: `col` is loaded at every
+/// index below `row.len()`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn propagate_bounds_kernel_avx512<const CHECKED: bool>(
@@ -637,7 +661,7 @@ unsafe fn propagate_bounds_kernel_avx512<const CHECKED: bool>(
     /// no DQ extracts), then reduce within 128 bits.
     #[inline]
     #[target_feature(enable = "avx512f")]
-    unsafe fn reduce(lo: __m512, hi: __m512) -> (f32, f32) {
+    fn reduce(lo: __m512, hi: __m512) -> (f32, f32) {
         let lo_sw = _mm512_shuffle_f32x4(lo, lo, 0b01_00_11_10);
         let hi_sw = _mm512_shuffle_f32x4(hi, hi, 0b01_00_11_10);
         let lo2 = _mm512_max_ps(lo, lo_sw);
@@ -660,9 +684,9 @@ unsafe fn propagate_bounds_kernel_avx512<const CHECKED: bool>(
     let mut k = 0;
     let mut next_check = COLLAPSE_CHECK_START;
 
-    // SAFETY: AVX-512F enforced by function-level `target_feature`. Pointer adds stay
-    // in-bounds because each step tests the remaining length first; the masked tail loads
-    // only lanes `< n - k`.
+    // SAFETY: pointer adds stay in-bounds because each step tests the remaining length
+    // first — in `col` too, by the equal-length precondition; the masked tail loads only
+    // lanes `< n - k`.
     unsafe {
         let neg_inf = _mm512_set1_ps(f32::NEG_INFINITY);
         let pos_inf = _mm512_set1_ps(f32::INFINITY);
