@@ -822,7 +822,9 @@ mod test {
         .unwrap();
         assert!(
             covariates
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| fit.mean(c))
                 .all(|v| !v.is_nan() && v.is_finite() && v >= 0.0 && v <= 2.0)
         );

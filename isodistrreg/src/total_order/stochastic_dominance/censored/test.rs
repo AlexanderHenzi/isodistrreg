@@ -62,7 +62,9 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
         assert_eq!(context.thresholds, unique_with_filter_sort(&y, &observed));
         if N_COVARIATE > 0 {
             let cdfs = reversed_cdfs
-                .chunks_exact(N_COVARIATE)
+                .as_chunks::<N_COVARIATE>()
+                .0
+                .iter()
                 .map(|threshold| threshold.iter().rev())
                 .flatten()
                 .copied()

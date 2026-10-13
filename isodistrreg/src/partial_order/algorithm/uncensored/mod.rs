@@ -1190,7 +1190,9 @@ mod test {
         }
 
         let result = covariates
-            .chunks_exact(5)
+            .as_chunks::<5>()
+            .0
+            .iter()
             // Filter every second row that gets merged
             .enumerate()
             .filter(|(i, _)| i % 2 == 0)

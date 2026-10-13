@@ -51,7 +51,9 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
         assert_eq!(context_rev.unique_covariates.len(), N_COVARIATE);
         assert_eq!(context_rev.unique_responses.len(), N_THRESHOLD);
         let cdfs = reversed_cdfs
-            .chunks_exact(N_COVARIATE)
+            .as_chunks::<N_COVARIATE>()
+            .0
+            .iter()
             .map(|threshold| threshold.iter().rev())
             .flatten()
             .copied()
@@ -89,7 +91,9 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
         assert_eq!(context_rev.unique_covariates.len(), N_COVARIATE);
         assert_eq!(context_rev.thresholds.len(), N_THRESHOLD);
         let cdfs = reversed_cdfs
-            .chunks_exact(N_COVARIATE)
+            .as_chunks::<N_COVARIATE>()
+            .0
+            .iter()
             .map(|threshold| threshold.iter().rev().copied())
             .flatten()
             .collect::<Vec<_>>();
@@ -119,7 +123,9 @@ fn execute_test<const N: usize, const N_COVARIATE: usize, const N_THRESHOLD: usi
         assert_eq!(context_rev.unique_covariates.len(), N_COVARIATE);
         assert_eq!(context_rev.thresholds.len(), N_THRESHOLD);
         let cdfs = reversed_cdfs
-            .chunks_exact(N_COVARIATE)
+            .as_chunks::<N_COVARIATE>()
+            .0
+            .iter()
             .map(|threshold| threshold.iter().rev().copied())
             .flatten()
             .collect::<Vec<_>>();
