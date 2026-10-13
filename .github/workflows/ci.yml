@@ -122,6 +122,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # maturin sdist runs `cargo metadata`.
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -168,6 +170,8 @@ jobs:
           manylinux: ${{ matrix.manylinux || 'auto' }}
           args: --release --out ${{ github.workspace }}/dist
           sccache: "true"
+          # Without it, host builds (macOS, Windows) use the runner image's Rust.
+          rust-toolchain: stable
       - uses: actions/upload-artifact@v7
         with:
           name: python-wheel-${{ matrix.target }}
@@ -180,6 +184,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # pyroma reads the package metadata through maturin, which runs
+      # `cargo metadata`.
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -306,6 +313,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The newest stable rustc, not the runner image's possibly older one;
+      # check_r_package_cran compiles the same tarball with the minimum version.
+      - uses: dtolnay/rust-toolchain@stable
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
@@ -365,12 +375,33 @@ jobs:
             echo "::error file=.github/workflows/ci.yml::$PKG_TARBALL exceeds CRAN's 10 MB tarball limit; re-introduce the vendor pruning from commit 13c44f6"
             exit 1
           fi
+      # Compile the tarball with the declared minimum Rust version, which tracks
+      # the oldest rustc on CRAN's check machines, so the vendored dependency
+      # graph CRAN receives is proven to build there. RUSTUP_TOOLCHAIN on the
+      # check step pins it: the action's own `rustup default` may fail silently.
+      - name: Read minimum Rust version
+        id: msrv
+        run: |
+          MSRV="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "isodistrreg-r") | .rust_version // empty')"
+          if [ -z "$MSRV" ]; then
+            echo "::error file=bindings/R/src/rust/Cargo.toml::isodistrreg-r declares no rust-version"
+            exit 1
+          fi
+          echo "version=$MSRV" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        id: rust-msrv
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: bindings/R
           packages: any::testthat, any::V8, any::sessioninfo
       - name: R CMD check --as-cran
         working-directory: bindings/R
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.rust-msrv.outputs.name }}
         run: |
+          rustc --version
           PKG_TARBALL="$(ls -1t ../*.tar.gz | head -n 1)"
           R CMD check --as-cran "$PKG_TARBALL"

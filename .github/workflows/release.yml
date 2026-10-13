@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # maturin sdist runs `cargo metadata`.
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -72,6 +74,8 @@ jobs:
           manylinux: ${{ matrix.manylinux || 'auto' }}
           args: --release --out ${{ github.workspace }}/dist
           sccache: "true"
+          # Without it, host builds (macOS, Windows) use the runner image's Rust.
+          rust-toolchain: stable
       - uses: actions/upload-artifact@v7
         with:
           name: release-wheel-${{ matrix.target }}
